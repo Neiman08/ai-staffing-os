@@ -6,6 +6,8 @@ import CompanyDetail from "./pages/CompanyDetail";
 import Contacts from "./pages/Contacts";
 import Leads from "./pages/Leads";
 import LeadDetail from "./pages/LeadDetail";
+import Pipeline from "./pages/Pipeline";
+import Opportunities from "./pages/Opportunities";
 import JobOrders from "./pages/JobOrders";
 import Candidates from "./pages/Candidates";
 import Compliance from "./pages/Compliance";
@@ -25,6 +27,8 @@ export const router = createBrowserRouter([
       { path: "contacts", element: <Contacts /> },
       { path: "leads", element: <Leads /> },
       { path: "leads/:id", element: <LeadDetail /> },
+      { path: "pipeline", element: <Pipeline /> },
+      { path: "opportunities", element: <Opportunities /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "candidates", element: <Candidates /> },
       { path: "compliance", element: <Compliance /> },
