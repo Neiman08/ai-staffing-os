@@ -4,6 +4,11 @@ export interface TenancyContext {
   tenantId: string;
   userId: string;
   permissions: string[];
+  // F2: set when the current context is executing on behalf of an AI
+  // agent task (task-runner), not a human HTTP request. Consumers that
+  // attribute actions (activity-log, audit-log) check this before
+  // falling back to `userId`.
+  actor?: { type: "AGENT"; agentInstanceId: string };
 }
 
 const storage = new AsyncLocalStorage<TenancyContext>();

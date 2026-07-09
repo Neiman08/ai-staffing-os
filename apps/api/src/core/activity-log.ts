@@ -21,7 +21,10 @@ export async function logActivity(params: {
       body: params.body,
       entityType: params.entityType,
       entityId: params.entityId,
-      performedById: ctx.userId,
+      // F2: attribute agent-performed activity to the AgentInstance, never
+      // to the human whose context the task-runner borrowed for tenancy.
+      performedById: ctx.actor?.type === "AGENT" ? null : ctx.userId,
+      performedByAgentId: ctx.actor?.type === "AGENT" ? ctx.actor.agentInstanceId : undefined,
     },
   });
 }

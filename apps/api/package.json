@@ -11,6 +11,7 @@
     "test": "dotenv -e ../../.env -- node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@ai-staffing-os/agents": "workspace:*",
     "@ai-staffing-os/db": "workspace:*",
     "@ai-staffing-os/shared": "workspace:*",
     "cors": "^2.8.5",

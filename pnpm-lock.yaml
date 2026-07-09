@@ -23,6 +23,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@ai-staffing-os/agents':
+        specifier: workspace:*
+        version: link:../../packages/agents
       '@ai-staffing-os/db':
         specifier: workspace:*
         version: link:../../packages/db
