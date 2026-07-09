@@ -197,7 +197,16 @@ export default function Opportunities() {
             <TableBody>
               {data?.items.map((o) => (
                 <TableRow key={o.id} className="cursor-pointer" onClick={() => navigate(`/companies/${o.companyId}`)}>
-                  <TableCell className="font-medium">{o.title}</TableCell>
+                  <TableCell className="font-medium">
+                    <span className="flex items-center gap-2">
+                      {o.title}
+                      {o.createdByAgentTaskId && (
+                        <Badge variant="primary" title="Creado por el Prospecting Agent">
+                          AI
+                        </Badge>
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{o.companyName}</TableCell>
                   <TableCell className="text-muted-foreground">{o.categoryName ?? "—"}</TableCell>
                   <TableCell className="text-muted-foreground">{o.estimatedWorkers ?? "—"}</TableCell>

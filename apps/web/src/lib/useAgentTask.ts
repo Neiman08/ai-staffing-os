@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentTaskDetail, InvokeSalesAgentInput } from "@ai-staffing-os/shared";
+import type { AgentTaskDetail, InvokeSalesAgentInput, ProcessCompanyPipelineInput } from "@ai-staffing-os/shared";
 import { apiFetch } from "./api";
 
 const POLLING_STATUSES = new Set(["QUEUED", "RUNNING"]);
@@ -13,15 +13,22 @@ const POLLING_STATUSES = new Set(["QUEUED", "RUNNING"]);
  * whatever query the tool's side effects touched (e.g. the Company or
  * Lead the task just updated). Uses a ref (not state) to track "already
  * notified" so the effect never needs to setState itself.
+ *
+ * F3: `endpoint` defaults to the Sales Agent's generic invoke route —
+ * pass "/prospecting/tasks" to trigger the Prospecting Agent's pipeline
+ * instead, which has its own dedicated endpoint (F3 §11).
  */
-export function useAgentTask(onSettled?: (task: AgentTaskDetail) => void) {
+export function useAgentTask(
+  onSettled?: (task: AgentTaskDetail) => void,
+  endpoint = "/agents/sales/tasks",
+) {
   const queryClient = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
   const notifiedForRef = useRef<string | null>(null);
 
   const invoke = useMutation({
-    mutationFn: (input: InvokeSalesAgentInput) =>
-      apiFetch<AgentTaskDetail>("/agents/sales/tasks", { method: "POST", body: JSON.stringify(input) }),
+    mutationFn: (input: InvokeSalesAgentInput | ProcessCompanyPipelineInput) =>
+      apiFetch<AgentTaskDetail>(endpoint, { method: "POST", body: JSON.stringify(input) }),
     onSuccess: (task) => {
       setTaskId(task.id);
       notifiedForRef.current = null;

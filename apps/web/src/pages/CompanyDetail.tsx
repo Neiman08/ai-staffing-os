@@ -520,6 +520,41 @@ export default function CompanyDetail() {
               />
             </CardContent>
           </Card>
+
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Prospecting Agent</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p className="text-xs text-muted-foreground">
+                Corre la cadena completa: calificar → crear lead → crear oportunidad → crear seguimiento → preparar
+                correo (que siempre queda pendiente de aprobación). Igual que el scheduler, solo que ahora mismo.
+              </p>
+              <AgentTaskAction
+                label="Analizar ahora"
+                runningLabel="Procesando pipeline…"
+                endpoint="/prospecting/tasks"
+                input={{ companyId: company.id }}
+                onSettled={(task) => {
+                  if (task.status === "DONE") {
+                    queryClient.invalidateQueries({ queryKey: ["company", company.id] });
+                    queryClient.invalidateQueries({ queryKey: ["companies"] });
+                    queryClient.invalidateQueries({ queryKey: ["leads"] });
+                    queryClient.invalidateQueries({ queryKey: ["approvals"] });
+                  }
+                }}
+                renderResult={(output) => {
+                  const result = output as { leadId: string; opportunityId: string | null; followUpId: string | null };
+                  return (
+                    <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+                      Pipeline completo: lead, oportunidad{result.opportunityId ? "" : " (no aplicable)"} y
+                      seguimiento creados, borrador de correo pendiente de aprobación.
+                    </p>
+                  );
+                }}
+              />
+            </CardContent>
+          </Card>
         </div>
       )}
 

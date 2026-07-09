@@ -166,6 +166,11 @@ function FollowUpRow({ item }: { item: FollowUpListItem }) {
           <span className="font-medium">{item.entityLabel}</span>
           <Badge variant="neutral">{formatStatusLabel(item.type)}</Badge>
           <Badge variant={statusVariant(item.priority)}>{formatStatusLabel(item.priority)}</Badge>
+          {item.createdByAgentTaskId && (
+            <Badge variant="primary" title="Creado por el Sales Agent">
+              AI
+            </Badge>
+          )}
         </div>
         {item.notes && <p className="mt-0.5 text-sm text-muted-foreground">{item.notes}</p>}
         <p className="mt-0.5 text-xs text-muted-foreground">

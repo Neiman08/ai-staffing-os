@@ -17,6 +17,7 @@ import Payroll from "./pages/Payroll";
 import Pricing from "./pages/Pricing";
 import AgentsCenter from "./pages/AgentsCenter";
 import Approvals from "./pages/Approvals";
+import AIDashboard from "./pages/AIDashboard";
 import Settings from "./pages/Settings";
 
 export const router = createBrowserRouter([
@@ -41,6 +42,7 @@ export const router = createBrowserRouter([
       { path: "pricing", element: <Pricing /> },
       { path: "agents", element: <AgentsCenter /> },
       { path: "approvals", element: <Approvals /> },
+      { path: "ai-dashboard", element: <AIDashboard /> },
       { path: "settings", element: <Settings /> },
     ],
   },

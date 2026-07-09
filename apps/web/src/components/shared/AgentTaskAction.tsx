@@ -1,25 +1,35 @@
 import type { ReactNode } from "react";
 import { Sparkles } from "lucide-react";
-import type { AgentTaskDetail, InvokeSalesAgentInput } from "@ai-staffing-os/shared";
+import type { AgentTaskDetail, InvokeSalesAgentInput, ProcessCompanyPipelineInput } from "@ai-staffing-os/shared";
 import { useAgentTask } from "@/lib/useAgentTask";
 import { Button } from "@/components/ui/button";
 
 interface AgentTaskActionProps {
   label: string;
   runningLabel?: string;
-  input: InvokeSalesAgentInput;
+  input: InvokeSalesAgentInput | ProcessCompanyPipelineInput;
+  /** F3: "/prospecting/tasks" para el pipeline del Prospecting Agent. */
+  endpoint?: string;
   renderResult: (output: unknown) => ReactNode;
   onSettled?: (task: AgentTaskDetail) => void;
 }
 
 /**
- * F2 §13: one button that invokes a single Sales Agent tool and polls it
- * to completion. Every action here is FULL_AUTO-eligible per the approved
- * autonomy matrix (analyze/score/create-internal-record) — nothing behind
- * this button ever contacts anyone outside the tenant.
+ * F2 §13: one button that invokes a single Sales Agent tool (or, since
+ * F3, the Prospecting Agent's pipeline) and polls it to completion. Every
+ * action here is FULL_AUTO-eligible per the approved autonomy matrix
+ * (analyze/score/create-internal-record) — nothing behind this button
+ * ever contacts anyone outside the tenant.
  */
-export function AgentTaskAction({ label, runningLabel = "Ejecutando…", input, renderResult, onSettled }: AgentTaskActionProps) {
-  const { invoke, task, isRunning } = useAgentTask(onSettled);
+export function AgentTaskAction({
+  label,
+  runningLabel = "Ejecutando…",
+  input,
+  endpoint,
+  renderResult,
+  onSettled,
+}: AgentTaskActionProps) {
+  const { invoke, task, isRunning } = useAgentTask(onSettled, endpoint);
 
   return (
     <div className="space-y-2">

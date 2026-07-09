@@ -30,7 +30,14 @@ function KanbanCard({ opportunity }: { opportunity: OpportunityListItem }) {
         isDragging && "opacity-50",
       )}
     >
-      <div className="font-medium leading-snug">{opportunity.title}</div>
+      <div className="flex items-center gap-1.5 font-medium leading-snug">
+        {opportunity.title}
+        {opportunity.createdByAgentTaskId && (
+          <Badge variant="primary" className="text-[10px]" title="Creado por el Prospecting Agent">
+            AI
+          </Badge>
+        )}
+      </div>
       <div className="text-xs text-muted-foreground">{opportunity.companyName}</div>
       <div className="flex items-center justify-between pt-1">
         <span className="text-xs font-medium">
