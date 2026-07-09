@@ -17,6 +17,7 @@ import { opportunitiesRouter } from "./modules/opportunities/router";
 import { followUpsRouter } from "./modules/followups/router";
 import { activitiesRouter } from "./modules/activities/router";
 import { revenueRouter } from "./modules/revenue/router";
+import { approvalsRouter } from "./modules/approvals/router";
 
 export function createApp() {
   const app = express();
@@ -48,6 +49,7 @@ export function createApp() {
   app.use("/api/v1", followUpsRouter);
   app.use("/api/v1", activitiesRouter);
   app.use("/api/v1", revenueRouter);
+  app.use("/api/v1", approvalsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
