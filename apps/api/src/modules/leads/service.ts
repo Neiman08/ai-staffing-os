@@ -122,6 +122,7 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
       status: f.status,
       dueDate: f.dueDate.toISOString(),
       notes: f.notes,
+      createdByAgentTaskId: f.createdByAgentTaskId,
     })),
     recentActivity: activities.map((a) => ({
       id: a.id,

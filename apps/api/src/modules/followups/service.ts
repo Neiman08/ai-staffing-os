@@ -23,6 +23,7 @@ function toListItem(
     assignedToId: string | null;
     status: string;
     notes: string | null;
+    createdByAgentTaskId: string | null;
     createdAt: Date;
   },
   entityLabels: Map<string, string>,
@@ -39,6 +40,7 @@ function toListItem(
     assignedToLabel: f.assignedToId ? (assigneeLabels.get(f.assignedToId) ?? null) : null,
     status: f.status as FollowUpListItem["status"],
     notes: f.notes,
+    createdByAgentTaskId: f.createdByAgentTaskId,
     overdue: f.status === "PENDING" && f.dueDate < new Date(),
     createdAt: f.createdAt.toISOString(),
   };

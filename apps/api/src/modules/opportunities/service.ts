@@ -67,6 +67,7 @@ export async function listOpportunities(query: OpportunityQuery): Promise<Pagina
       probability: o.probability,
       expectedCloseDate: o.expectedCloseDate?.toISOString() ?? null,
       ownerLabel: o.ownerId ? (ownerLabels.get(o.ownerId) ?? null) : null,
+      createdByAgentTaskId: o.createdByAgentTaskId,
       createdAt: o.createdAt.toISOString(),
     })),
     nextCursor,
@@ -100,6 +101,7 @@ export async function getOpportunityDetail(id: string): Promise<OpportunityDetai
     probability: o.probability,
     expectedCloseDate: o.expectedCloseDate?.toISOString() ?? null,
     ownerLabel: o.ownerId ? (ownerLabels.get(o.ownerId) ?? null) : null,
+    createdByAgentTaskId: o.createdByAgentTaskId,
     createdAt: o.createdAt.toISOString(),
     categoryId: o.categoryId,
     ownerId: o.ownerId,
@@ -109,6 +111,7 @@ export async function getOpportunityDetail(id: string): Promise<OpportunityDetai
       status: f.status,
       dueDate: f.dueDate.toISOString(),
       notes: f.notes,
+      createdByAgentTaskId: f.createdByAgentTaskId,
     })),
     recentActivity: activities.map((a) => ({
       id: a.id,
@@ -231,6 +234,7 @@ export async function getPipeline(): Promise<PipelineResponse> {
         probability: o.probability,
         expectedCloseDate: o.expectedCloseDate?.toISOString() ?? null,
         ownerLabel: o.ownerId ? (ownerLabels.get(o.ownerId) ?? null) : null,
+        createdByAgentTaskId: o.createdByAgentTaskId,
         createdAt: o.createdAt.toISOString(),
       })),
     };

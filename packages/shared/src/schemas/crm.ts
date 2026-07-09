@@ -55,6 +55,7 @@ export const opportunitySummarySchema = z.object({
   stage: z.string(),
   estimatedRevenue: z.string().nullable(),
   probability: z.number().nullable(),
+  createdByAgentTaskId: z.string().nullable(), // F3: badge "AI"
 });
 export type OpportunitySummary = z.infer<typeof opportunitySummarySchema>;
 
@@ -64,6 +65,7 @@ export const followUpSummarySchema = z.object({
   status: z.string(),
   dueDate: z.string(),
   notes: z.string().nullable(),
+  createdByAgentTaskId: z.string().nullable(), // F3: badge "AI"
 });
 export type FollowUpSummary = z.infer<typeof followUpSummarySchema>;
 

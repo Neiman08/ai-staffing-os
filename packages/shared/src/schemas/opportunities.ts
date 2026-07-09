@@ -31,6 +31,7 @@ export const opportunityListItemSchema = z.object({
   probability: z.number().nullable(),
   expectedCloseDate: z.string().nullable(),
   ownerLabel: z.string().nullable(),
+  createdByAgentTaskId: z.string().nullable(), // F3: badge "AI"
   createdAt: z.string(),
 });
 export type OpportunityListItem = z.infer<typeof opportunityListItemSchema>;

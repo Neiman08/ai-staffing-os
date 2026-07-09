@@ -31,6 +31,8 @@ export const agentTaskTypeSchema = z.enum([
   "score_company",
   "draft_outreach",
   "suggest_follow_up",
+  "create_opportunity", // F3
+  "create_follow_up", // F3
 ]);
 export type AgentTaskType = z.infer<typeof agentTaskTypeSchema>;
 
@@ -80,6 +82,17 @@ export const invokeSalesAgentInputSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("suggest_follow_up"),
+    input: z.object({
+      entityType: z.enum(["company", "lead", "opportunity", "contact"]),
+      entityId: z.string(),
+    }),
+  }),
+  z.object({
+    type: z.literal("create_opportunity"),
+    input: z.object({ leadId: z.string() }),
+  }),
+  z.object({
+    type: z.literal("create_follow_up"),
     input: z.object({
       entityType: z.enum(["company", "lead", "opportunity", "contact"]),
       entityId: z.string(),

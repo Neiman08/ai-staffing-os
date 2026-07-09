@@ -1,6 +1,6 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import { ALL_PERMISSIONS } from "@ai-staffing-os/shared";
-import { salesAgent } from "@ai-staffing-os/agents";
+import { marketIntelligenceAgent, salesAgent } from "@ai-staffing-os/agents";
 
 const prisma = new PrismaClient();
 
@@ -45,6 +45,7 @@ async function seedTenant() {
         timezone: "America/Chicago",
         activeIndustries: ["Construction", "Warehouse/Logistics"],
         aiMonthlyBudgetUsd: 50, // F2 §16: presupuesto aprobado, configurable en Settings
+        prospectingSweepIntervalHours: 6, // F3 §6: cadencia aprobada, configurable en Settings
       },
     },
     create: {
@@ -57,6 +58,7 @@ async function seedTenant() {
         timezone: "America/Chicago",
         activeIndustries: ["Construction", "Warehouse/Logistics"],
         aiMonthlyBudgetUsd: 50, // F2 §16: presupuesto aprobado, configurable en Settings
+        prospectingSweepIntervalHours: 6, // F3 §6: cadencia aprobada, configurable en Settings
       },
     },
   });
@@ -1411,18 +1413,25 @@ const AGENT_DEFINITIONS = [
   { key: "ceo", name: "CEO Agent", description: "Summarizes fill rate, margin, and risk across the tenant." },
   { key: "admin", name: "Admin Agent", description: "Assists with tenant configuration and user management." },
   // F1: groundwork for F2's AI Sales Agent (packages/agents/src/tools/sales-tools.ts — stubs, no OpenAI yet)
-  { key: "market_intelligence", name: "Market Intelligence Agent", description: "Finds new companies and detects hiring signals." },
+  { key: "market_intelligence", name: "Market Intelligence Agent", description: "Analyzes industries, detects growth, and generates commercial signals." },
   { key: "revenue", name: "Revenue Agent", description: "Scores opportunities and suggests follow-ups to protect pipeline health." },
+  // F3: orchestrates the full company pipeline (score → lead → opportunity → follow-up → draft)
+  { key: "prospecting", name: "Prospecting Agent", description: "Discovers and processes companies end-to-end into qualified pipeline." },
 ];
+
+const AGENT_PROMPTS: Record<string, string> = {
+  sales: salesAgent.systemPromptTemplate!,
+  market_intelligence: marketIntelligenceAgent.systemPromptTemplate ?? "",
+};
 
 async function seedAgents(tenantId: string) {
   const definitionMap = new Map<string, string>();
 
   for (const def of AGENT_DEFINITIONS) {
-    // F2: solo el Sales Agent tiene un systemPromptTemplate real —
+    // F2/F3: solo los agentes con LLM real tienen un systemPromptTemplate —
     // versionado en código junto a sus tools (ver ../src/definitions en
     // packages/agents), no copiado a mano acá. Los demás siguen "" (stubs).
-    const systemPromptTemplate = def.key === "sales" ? salesAgent.systemPromptTemplate! : "";
+    const systemPromptTemplate = AGENT_PROMPTS[def.key] ?? "";
     const definition = await prisma.agentDefinition.upsert({
       where: { key: def.key },
       update: { name: def.name, description: def.description, systemPromptTemplate },
@@ -1431,7 +1440,7 @@ async function seedAgents(tenantId: string) {
     definitionMap.set(def.key, definition.id);
   }
 
-  for (const key of ["recruiter", "compliance", "assistant", "sales", "market_intelligence", "revenue"]) {
+  for (const key of ["recruiter", "compliance", "assistant", "sales", "market_intelligence", "revenue", "prospecting"]) {
     const definitionId = definitionMap.get(key)!;
     await prisma.agentInstance.upsert({
       where: { tenantId_definitionId: { tenantId, definitionId } },

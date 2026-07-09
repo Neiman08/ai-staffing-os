@@ -164,6 +164,7 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
       stage: o.stage,
       estimatedRevenue: o.estimatedRevenue?.toString() ?? null,
       probability: o.probability,
+      createdByAgentTaskId: o.createdByAgentTaskId,
     })),
     upcomingFollowUps: followUps.map((f) => ({
       id: f.id,
@@ -171,6 +172,7 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
       status: f.status,
       dueDate: f.dueDate.toISOString(),
       notes: f.notes,
+      createdByAgentTaskId: f.createdByAgentTaskId,
     })),
     recentActivity: activities.map((a) => ({
       id: a.id,
