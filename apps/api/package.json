@@ -8,7 +8,7 @@
     "start": "dotenv -e ../../.env -- tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "dotenv -e ../../.env -- node --import tsx --test src/**/*.test.ts"
+    "test": "dotenv -e ../../.env -- node --import tsx --test --test-concurrency=1 src/**/*.test.ts"
   },
   "dependencies": {
     "@ai-staffing-os/agents": "workspace:*",

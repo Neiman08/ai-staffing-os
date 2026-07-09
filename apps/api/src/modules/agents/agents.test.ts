@@ -77,16 +77,19 @@ test("GET /approvals as compliance@titan.dev returns 403 (no approvals.decide)",
 });
 
 test("budget guard: an exhausted monthly budget fails the task before calling OpenAI", async () => {
+  // try/finally: un assert fallido acá nunca debe dejar el presupuesto
+  // atascado en $0.0001 para el resto de la suite.
   await prisma.$executeRaw`UPDATE "Tenant" SET settings = jsonb_set(settings, '{aiMonthlyBudgetUsd}', '0.0001') WHERE id = 'tenant-titan'`;
+  try {
+    const task = await invokeSalesTask({ type: "score_company", input: { companyId: "company-01" } });
+    const settled = await waitForSettled(task.id);
 
-  const task = await invokeSalesTask({ type: "score_company", input: { companyId: "company-01" } });
-  const settled = await waitForSettled(task.id);
-
-  assert.equal(settled.status, "FAILED");
-  assert.match(settled.errorMessage as string, /[Pp]resupuesto/);
-  assert.equal(settled.tokensUsed, null, "a budget-rejected task must never have called OpenAI");
-
-  await prisma.$executeRaw`UPDATE "Tenant" SET settings = jsonb_set(settings, '{aiMonthlyBudgetUsd}', '50') WHERE id = 'tenant-titan'`;
+    assert.equal(settled.status, "FAILED");
+    assert.match(settled.errorMessage as string, /[Pp]resupuesto/);
+    assert.equal(settled.tokensUsed, null, "a budget-rejected task must never have called OpenAI");
+  } finally {
+    await prisma.$executeRaw`UPDATE "Tenant" SET settings = jsonb_set(settings, '{aiMonthlyBudgetUsd}', '50') WHERE id = 'tenant-titan'`;
+  }
 });
 
 test("createLead: agent-created leads are marked with createdByAgentTaskId and aiScoreReason", async () => {
