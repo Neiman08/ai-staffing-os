@@ -1,19 +1,8 @@
 import { Bell, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import type { CurrentUser, NotificationsSummary } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
-
-interface CurrentUser {
-  id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  role: string;
-}
-
-interface NotificationsSummary {
-  unreadCount: number;
-}
 
 function initials(firstName: string, lastName: string) {
   return `${firstName[0] ?? ""}${lastName[0] ?? ""}`.toUpperCase();
@@ -60,7 +49,7 @@ export function Topbar() {
           </div>
           <div className="hidden text-xs leading-tight sm:block">
             <div className="font-medium">{user ? `${user.firstName} ${user.lastName}` : "Cargando…"}</div>
-            <div className="text-muted-foreground">{user?.role}</div>
+            <div className="text-muted-foreground">{user?.role.name}</div>
           </div>
         </div>
       </div>
