@@ -67,6 +67,10 @@ test("POST /api/v1/leads as sales@titan.dev succeeds (Sales has leads.create)", 
   assert.equal(res.status, 201);
   const body = (await res.json()) as { id: string };
   assert.ok(body.id);
+  // createLead() also writes an Activity row (entityType: "lead", entityId:
+  // body.id) via logActivity — clean that up too, or it leaks into
+  // subsequent seed/count checks.
+  await prisma.activity.deleteMany({ where: { entityType: "lead", entityId: body.id } });
   await prisma.lead.delete({ where: { id: body.id } });
 });
 
