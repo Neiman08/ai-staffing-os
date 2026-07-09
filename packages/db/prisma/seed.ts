@@ -127,6 +127,19 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "contacts.view",
     "contacts.create",
     "contacts.update",
+    "contacts.delete",
+    "leads.view",
+    "leads.create",
+    "leads.update",
+    "leads.delete",
+    "opportunities.view",
+    "opportunities.create",
+    "opportunities.update",
+    "opportunities.delete",
+    "followUps.view",
+    "followUps.create",
+    "followUps.update",
+    "followUps.delete",
     "jobOrders.view",
     "pricingScenarios.view",
     "agents.view",
@@ -142,7 +155,14 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "timeEntries.view",
     "agents.view",
   ],
-  Marketing: ["companies.view", "contacts.view", "candidates.view", "agents.view"],
+  Marketing: [
+    "companies.view",
+    "contacts.view",
+    "candidates.view",
+    "leads.view",
+    "opportunities.view",
+    "agents.view",
+  ],
   HR: ["candidates.view", "workers.view", "documents.view", "documents.create", "documents.update", "agents.view"],
   Accounting: ["timeEntries.view", "pricingScenarios.view", "companies.view", "agents.view"],
   Manager: [
@@ -154,6 +174,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "documents.view",
     "timeEntries.view",
     "pricingScenarios.view",
+    "leads.view",
+    "opportunities.view",
+    "followUps.view",
     "agents.view",
   ],
 };
@@ -380,7 +403,12 @@ const COMPANIES = [
     status: "CLIENT",
     city: "Chicago",
     state: "IL",
-    contacts: [{ firstName: "Robert", lastName: "Hayes", title: "Project Director" }],
+    estimatedSize: "LARGE",
+    commercialScore: 85,
+    possibleCategories: ["Journeyman Electrician", "Apprentice Electrician"],
+    contacts: [
+      { firstName: "Robert", lastName: "Hayes", title: "Project Director", decisionRole: "PROJECT_MANAGER", linkedinUrl: "https://linkedin.com/in/robert-hayes-mdcb" },
+    ],
   },
   {
     id: "company-02",
@@ -389,9 +417,12 @@ const COMPANIES = [
     status: "CLIENT",
     city: "Aurora",
     state: "IL",
+    estimatedSize: "MEDIUM",
+    commercialScore: 78,
+    possibleCategories: ["Journeyman Electrician", "Apprentice Electrician"],
     contacts: [
-      { firstName: "Patricia", lastName: "Nguyen", title: "Operations Manager" },
-      { firstName: "Tom", lastName: "Iverson", title: "Site Supervisor" },
+      { firstName: "Patricia", lastName: "Nguyen", title: "Operations Manager", decisionRole: "OPERATIONS_MANAGER", linkedinUrl: "https://linkedin.com/in/patricia-nguyen-lec" },
+      { firstName: "Tom", lastName: "Iverson", title: "Site Supervisor", decisionRole: "OTHER", linkedinUrl: null },
     ],
   },
   {
@@ -401,7 +432,12 @@ const COMPANIES = [
     status: "CLIENT",
     city: "Cicero",
     state: "IL",
-    contacts: [{ firstName: "Angela", lastName: "Marsh", title: "Warehouse Manager" }],
+    estimatedSize: "LARGE",
+    commercialScore: 90,
+    possibleCategories: ["Warehouse Worker", "Forklift Operator"],
+    contacts: [
+      { firstName: "Angela", lastName: "Marsh", title: "Warehouse Manager", decisionRole: "OPERATIONS_MANAGER", linkedinUrl: "https://linkedin.com/in/angela-marsh-chitown" },
+    ],
   },
   {
     id: "company-04",
@@ -410,9 +446,12 @@ const COMPANIES = [
     status: "CLIENT",
     city: "Gary",
     state: "IN",
+    estimatedSize: "ENTERPRISE",
+    commercialScore: 88,
+    possibleCategories: ["Warehouse Worker", "Forklift Operator"],
     contacts: [
-      { firstName: "Michael", lastName: "Brantley", title: "Distribution Center Manager" },
-      { firstName: "Sara", lastName: "Whitfield", title: "HR Coordinator" },
+      { firstName: "Michael", lastName: "Brantley", title: "Distribution Center Manager", decisionRole: "OPERATIONS_MANAGER", linkedinUrl: "https://linkedin.com/in/michael-brantley-hdp" },
+      { firstName: "Sara", lastName: "Whitfield", title: "HR Coordinator", decisionRole: "HR", linkedinUrl: null },
     ],
   },
   {
@@ -422,7 +461,12 @@ const COMPANIES = [
     status: "PROSPECT",
     city: "Elgin",
     state: "IL",
-    contacts: [{ firstName: "Daniel", lastName: "Ochoa", title: "Plant Manager" }],
+    estimatedSize: "MEDIUM",
+    commercialScore: 65,
+    possibleCategories: ["General Labor"],
+    contacts: [
+      { firstName: "Daniel", lastName: "Ochoa", title: "Plant Manager", decisionRole: "PLANT_MANAGER", linkedinUrl: "https://linkedin.com/in/daniel-ochoa-prairie" },
+    ],
   },
   {
     id: "company-06",
@@ -431,7 +475,12 @@ const COMPANIES = [
     status: "PROSPECT",
     city: "Hammond",
     state: "IN",
-    contacts: [{ firstName: "Karen", lastName: "Delgado", title: "Procurement Lead" }],
+    estimatedSize: "SMALL",
+    commercialScore: 55,
+    possibleCategories: ["Warehouse Worker"],
+    contacts: [
+      { firstName: "Karen", lastName: "Delgado", title: "Procurement Lead", decisionRole: "OTHER", linkedinUrl: null },
+    ],
   },
   {
     id: "company-07",
@@ -440,7 +489,12 @@ const COMPANIES = [
     status: "LEAD",
     city: "Joliet",
     state: "IL",
-    contacts: [{ firstName: "Brian", lastName: "Kowalski", title: "Superintendent" }],
+    estimatedSize: "MEDIUM",
+    commercialScore: 40,
+    possibleCategories: ["Apprentice Electrician", "General Labor"],
+    contacts: [
+      { firstName: "Brian", lastName: "Kowalski", title: "Superintendent", decisionRole: "PROJECT_MANAGER", linkedinUrl: null },
+    ],
   },
   {
     id: "company-08",
@@ -449,13 +503,19 @@ const COMPANIES = [
     status: "LEAD",
     city: "Merrillville",
     state: "IN",
-    contacts: [{ firstName: "Elena", lastName: "Ramos", title: "Facilities Manager" }],
+    estimatedSize: "SMALL",
+    commercialScore: 35,
+    possibleCategories: ["General Labor"],
+    contacts: [
+      { firstName: "Elena", lastName: "Ramos", title: "Facilities Manager", decisionRole: "OPERATIONS_MANAGER", linkedinUrl: null },
+    ],
   },
 ];
 
-async function seedCompanies(industryMap: Map<string, string>) {
+async function seedCompanies(industryMap: Map<string, string>, categoryMap: Map<string, string>) {
   const map = new Map<string, string>();
   for (const c of COMPANIES) {
+    const possibleCategoryIds = c.possibleCategories.map((name) => categoryMap.get(name)!);
     const company = await prisma.company.upsert({
       where: { id: c.id },
       update: {
@@ -463,6 +523,11 @@ async function seedCompanies(industryMap: Map<string, string>) {
         industryId: industryMap.get(c.industry)!,
         status: c.status as never,
         address: { city: c.city, state: c.state },
+        city: c.city,
+        state: c.state,
+        estimatedSize: c.estimatedSize as never,
+        commercialScore: c.commercialScore,
+        possibleCategories: { set: possibleCategoryIds.map((id) => ({ id })) },
       },
       create: {
         id: c.id,
@@ -471,6 +536,11 @@ async function seedCompanies(industryMap: Map<string, string>) {
         industryId: industryMap.get(c.industry)!,
         status: c.status as never,
         address: { city: c.city, state: c.state },
+        city: c.city,
+        state: c.state,
+        estimatedSize: c.estimatedSize as never,
+        commercialScore: c.commercialScore,
+        possibleCategories: { connect: possibleCategoryIds.map((id) => ({ id })) },
       },
     });
     map.set(c.id, company.id);
@@ -483,6 +553,8 @@ async function seedCompanies(industryMap: Map<string, string>) {
           firstName: contact.firstName,
           lastName: contact.lastName,
           title: contact.title,
+          decisionRole: contact.decisionRole as never,
+          linkedinUrl: contact.linkedinUrl,
         },
         create: {
           id: contactId,
@@ -491,6 +563,8 @@ async function seedCompanies(industryMap: Map<string, string>) {
           firstName: contact.firstName,
           lastName: contact.lastName,
           title: contact.title,
+          decisionRole: contact.decisionRole as never,
+          linkedinUrl: contact.linkedinUrl,
           email: `${contact.firstName.toLowerCase()}.${contact.lastName.toLowerCase()}@${c.name
             .toLowerCase()
             .replace(/[^a-z]+/g, "")}.com`,
@@ -500,6 +574,156 @@ async function seedCompanies(industryMap: Map<string, string>) {
     }
   }
   return map;
+}
+
+// ============================================================
+// 8.5 Commercial pipeline (F1): Leads, Opportunities, FollowUps
+// ============================================================
+
+const LEADS = [
+  { id: "lead-01", industry: "Construction", city: "Naperville", state: "IL", source: "web", priority: "MEDIUM", status: "NEW", companyId: null, ownerRole: "Sales", agedDays: 1 },
+  { id: "lead-02", industry: "Warehouse/Logistics", city: "Bolingbrook", state: "IL", source: "cold-outreach", priority: "HIGH", status: "CONTACTED", companyId: null, ownerRole: "Sales", agedDays: 6 },
+  { id: "lead-03", industry: "Manufacturing", city: "Waukegan", state: "IL", source: "indeed", priority: "MEDIUM", status: "INTERESTED", companyId: null, ownerRole: "Sales", agedDays: 9 },
+  { id: "lead-04", industry: "General Labor", city: "Chicago", state: "IL", source: "referral", priority: "HIGH", status: "QUALIFIED", companyId: null, ownerRole: "CEO", agedDays: 4 },
+  { id: "lead-05", industry: "Warehouse/Logistics", city: "Hammond", state: "IN", source: "referral", priority: "LOW", status: "NEW", companyId: "company-06", ownerRole: "Sales", agedDays: 8 },
+  { id: "lead-06", industry: "Construction", city: "Joliet", state: "IL", source: "web", priority: "MEDIUM", status: "CONTACTED", companyId: "company-07", ownerRole: "Sales", agedDays: 3 },
+  { id: "lead-07", industry: "Construction", city: "Rockford", state: "IL", source: "cold-outreach", priority: "LOW", status: "UNQUALIFIED", companyId: null, ownerRole: "Sales", agedDays: 15, notes: "Budget too small for our minimum engagement." },
+  { id: "lead-08", industry: "Warehouse/Logistics", city: "Portage", state: "IN", source: "job-board", priority: "HIGH", status: "QUALIFIED", companyId: null, ownerRole: "Sales", agedDays: 5 },
+  { id: "lead-09", industry: "Manufacturing", city: "Schaumburg", state: "IL", source: "web", priority: "MEDIUM", status: "NEW", companyId: null, ownerRole: "Marketing", agedDays: 7 },
+  { id: "lead-10", industry: "Construction", city: "Naperville", state: "IL", source: "referral", priority: "MEDIUM", status: "INTERESTED", companyId: null, ownerRole: "Sales", agedDays: 10 },
+  { id: "lead-11", industry: "General Labor", city: "Cicero", state: "IL", source: "cold-outreach", priority: "LOW", status: "CONTACTED", companyId: null, ownerRole: "Sales", agedDays: 12 },
+  { id: "lead-12", industry: "Warehouse/Logistics", city: "Elgin", state: "IL", source: "web", priority: "HIGH", status: "NEW", companyId: null, ownerRole: "Sales", agedDays: 14 },
+];
+
+async function seedLeads(tenantId: string, industryMap: Map<string, string>, userMap: Map<string, string>) {
+  const map = new Map<string, string>();
+  for (const l of LEADS) {
+    const lead = await prisma.lead.upsert({
+      where: { id: l.id },
+      update: {
+        status: l.status as never,
+        priority: l.priority as never,
+      },
+      create: {
+        id: l.id,
+        tenantId,
+        companyId: l.companyId,
+        industryId: industryMap.get(l.industry)!,
+        city: l.city,
+        state: l.state,
+        source: l.source,
+        priority: l.priority as never,
+        status: l.status as never,
+        ownerId: userMap.get(l.ownerRole)!,
+        notes: l.notes ?? null,
+        createdAt: daysFromNow(-l.agedDays),
+      },
+    });
+    map.set(l.id, lead.id);
+  }
+  return map;
+}
+
+const OPPORTUNITIES = [
+  { id: "opp-01", companyId: "company-01", title: "Additional electricians for Phase 3", category: "Journeyman Electrician", stage: "NEGOTIATION", estimatedWorkers: 6, payRate: 34, billRate: 50, revenue: 180000, probability: 70, closeInDays: 20 },
+  { id: "opp-02", companyId: "company-03", title: "Forklift operators — peak season", category: "Forklift Operator", stage: "WON", estimatedWorkers: 12, payRate: 21, billRate: 32, revenue: 95000, probability: 100, closeInDays: -5 },
+  { id: "opp-03", companyId: "company-04", title: "Warehouse ramp-up Q4", category: "Warehouse Worker", stage: "PROPOSAL_SENT", estimatedWorkers: 25, payRate: 19, billRate: 29, revenue: 220000, probability: 55, closeInDays: 30 },
+  { id: "opp-04", companyId: "company-05", title: "General labor pilot program", category: "General Labor", stage: "MEETING_SCHEDULED", estimatedWorkers: 8, payRate: 18, billRate: 27, revenue: 60000, probability: 35, closeInDays: 25 },
+  { id: "opp-05", companyId: "company-06", title: "Warehouse staffing trial", category: "Warehouse Worker", stage: "MEETING_SCHEDULED", estimatedWorkers: 10, payRate: 19, billRate: 28, revenue: 70000, probability: 30, closeInDays: 28 },
+  { id: "opp-06", companyId: "company-02", title: "Apprentice electricians — spring build", category: "Apprentice Electrician", stage: "LOST", estimatedWorkers: 4, payRate: 24, billRate: 36, revenue: 40000, probability: 0, closeInDays: -10 },
+  { id: "opp-07", companyId: "company-01", title: "Data center Phase 4 (early talks)", category: "Journeyman Electrician", stage: "MEETING_SCHEDULED", estimatedWorkers: 10, payRate: 35, billRate: 52, revenue: 250000, probability: 20, closeInDays: 60 },
+  { id: "opp-08", companyId: "company-04", title: "Night shift warehouse expansion", category: "Warehouse Worker", stage: "NEGOTIATION", estimatedWorkers: 15, payRate: 20, billRate: 30, revenue: 140000, probability: 65, closeInDays: 15 },
+];
+
+async function seedOpportunities(tenantId: string, categoryMap: Map<string, string>, userMap: Map<string, string>) {
+  const map = new Map<string, string>();
+  for (const o of OPPORTUNITIES) {
+    const opportunity = await prisma.opportunity.upsert({
+      where: { id: o.id },
+      update: { stage: o.stage as never },
+      create: {
+        id: o.id,
+        tenantId,
+        companyId: o.companyId,
+        title: o.title,
+        stage: o.stage as never,
+        categoryId: categoryMap.get(o.category)!,
+        estimatedWorkers: o.estimatedWorkers,
+        estimatedPayRate: decimal(o.payRate),
+        estimatedBillRate: decimal(o.billRate),
+        estimatedRevenue: decimal(o.revenue),
+        probability: o.probability,
+        expectedCloseDate: daysFromNow(o.closeInDays),
+        ownerId: userMap.get("Sales")!,
+      },
+    });
+    map.set(o.id, opportunity.id);
+  }
+  return map;
+}
+
+const FOLLOW_UPS = [
+  { id: "followup-01", entityType: "company", entityId: "company-05", type: "CALL", dueInDays: 2, priority: "HIGH", status: "PENDING", notes: "Follow up on pilot proposal" },
+  { id: "followup-02", entityType: "company", entityId: "company-06", type: "EMAIL", dueInDays: 5, priority: "MEDIUM", status: "PENDING", notes: "Send updated rate sheet" },
+  { id: "followup-03", entityType: "lead", entityId: "lead-01", type: "CALL", dueInDays: -2, priority: "HIGH", status: "PENDING", notes: "Discovery call" },
+  { id: "followup-04", entityType: "opportunity", entityId: "opp-04", type: "MEETING", dueInDays: 7, priority: "HIGH", status: "PENDING", notes: "Site visit with plant manager" },
+  { id: "followup-05", entityType: "company", entityId: "company-07", type: "LINKEDIN", dueInDays: 1, priority: "LOW", status: "PENDING", notes: "Connect + intro message" },
+  { id: "followup-06", entityType: "lead", entityId: "lead-05", type: "CALL", dueInDays: -5, priority: "MEDIUM", status: "PENDING", notes: "Check on decision timeline" },
+  { id: "followup-07", entityType: "opportunity", entityId: "opp-01", type: "MEETING", dueInDays: 10, priority: "HIGH", status: "PENDING", notes: "Contract negotiation call" },
+  { id: "followup-08", entityType: "company", entityId: "company-01", type: "EMAIL", dueInDays: -10, priority: "LOW", status: "DONE", notes: "Sent Q3 recap" },
+  { id: "followup-09", entityType: "lead", entityId: "lead-08", type: "CALL", dueInDays: 3, priority: "HIGH", status: "PENDING", notes: "Qualify budget" },
+  { id: "followup-10", entityType: "company", entityId: "company-03", type: "MEETING", dueInDays: 14, priority: "MEDIUM", status: "PENDING", notes: "Quarterly business review" },
+];
+
+async function seedFollowUps(tenantId: string, userMap: Map<string, string>) {
+  for (const f of FOLLOW_UPS) {
+    await prisma.followUp.upsert({
+      where: { id: f.id },
+      update: { status: f.status as never },
+      create: {
+        id: f.id,
+        tenantId,
+        entityType: f.entityType,
+        entityId: f.entityId,
+        type: f.type as never,
+        dueDate: daysFromNow(f.dueInDays),
+        priority: f.priority as never,
+        assignedToId: userMap.get("Sales")!,
+        status: f.status as never,
+        notes: f.notes,
+        completedAt: f.status === "DONE" ? daysFromNow(f.dueInDays) : null,
+      },
+    });
+  }
+}
+
+// A handful of Activity rows so Revenue Intelligence has something to show:
+// recent contact on 3 CLIENT companies (not dormant), none on company-04
+// (dormant — its only Activity is 90 days old).
+const COMMERCIAL_ACTIVITIES = [
+  { id: "commercial-activity-01", entityType: "company", entityId: "company-01", type: "CALL", subject: "Quarterly check-in call", agedDays: 5 },
+  { id: "commercial-activity-02", entityType: "company", entityId: "company-02", type: "EMAIL", subject: "Sent updated markup proposal", agedDays: 3 },
+  { id: "commercial-activity-03", entityType: "company", entityId: "company-03", type: "MEETING", subject: "On-site walkthrough", agedDays: 8 },
+  { id: "commercial-activity-04", entityType: "company", entityId: "company-04", type: "EMAIL", subject: "Initial onboarding email", agedDays: 90 },
+];
+
+async function seedCommercialActivities(tenantId: string, userMap: Map<string, string>) {
+  for (const a of COMMERCIAL_ACTIVITIES) {
+    await prisma.activity.upsert({
+      where: { id: a.id },
+      update: {},
+      create: {
+        id: a.id,
+        tenantId,
+        type: a.type as never,
+        subject: a.subject,
+        entityType: a.entityType,
+        entityId: a.entityId,
+        performedById: userMap.get("Sales")!,
+        createdAt: daysFromNow(-a.agedDays),
+      },
+    });
+  }
 }
 
 // ============================================================
@@ -1285,7 +1509,11 @@ async function main() {
   const industryMap = await seedIndustries();
   const categoryMap = await seedJobCategories(industryMap);
   const documentTypeMap = await seedDocumentTypes();
-  await seedCompanies(industryMap);
+  await seedCompanies(industryMap, categoryMap);
+  await seedLeads(tenant.id, industryMap, userMap);
+  await seedOpportunities(tenant.id, categoryMap, userMap);
+  await seedFollowUps(tenant.id, userMap);
+  await seedCommercialActivities(tenant.id, userMap);
 
   const { seeds } = await seedCandidates(tenant.id, categoryMap);
   const workers = await seedWorkers(tenant.id, seeds);
