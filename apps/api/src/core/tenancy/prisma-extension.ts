@@ -1,4 +1,5 @@
 import { Prisma, prisma as basePrisma } from "@ai-staffing-os/db";
+import { AppError } from "../errors";
 import { requireTenancyContext } from "./context";
 
 /**
@@ -88,6 +89,32 @@ function modelAccessor(model: string): string {
   return model.charAt(0).toLowerCase() + model.slice(1);
 }
 
+type Delegate = Record<string, (a: unknown) => unknown>;
+
+function getDelegate(model: string): Delegate {
+  return (basePrisma as unknown as Record<string, Delegate>)[modelAccessor(model)]!;
+}
+
+/**
+ * F1: verify-then-act. update/delete/upsert require a WhereUniqueInput,
+ * which — like findUnique (see UNIQUE_LOOKUP_OPERATIONS above) — rejects a
+ * tenant filter wrapped in AND/OR at runtime. Instead: look the row up with
+ * a tenant-scoped findFirst first: if it doesn't come back, refuse before
+ * ever touching the real unique `where`, so a caller can never mutate a row
+ * that belongs to another tenant even though the final write itself uses an
+ * unscoped, unique `where`.
+ */
+async function verifyOwnership(
+  model: string,
+  where: Record<string, unknown>,
+  tenantId: string,
+  isHybrid: boolean,
+): Promise<boolean> {
+  const mergeWhere = isHybrid ? withHybridWhere : withTenantWhere;
+  const row = await getDelegate(model).findFirst!({ where: mergeWhere(where, tenantId) });
+  return !!row;
+}
+
 export function createTenancyScopedClient() {
   return basePrisma.$extends({
     name: "tenancy-scope",
@@ -126,16 +153,25 @@ export function createTenancyScopedClient() {
             return query(typedArgs as typeof args);
           }
 
-          if (operation === "update" || operation === "delete" || operation === "upsert") {
-            // update/delete/upsert also require a WhereUniqueInput, which
-            // rejects AND/OR-wrapped filters the same way findUnique does.
-            // No F0 endpoint performs single-record writes yet — fail loudly
-            // here instead of silently shipping an unverified tenant check
-            // when F1 adds the first write endpoint.
-            throw new Error(
-              `Tenancy extension: '${operation}' on '${model}' needs a verify-then-act implementation ` +
-                `(WhereUniqueInput can't be AND-wrapped) — not implemented until a real write endpoint needs it.`,
-            );
+          if (operation === "update" || operation === "delete") {
+            const belongs = await verifyOwnership(model, typedArgs.where ?? {}, tenantId, isHybrid);
+            if (!belongs) {
+              throw AppError.notFound(`${model} not found`);
+            }
+            // Verified: the original, unwrapped unique `where` is now safe.
+            return query(typedArgs as typeof args);
+          }
+
+          if (operation === "upsert") {
+            const upsertArgs = args as { where: Record<string, unknown>; create: unknown; update: unknown };
+            const belongs = await verifyOwnership(model, upsertArgs.where, tenantId, isHybrid);
+            const delegate = getDelegate(model);
+
+            if (belongs) {
+              return delegate.update!({ where: upsertArgs.where, data: upsertArgs.update });
+            }
+            const createData = isStrict ? injectTenantIntoCreateData(upsertArgs.create, tenantId) : upsertArgs.create;
+            return delegate.create!({ data: createData });
           }
 
           return query(typedArgs as typeof args);
