@@ -1,27 +1,69 @@
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
+  TrendingUp,
   Building2,
+  Contact,
+  UserSearch,
+  Kanban,
+  Handshake,
+  ListChecks,
   Briefcase,
   Users,
   ShieldCheck,
   Wallet,
-  TrendingUp,
+  LineChart,
   Bot,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/companies", label: "Companies", icon: Building2 },
-  { to: "/job-orders", label: "Job Orders", icon: Briefcase },
-  { to: "/candidates", label: "Candidates", icon: Users },
-  { to: "/compliance", label: "Compliance", icon: ShieldCheck },
-  { to: "/payroll", label: "Payroll", icon: Wallet },
-  { to: "/pricing", label: "Pricing", icon: TrendingUp },
-  { to: "/agents", label: "AI Agents Center", icon: Bot },
-  { to: "/settings", label: "Settings", icon: Settings },
+interface NavItem {
+  to: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  end?: boolean;
+}
+
+interface NavSection {
+  title?: string;
+  items: NavItem[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    items: [
+      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+      { to: "/revenue", label: "Revenue", icon: TrendingUp },
+    ],
+  },
+  {
+    title: "Sales CRM",
+    items: [
+      { to: "/companies", label: "Companies", icon: Building2 },
+      { to: "/contacts", label: "Contacts", icon: Contact },
+      { to: "/leads", label: "Leads", icon: UserSearch },
+      { to: "/pipeline", label: "Pipeline", icon: Kanban },
+      { to: "/opportunities", label: "Opportunities", icon: Handshake },
+      { to: "/follow-ups", label: "Follow-ups", icon: ListChecks },
+    ],
+  },
+  {
+    title: "Operations",
+    items: [
+      { to: "/job-orders", label: "Job Orders", icon: Briefcase },
+      { to: "/candidates", label: "Candidates", icon: Users },
+      { to: "/compliance", label: "Compliance", icon: ShieldCheck },
+      { to: "/payroll", label: "Payroll", icon: Wallet },
+      { to: "/pricing", label: "Pricing", icon: LineChart },
+    ],
+  },
+  {
+    items: [
+      { to: "/agents", label: "AI Agents", icon: Bot },
+      { to: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -33,22 +75,31 @@ export function Sidebar() {
         </div>
         <span className="text-sm font-semibold">AI Staffing OS</span>
       </div>
-      <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-        {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
-                isActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
-              )
-            }
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </NavLink>
+      <nav className="flex-1 space-y-4 overflow-y-auto p-2">
+        {NAV_SECTIONS.map((section, i) => (
+          <div key={section.title ?? i} className="space-y-0.5">
+            {section.title && (
+              <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                {section.title}
+              </div>
+            )}
+            {section.items.map(({ to, label, icon: Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+                    isActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+                  )
+                }
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
     </aside>
