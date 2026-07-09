@@ -7,7 +7,8 @@
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "start": "dotenv -e ../../.env -- tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "test": "dotenv -e ../../.env -- node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@ai-staffing-os/db": "workspace:*",

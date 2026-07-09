@@ -45,6 +45,7 @@ packages/
 | `pnpm db:studio` | Abre Prisma Studio |
 | `pnpm typecheck` | TypeScript estricto en todo el monorepo |
 | `pnpm lint` | ESLint en todo el monorepo |
+| `pnpm test` | Tests de tenancy (aislamiento) y RBAC (403) |
 
 ## Verificación rápida
 

@@ -47,17 +47,26 @@ const STRICT_TENANT_MODELS = new Set([
  */
 const HYBRID_GLOBAL_MODELS = new Set(["Industry", "JobCategory", "DocumentType", "RateBenchmark"]);
 
-const READ_OPERATIONS = new Set([
+// findMany/findFirst/count/aggregate/groupBy/updateMany/deleteMany all take
+// a plain WhereInput, which supports arbitrary AND/OR nesting.
+const MULTI_ROW_OPERATIONS = new Set([
   "findMany",
   "findFirst",
   "findFirstOrThrow",
-  "findUnique",
-  "findUniqueOrThrow",
   "count",
   "aggregate",
   "groupBy",
+  "updateMany",
+  "deleteMany",
 ]);
-const WRITE_MANY_OPERATIONS = new Set(["updateMany", "deleteMany"]);
+
+// findUnique/findUniqueOrThrow require a WhereUniqueInput: Prisma rejects
+// extra filters wrapped in AND/OR at runtime (it only accepts the actual
+// unique fields — id, or a compound unique — at the top level), even though
+// the generated TS types don't catch this. They are redirected below to the
+// findFirst equivalent, which has no such restriction.
+const UNIQUE_LOOKUP_OPERATIONS = new Set(["findUnique", "findUniqueOrThrow"]);
+
 const CREATE_OPERATIONS = new Set(["create", "createMany"]);
 
 function withTenantWhere(where: Record<string, unknown> | undefined, tenantId: string) {
@@ -75,6 +84,10 @@ function injectTenantIntoCreateData(data: unknown, tenantId: string) {
   return { ...(data as Record<string, unknown>), tenantId };
 }
 
+function modelAccessor(model: string): string {
+  return model.charAt(0).toLowerCase() + model.slice(1);
+}
+
 export function createTenancyScopedClient() {
   return basePrisma.$extends({
     name: "tenancy-scope",
@@ -90,17 +103,39 @@ export function createTenancyScopedClient() {
 
           const { tenantId } = requireTenancyContext();
           const typedArgs = args as { where?: Record<string, unknown>; data?: unknown };
+          const mergeWhere = isHybrid ? withHybridWhere : withTenantWhere;
 
-          if (READ_OPERATIONS.has(operation) || WRITE_MANY_OPERATIONS.has(operation)) {
-            typedArgs.where = isHybrid
-              ? withHybridWhere(typedArgs.where, tenantId)
-              : withTenantWhere(typedArgs.where, tenantId);
-          } else if (CREATE_OPERATIONS.has(operation) && isStrict) {
+          if (MULTI_ROW_OPERATIONS.has(operation)) {
+            typedArgs.where = mergeWhere(typedArgs.where, tenantId);
+            return query(typedArgs as typeof args);
+          }
+
+          if (UNIQUE_LOOKUP_OPERATIONS.has(operation)) {
+            const delegate = (basePrisma as unknown as Record<string, Record<string, (a: unknown) => unknown>>)[
+              modelAccessor(model)
+            ]!;
+            const findMethod = operation === "findUnique" ? "findFirst" : "findFirstOrThrow";
+            return delegate[findMethod]!({
+              ...typedArgs,
+              where: mergeWhere(typedArgs.where, tenantId),
+            });
+          }
+
+          if (CREATE_OPERATIONS.has(operation) && isStrict) {
             typedArgs.data = injectTenantIntoCreateData(typedArgs.data, tenantId);
-          } else if (operation === "update" || operation === "delete" || operation === "upsert") {
-            typedArgs.where = isHybrid
-              ? withHybridWhere(typedArgs.where, tenantId)
-              : withTenantWhere(typedArgs.where, tenantId);
+            return query(typedArgs as typeof args);
+          }
+
+          if (operation === "update" || operation === "delete" || operation === "upsert") {
+            // update/delete/upsert also require a WhereUniqueInput, which
+            // rejects AND/OR-wrapped filters the same way findUnique does.
+            // No F0 endpoint performs single-record writes yet — fail loudly
+            // here instead of silently shipping an unverified tenant check
+            // when F1 adds the first write endpoint.
+            throw new Error(
+              `Tenancy extension: '${operation}' on '${model}' needs a verify-then-act implementation ` +
+                `(WhereUniqueInput can't be AND-wrapped) — not implemented until a real write endpoint needs it.`,
+            );
           }
 
           return query(typedArgs as typeof args);
