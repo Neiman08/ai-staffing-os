@@ -12,37 +12,11 @@ import { AlertTriangle, Briefcase, DollarSign, Users } from "lucide-react";
 import type { AuditLogItem, DashboardSummary } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { StatCard } from "@/components/shared/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
-
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: typeof Users;
-  label: string;
-  value: string;
-  hint?: string;
-}) {
-  return (
-    <Card>
-      <CardContent className="flex items-start justify-between p-4">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-          <div className="mt-1 text-2xl font-semibold">{value}</div>
-          {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
-        </div>
-        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <Icon className="h-4 w-4" />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function Dashboard() {
   const { data: summary, isLoading } = useQuery({
@@ -67,20 +41,20 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <MetricCard icon={Users} label="Trabajadores activos" value={summary.activeWorkers.toString()} />
-          <MetricCard
+          <StatCard icon={Users} label="Trabajadores activos" value={summary.activeWorkers.toString()} />
+          <StatCard
             icon={Briefcase}
             label="Job orders abiertas"
             value={summary.openJobOrders.toString()}
             hint={`Fill rate: ${(summary.fillRate * 100).toFixed(0)}%`}
           />
-          <MetricCard
+          <StatCard
             icon={AlertTriangle}
             label="Alertas de compliance"
             value={summary.unresolvedComplianceAlerts.toString()}
             hint="Sin resolver"
           />
-          <MetricCard
+          <StatCard
             icon={DollarSign}
             label="Margen bruto (7 días)"
             value={`$${summary.weeklyGrossMargin.toLocaleString()}`}
