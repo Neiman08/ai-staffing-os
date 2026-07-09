@@ -6,6 +6,7 @@ import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Timeline } from "@/components/shared/Timeline";
+import { AgentTaskAction } from "@/components/shared/AgentTaskAction";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -353,6 +354,7 @@ function LogActivityForm({ companyId, onDone }: { companyId: string; onDone: () 
 
 export default function CompanyDetail() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>("overview");
   const [editOpen, setEditOpen] = useState(false);
 
@@ -422,6 +424,11 @@ export default function CompanyDetail() {
                 <span className="text-muted-foreground">Score comercial</span>
                 <span>{company.commercialScore ?? "—"}</span>
               </div>
+              {company.commercialScoreReason && (
+                <p className="rounded-md bg-secondary/40 p-2 text-xs text-muted-foreground">
+                  {company.commercialScoreReason}
+                </p>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Necesidades posibles</span>
                 <span>{company.possibleCategoryNames.join(", ") || "—"}</span>
@@ -447,6 +454,70 @@ export default function CompanyDetail() {
               ) : (
                 <p className="text-muted-foreground">Sin seguimientos pendientes.</p>
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Sales Agent</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-3">
+              <AgentTaskAction
+                label="Calificar con IA"
+                runningLabel="Calificando…"
+                input={{ type: "score_company", input: { companyId: company.id } }}
+                onSettled={() => {
+                  queryClient.invalidateQueries({ queryKey: ["company", company.id] });
+                  queryClient.invalidateQueries({ queryKey: ["companies"] });
+                }}
+                renderResult={(output) => {
+                  const result = output as { score: number; rationale: string };
+                  return (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Score {result.score}/100 — {result.rationale}
+                    </p>
+                  );
+                }}
+              />
+              <AgentTaskAction
+                label="Buscar señales"
+                runningLabel="Buscando…"
+                input={{ type: "detect_hiring_signals", input: { companyId: company.id } }}
+                renderResult={(output) => {
+                  const result = output as { signals: string[]; confidence: number };
+                  return (
+                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                      <p>Confianza: {Math.round(result.confidence * 100)}%</p>
+                      {result.signals.length ? (
+                        <ul className="list-disc space-y-1 pl-4">
+                          {result.signals.map((s, i) => (
+                            <li key={i}>{s}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>Sin señales detectadas en datos internos.</p>
+                      )}
+                    </div>
+                  );
+                }}
+              />
+              <AgentTaskAction
+                label="Identificar contactos"
+                runningLabel="Buscando…"
+                input={{ type: "identify_contacts", input: { companyId: company.id } }}
+                renderResult={(output) => {
+                  const result = output as { contactIds: string[] };
+                  const names = result.contactIds
+                    .map((id) => company.contacts.find((c) => c.id === id))
+                    .filter((c): c is CompanyDetail["contacts"][number] => !!c)
+                    .map((c) => `${c.firstName} ${c.lastName}`);
+                  return (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {names.length ? names.join(", ") : "Sin contactos con ese rol todavía."}
+                    </p>
+                  );
+                }}
+              />
             </CardContent>
           </Card>
         </div>
