@@ -28,7 +28,10 @@ export async function labelEntities(
       where: { id: { in: leadIds } },
       include: { company: true },
     });
-    for (const l of leads) labels.set(`lead:${l.id}`, l.company?.name ?? `Lead ${l.id.slice(-6)}`);
+    for (const l of leads) {
+      const fallback = ["Lead sin empresa", l.city, l.state].filter(Boolean).join(" · ");
+      labels.set(`lead:${l.id}`, l.company?.name ?? fallback);
+    }
   }
 
   const opportunityIds = idsByType.get("opportunity");
