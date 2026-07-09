@@ -14,8 +14,10 @@
 // 3. Dinero y tarifas: siempre Decimal, nunca Float.
 // 4. Todo lo configurable es data: Industry, JobCategory,
 //    DocumentType, Role, Permission.
-// 5. pgvector (AgentMemory.embedding) se difiere a F3 — la columna
-//    se agrega en esa migración. No requerir la extensión en F0.
+// 5. pgvector (AgentMemory.embedding) sigue diferido más allá de F3
+//    (decisión reafirmada en F3_PROSPECTING_ENGINE_PLAN.md §7 — la
+//    memoria de F3 usa AgentMemory sin embeddings). No requerir la
+//    extensión todavía.
 // =============================================================
 
 generator client {
@@ -437,24 +439,25 @@ model Lead {
 }
 
 model Opportunity {
-  id                String            @id @default(cuid())
-  tenantId          String
-  companyId         String
-  company           Company           @relation(fields: [companyId], references: [id])
-  title             String
-  stage             OpportunityStage  @default(MEETING_SCHEDULED)
-  categoryId        String? // F1: "tipo de trabajadores"
-  category          JobCategory?      @relation(fields: [categoryId], references: [id])
-  estimatedWorkers  Int?
-  estimatedPayRate  Decimal?          @db.Decimal(10, 2) // F1
-  estimatedBillRate Decimal?          @db.Decimal(10, 2) // F1
-  estimatedRevenue  Decimal?          @db.Decimal(12, 2)
-  probability       Int? // 0-100
-  expectedCloseDate DateTime?
-  ownerId           String?
-  pricingScenarios  PricingScenario[]
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  id                   String            @id @default(cuid())
+  tenantId             String
+  companyId            String
+  company              Company           @relation(fields: [companyId], references: [id])
+  title                String
+  stage                OpportunityStage  @default(MEETING_SCHEDULED)
+  categoryId           String? // F1: "tipo de trabajadores"
+  category             JobCategory?      @relation(fields: [categoryId], references: [id])
+  estimatedWorkers     Int?
+  estimatedPayRate     Decimal?          @db.Decimal(10, 2) // F1
+  estimatedBillRate    Decimal?          @db.Decimal(10, 2) // F1
+  estimatedRevenue     Decimal?          @db.Decimal(12, 2)
+  probability          Int? // 0-100
+  expectedCloseDate    DateTime?
+  ownerId              String?
+  pricingScenarios     PricingScenario[]
+  createdByAgentTaskId String? // F3: mismo patrón que Lead.createdByAgentTaskId (F2)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
   @@index([tenantId, stage])
 }
@@ -477,20 +480,21 @@ model Activity {
 // F1: sigue el mismo patrón polimórfico que Activity (entityType/entityId como
 // strings, sin FK — decisión #2 del header: referencias de actor sin relation).
 model FollowUp {
-  id           String         @id @default(cuid())
-  tenantId     String
-  entityType   String // "company" | "lead" | "opportunity" | "contact"
-  entityId     String
-  type         FollowUpType
-  dueDate      DateTime
-  priority     RiskLevel      @default(MEDIUM)
-  assignedToId String? // User.id (sin relation, ver decisión #2)
-  status       FollowUpStatus @default(PENDING)
-  reminderAt   DateTime?
-  notes        String?
-  completedAt  DateTime?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  id                   String         @id @default(cuid())
+  tenantId             String
+  entityType           String // "company" | "lead" | "opportunity" | "contact"
+  entityId             String
+  type                 FollowUpType
+  dueDate              DateTime
+  priority             RiskLevel      @default(MEDIUM)
+  assignedToId         String? // User.id (sin relation, ver decisión #2)
+  status               FollowUpStatus @default(PENDING)
+  reminderAt           DateTime?
+  notes                String?
+  completedAt          DateTime?
+  createdByAgentTaskId String? // F3: mismo patrón que Lead.createdByAgentTaskId (F2)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
   @@index([tenantId, status, dueDate])
   @@index([tenantId, entityType, entityId])
@@ -941,7 +945,9 @@ model AgentMemory {
   entityType      String?
   entityId        String?
   content         String
-  // embedding vector — SE AGREGA EN F3 con pgvector (ver decisión #5)
+  // embedding vector — pgvector sigue diferido (decisión #5). F3 usa
+  // AgentMemory sin embeddings, con consultas estructuradas por
+  // entityType/entityId/scope (ver F3_PROSPECTING_ENGINE_PLAN.md §7).
   importance      Float         @default(0.5)
   lastAccessedAt  DateTime      @default(now())
   createdAt       DateTime      @default(now())
