@@ -1,8 +1,18 @@
 import { z } from "zod";
 import { activityItemSchema, followUpSummarySchema, nextFollowUpSchema } from "./crm";
+import { paginationQuerySchema } from "./common";
 
 export const leadPrioritySchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
 export const leadStatusSchema = z.enum(["NEW", "CONTACTED", "INTERESTED", "QUALIFIED", "UNQUALIFIED", "CONVERTED"]);
+
+export const leadQuerySchema = paginationQuerySchema.extend({
+  status: leadStatusSchema.optional(),
+  source: z.string().optional(),
+  priority: leadPrioritySchema.optional(),
+  assignedToId: z.string().optional(),
+  industryId: z.string().optional(),
+});
+export type LeadQuery = z.infer<typeof leadQuerySchema>;
 
 export const leadListItemSchema = z.object({
   id: z.string(),

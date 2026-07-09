@@ -12,6 +12,7 @@ import { complianceRouter } from "./modules/compliance/router";
 import { payrollRouter } from "./modules/payroll/router";
 import { pricingRouter } from "./modules/pricing/router";
 import { agentsRouter } from "./modules/agents/router";
+import { leadsRouter } from "./modules/leads/router";
 
 export function createApp() {
   const app = express();
@@ -38,6 +39,7 @@ export function createApp() {
   app.use("/api/v1", payrollRouter);
   app.use("/api/v1", pricingRouter);
   app.use("/api/v1", agentsRouter);
+  app.use("/api/v1", leadsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from "@prisma/client";
+import { ALL_PERMISSIONS } from "@ai-staffing-os/shared";
 
 const prisma = new PrismaClient();
 
@@ -50,45 +51,11 @@ async function seedTenant() {
 }
 
 // ============================================================
-// 2. Permissions (from packages/shared canonical catalog)
+// 2. Permissions (imported from packages/shared — single source of
+// truth; F1 found a real bug where this catalog was duplicated here
+// and drifted out of sync with the 12 new leads/opportunities/
+// followUps keys added to packages/shared)
 // ============================================================
-
-const PERMISSION_RESOURCES = [
-  "companies",
-  "contacts",
-  "candidates",
-  "workers",
-  "jobOrders",
-  "documents",
-  "timeEntries",
-  "pricingScenarios",
-] as const;
-const PERMISSION_ACTIONS = ["view", "create", "update", "delete"] as const;
-const SPECIAL_PERMISSIONS: Array<{ key: string; label: string }> = [
-  { key: "payroll.approve", label: "Approve payroll runs" },
-  { key: "compliance.verify", label: "Verify compliance documents" },
-  { key: "compliance.block", label: "Block/unblock workers" },
-  { key: "agents.view", label: "View AI agents" },
-  { key: "agents.configure", label: "Configure AI agents" },
-  { key: "approvals.decide", label: "Approve/reject approval requests" },
-  { key: "settings.manage", label: "Manage tenant settings" },
-  { key: "users.manage", label: "Manage users and roles" },
-];
-
-function resourceLabel(resource: string): string {
-  const spaced = resource.replace(/([A-Z])/g, " $1");
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
-const ALL_PERMISSIONS: Array<{ key: string; label: string }> = [
-  ...PERMISSION_RESOURCES.flatMap((resource) =>
-    PERMISSION_ACTIONS.map((action) => ({
-      key: `${resource}.${action}`,
-      label: `${action.charAt(0).toUpperCase() + action.slice(1)} ${resourceLabel(resource)}`,
-    })),
-  ),
-  ...SPECIAL_PERMISSIONS,
-];
 
 async function seedPermissions() {
   const permissions = await Promise.all(
