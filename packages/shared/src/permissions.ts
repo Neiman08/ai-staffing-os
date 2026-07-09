@@ -7,6 +7,9 @@ export const PERMISSION_RESOURCES = [
   "documents",
   "timeEntries",
   "pricingScenarios",
+  "leads", // F1
+  "opportunities", // F1
+  "followUps", // F1
 ] as const;
 
 export const PERMISSION_ACTIONS = ["view", "create", "update", "delete"] as const;

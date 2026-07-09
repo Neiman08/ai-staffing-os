@@ -9,3 +9,8 @@ export * from "./schemas/compliance";
 export * from "./schemas/payroll";
 export * from "./schemas/pricing";
 export * from "./schemas/agents";
+export * from "./schemas/leads";
+export * from "./schemas/opportunities";
+export * from "./schemas/followups";
+export * from "./schemas/activities";
+export * from "./schemas/revenue";
