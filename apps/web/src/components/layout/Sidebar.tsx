@@ -14,6 +14,7 @@ import {
   Wallet,
   LineChart,
   Bot,
+  CheckSquare,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -61,6 +62,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     items: [
       { to: "/agents", label: "AI Agents", icon: Bot },
+      { to: "/approvals", label: "Approvals", icon: CheckSquare },
       { to: "/settings", label: "Settings", icon: Settings },
     ],
   },

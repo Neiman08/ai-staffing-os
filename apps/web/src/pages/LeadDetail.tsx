@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ActivityItem,
+  ApprovalRequestListItem,
   ConvertLeadInput,
   ConvertLeadResult,
   JobCategoryListItem,
@@ -12,6 +13,7 @@ import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Timeline } from "@/components/shared/Timeline";
+import { AgentTaskAction } from "@/components/shared/AgentTaskAction";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -109,6 +111,70 @@ function ConvertForm({ lead, onDone }: { lead: LeadDetailType; onDone: (result: 
   );
 }
 
+function OutreachApprovals({ leadId }: { leadId: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: approvals } = useQuery({
+    queryKey: ["approvals-for-lead", leadId],
+    queryFn: () => apiFetch<ApprovalRequestListItem[]>("/approvals"),
+    select: (all) => all.filter((a) => (a.proposedAction as { leadId?: string } | null)?.leadId === leadId),
+  });
+
+  const decide = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: "APPROVED" | "REJECTED" }) =>
+      apiFetch(`/approvals/${id}/decide`, { method: "POST", body: JSON.stringify({ decision }) }),
+    onSuccess: () => {
+      toast({ title: "Decisión registrada", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["approvals-for-lead", leadId] });
+    },
+    onError: (err) => toast({ title: "No se pudo registrar la decisión", description: String(err), variant: "error" }),
+  });
+
+  if (!approvals || approvals.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      {approvals.map((a) => {
+        const action = a.proposedAction as { channel: string; subject?: string; body: string };
+        return (
+          <div key={a.id} className="rounded-md border border-border p-3 text-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-medium">{a.summary}</span>
+              <Badge variant={a.status === "PENDING" ? "warning" : a.status === "APPROVED" ? "success" : "danger"}>
+                {formatStatusLabel(a.status)}
+              </Badge>
+            </div>
+            {action.subject && <p className="mb-1 font-medium">{action.subject}</p>}
+            <p className="whitespace-pre-wrap text-muted-foreground">{action.body}</p>
+            {a.status === "PENDING" && (
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate({ id: a.id, decision: "APPROVED" })}>
+                  Aprobar
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={decide.isPending}
+                  onClick={() => decide.mutate({ id: a.id, decision: "REJECTED" })}
+                >
+                  Rechazar
+                </Button>
+              </div>
+            )}
+            {a.decidedByLabel && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Decidido por {a.decidedByLabel}
+                {a.decisionNote ? ` — "${a.decisionNote}"` : ""}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function LeadDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -145,7 +211,16 @@ export default function LeadDetail() {
   return (
     <div>
       <PageHeader
-        title={lead.companyName ?? "Lead sin empresa"}
+        title={
+          <span className="flex items-center gap-2">
+            {lead.companyName ?? "Lead sin empresa"}
+            {lead.createdByAgentTaskId && (
+              <Badge variant="primary" title="Creado por el Sales Agent">
+                AI
+              </Badge>
+            )}
+          </span>
+        }
         description={`${lead.industryName ?? "—"}${lead.city && lead.state ? ` · ${lead.city}, ${lead.state}` : ""}`}
         action={
           <div className="flex items-center gap-2">
@@ -218,6 +293,35 @@ export default function LeadDetail() {
           </CardHeader>
           <CardContent>
             <Timeline items={activitiesQuery.data ?? lead.recentActivity} />
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Sales Agent</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Los borradores son solo texto — nunca se envían automáticamente. Un humano debe aprobarlos antes de
+              usarlos.
+            </p>
+            <div className="flex gap-3">
+              <AgentTaskAction
+                label="Redactar email (IA)"
+                runningLabel="Redactando…"
+                input={{ type: "draft_outreach", input: { leadId: lead.id, channel: "EMAIL" } }}
+                onSettled={() => queryClient.invalidateQueries({ queryKey: ["approvals-for-lead", lead.id] })}
+                renderResult={() => null}
+              />
+              <AgentTaskAction
+                label="Redactar LinkedIn (IA)"
+                runningLabel="Redactando…"
+                input={{ type: "draft_outreach", input: { leadId: lead.id, channel: "LINKEDIN" } }}
+                onSettled={() => queryClient.invalidateQueries({ queryKey: ["approvals-for-lead", lead.id] })}
+                renderResult={() => null}
+              />
+            </div>
+            <OutreachApprovals leadId={lead.id} />
           </CardContent>
         </Card>
       </div>

@@ -16,6 +16,7 @@ import Compliance from "./pages/Compliance";
 import Payroll from "./pages/Payroll";
 import Pricing from "./pages/Pricing";
 import AgentsCenter from "./pages/AgentsCenter";
+import Approvals from "./pages/Approvals";
 import Settings from "./pages/Settings";
 
 export const router = createBrowserRouter([
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
       { path: "payroll", element: <Payroll /> },
       { path: "pricing", element: <Pricing /> },
       { path: "agents", element: <AgentsCenter /> },
+      { path: "approvals", element: <Approvals /> },
       { path: "settings", element: <Settings /> },
     ],
   },

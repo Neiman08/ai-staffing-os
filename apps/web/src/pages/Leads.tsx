@@ -151,7 +151,16 @@ export default function Leads() {
             <TableBody>
               {data?.items.map((lead) => (
                 <TableRow key={lead.id} className="cursor-pointer" onClick={() => navigate(`/leads/${lead.id}`)}>
-                  <TableCell className="font-medium">{lead.companyName ?? "—"}</TableCell>
+                  <TableCell className="font-medium">
+                    <span className="flex items-center gap-2">
+                      {lead.companyName ?? "—"}
+                      {lead.createdByAgentTaskId && (
+                        <Badge variant="primary" title="Creado por el Sales Agent">
+                          AI
+                        </Badge>
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{lead.industryName ?? "—"}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {lead.city && lead.state ? `${lead.city}, ${lead.state}` : "—"}
