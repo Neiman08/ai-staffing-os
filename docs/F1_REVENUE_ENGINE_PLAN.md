@@ -47,23 +47,21 @@ Nuevo índice: `@@index([tenantId, state])` para las agregaciones de Revenue Int
 | `industryId` | `String?` (FK a `Industry`) | Un lead puede existir antes de tener `Company` asociada; necesita su propia industria |
 | `city` | `String?` | |
 | `state` | `String?` | |
-| `priority` | Reutiliza `RiskLevel` (`LOW\|MEDIUM\|HIGH`, ya existe) | Alternativa: enum nuevo `LeadPriority` con `URGENT` — **pido decisión del PO**, ver §9 |
+| `priority` | Reutiliza `RiskLevel` (`LOW\|MEDIUM\|HIGH`, ya existe) | Decisión de bajo impacto — reutilizar en vez de agregar un enum `LeadPriority` nuevo evita proliferación de enums casi idénticos. Se puede ampliar a un enum dedicado más adelante si `HIGH` resulta insuficiente para urgencias reales |
 
 `source`, `status`, `ownerId` ("asignado a"), `aiScore` ("score" — el nombre se queda aunque F1 no use IA real, es solo un `Float`), `notes` ya existen, no se tocan.
 
-### 2.4 Decisión pendiente: relación Lead ↔ Opportunity ↔ Pipeline de 8 etapas
+### 2.4 Relación Lead ↔ Opportunity ↔ Pipeline de 8 etapas — **Decisión confirmada por el PO: Opción A**
 
-El pipeline pedido es: `New Lead → Contacted → Interested → Meeting Scheduled → Proposal Sent → Negotiation → Won → Lost`. El schema actual tiene **dos** enums separados que no calzan exactamente con esas 8 etapas:
+El pipeline pedido es: `New Lead → Contacted → Interested → Meeting Scheduled → Proposal Sent → Negotiation → Won → Lost`. `Lead` y `Opportunity` se mantienen como conceptos separados (pre-calificación vs. oportunidad con $ estimado, tal como lo diseñó la Arquitectura original) — el Kanban en la UI es una vista unificada que combina ambos, no un solo modelo fusionado.
 
-- `LeadStatus`: `NEW | CONTACTED | QUALIFIED | UNQUALIFIED | CONVERTED`
-- `OpportunityStage`: `DISCOVERY | PROPOSAL | NEGOTIATION | WON | LOST`
+Cambios de enum concretos que esto implica:
 
-**No voy a decidir esto unilateralmente porque cambia el modelo de datos del corazón de F1.** Dos opciones razonables:
+- `LeadStatus` gana `INTERESTED` (entre `CONTACTED` y `QUALIFIED`): `NEW | CONTACTED | INTERESTED | QUALIFIED | UNQUALIFIED | CONVERTED`. `QUALIFIED` sigue siendo el estado justo antes de convertir a `Opportunity`; `INTERESTED` cubre la columna homónima del pipeline pedido.
+- `OpportunityStage` se reemplaza por `MEETING_SCHEDULED | PROPOSAL_SENT | NEGOTIATION | WON | LOST` (se quita `DISCOVERY`, que pasa a ser cubierto por los estados de `Lead`; se renombra `PROPOSAL`→`PROPOSAL_SENT` para calzar con el nombre pedido).
+- `Lead.status = CONVERTED` implica que existe una `Opportunity` asociada (creada vía `POST /leads/:id/convert`, §3); no hay `Opportunity` sin `Lead` de origen en el flujo estándar, aunque el endpoint `POST /opportunities` directo se deja disponible para casos donde el trato entra ya calificado (referido, RFP entrante, etc.) sin pasar por `Lead`.
 
-- **Opción A (recomendada):** mantener `Lead` y `Opportunity` como conceptos separados (pre-calificación vs. oportunidad con $ estimado, que es como está diseñado desde la Arquitectura). El pipeline de 8 columnas en la UI es una vista unificada que combina ambos: `New Lead/Contacted/Interested` = un `Lead` en ese `LeadStatus` (agrego `INTERESTED` a `LeadStatus`, reemplazando semánticamente a `QUALIFIED` o agregándolo antes de convertir), y al calificar se crea una `Opportunity` que entra al pipeline en `Meeting Scheduled`. Requiere expandir `OpportunityStage` a `MEETING_SCHEDULED | PROPOSAL_SENT | NEGOTIATION | WON | LOST` (renombro `PROPOSAL`→`PROPOSAL_SENT`, quito `DISCOVERY` porque pasa a ser una sub-etapa de Lead). Un `Lead.status=CONVERTED` implica que existe una `Opportunity` asociada.
-- **Opción B:** fusionar todo en un solo pipeline de 8 etapas viviendo en `Opportunity.stage` desde el día 1 (se crea la `Opportunity` apenas entra un lead, sin `Lead` como paso previo). Más simple de implementar, pero pierde la distinción "interés sin monto estimado todavía" vs. "oportunidad calificada con $", que es justo lo que la Arquitectura original separaba a propósito.
-
-Mi recomendación es **Opción A** porque preserva la separación de conceptos ya diseñada (y evita que cada `Lead` frío tenga que cargar campos de `Opportunity` que no aplican todavía, como `estimatedRevenue`). Necesito tu confirmación antes de tocar los enums.
+**Nota sobre `OpportunityStage`:** al no ser un campo nuevo sino un enum existente que cambia sus valores, esto es la única parte de §2 que no es puramente aditiva — Prisma requiere que la migración mapee los valores viejos (`DISCOVERY`, `PROPOSAL`) a los nuevos. Como F0 nunca sembró ninguna `Opportunity` (tabla vacía en producción/dev hasta hoy), no hay filas existentes que migrar — el cambio es seguro.
 
 ### 2.5 Opportunity — campos nuevos
 
@@ -195,7 +193,7 @@ Settings
 | `Contacts.tsx` (nueva) | Lista plana de todos los contactos del tenant, filtrable por company/decisionRole |
 | `Leads.tsx` (nueva) | Lista + formulario de creación + filtros; acción "Convert to Opportunity" |
 | `LeadDetail.tsx` (nueva, `/leads/:id`) | Igual patrón de tabs que Company |
-| `Pipeline.tsx` (nueva) | Kanban de 8 columnas (o las que resulten de §2.4), tarjetas arrastrables |
+| `Pipeline.tsx` (nueva) | Kanban de 8 columnas (3 de `Lead` + 5 de `Opportunity`, §2.4), tarjetas arrastrables |
 | `Opportunities.tsx` (nueva) | Lista + detalle inline o modal |
 | `FollowUps.tsx` (nueva) | Vista tipo bandeja: Hoy / Vencidos / Próximos, acciones rápidas (completar, posponer) |
 
@@ -256,7 +254,7 @@ Nada de esto llama a un LLM en F1 — son solo los puntos de enchufe, siguiendo 
 
 ## 9. Riesgos
 
-1. **Decisión de schema pendiente (§2.4)** es la más importante de resolver antes de escribir código — cambia el modelo de datos central de F1 y afecta Pipeline, Leads y Opportunities a la vez.
+1. **Cambio de valores de `OpportunityStage`** (§2.4, ya decidido): al no ser puramente aditivo hay que aplicar la migración con cuidado — mitigado porque la tabla `Opportunity` está vacía hoy, pero conviene correr `pnpm db:migrate` contra una copia antes de la DB real por hábito.
 2. **Kanban con drag-and-drop** es la interacción de frontend más compleja construida hasta ahora en el proyecto — riesgo real de UX torpe si se apura.
 3. **Primera vez con formularios/mutaciones reales**: hay que resolver el patrón *verify-then-act* de tenancy (§2.8) con cuidado — es exactamente el tipo de bug (fuga cross-tenant) que un test automatizado debe cubrir antes de dar F1 por cerrado, no después.
 4. **Volumen del seed**: los 8 companies / 0 leads actuales no alcanzan para que Revenue Intelligence luzca creíble en una demo — hace falta una pasada de seed mucho más densa (decenas de leads y oportunidades en distintos stages/industrias/estados), lo cual es trabajo real, no trivial.
@@ -267,7 +265,6 @@ Nada de esto llama a un LLM en F1 — son solo los puntos de enchufe, siguiendo 
 
 ## 10. Definition of Done
 
-- [ ] Decisión de §2.4 (Lead↔Opportunity↔Pipeline) confirmada por el PO antes de tocar el schema
 - [ ] Migración de Prisma aplicada limpia sobre la DB de F0 sin pérdida de datos existentes
 - [ ] Seed ampliado con volumen realista de leads/opportunities/follow-ups en distintos estados/industrias/stages, sigue siendo idempotente
 - [ ] CRUD completo y verificado en navegador real: Companies (ya no solo lectura), Contacts, Leads, Opportunities, Follow-ups
@@ -284,4 +281,4 @@ Nada de esto llama a un LLM en F1 — son solo los puntos de enchufe, siguiendo 
 
 ---
 
-**Siguiente paso:** espero tu aprobación de este plan (en particular la decisión de §2.4) antes de tocar `schema.prisma` o escribir código.
+**Siguiente paso:** espero tu aprobación de este plan completo antes de tocar `schema.prisma` o escribir código. La decisión de modelado de §2.4 ya está confirmada (Opción A).
