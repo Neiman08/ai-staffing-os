@@ -1382,7 +1382,7 @@ async function seedPricingScenarios(tenantId: string, jobOrders: Map<string, { i
 }
 
 // ============================================================
-// 17. Agent definitions (10) + instances (3)
+// 17. Agent definitions (12) + instances (6)
 // ============================================================
 
 const AGENT_DEFINITIONS = [
@@ -1396,6 +1396,9 @@ const AGENT_DEFINITIONS = [
   { key: "marketing", name: "Marketing Agent", description: "Proposes job ad campaigns for talent gaps." },
   { key: "ceo", name: "CEO Agent", description: "Summarizes fill rate, margin, and risk across the tenant." },
   { key: "admin", name: "Admin Agent", description: "Assists with tenant configuration and user management." },
+  // F1: groundwork for F2's AI Sales Agent (packages/agents/src/tools/sales-tools.ts — stubs, no OpenAI yet)
+  { key: "market_intelligence", name: "Market Intelligence Agent", description: "Finds new companies and detects hiring signals." },
+  { key: "revenue", name: "Revenue Agent", description: "Scores opportunities and suggests follow-ups to protect pipeline health." },
 ];
 
 async function seedAgents(tenantId: string) {
@@ -1410,7 +1413,7 @@ async function seedAgents(tenantId: string) {
     definitionMap.set(def.key, definition.id);
   }
 
-  for (const key of ["recruiter", "compliance", "assistant"]) {
+  for (const key of ["recruiter", "compliance", "assistant", "sales", "market_intelligence", "revenue"]) {
     const definitionId = definitionMap.get(key)!;
     await prisma.agentInstance.upsert({
       where: { tenantId_definitionId: { tenantId, definitionId } },

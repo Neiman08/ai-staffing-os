@@ -5,6 +5,8 @@ export * from "./core/AgentContext";
 export * from "./core/AgentDefinitionStub";
 export * from "./core/AgentRuntime";
 
+export * from "./tools/sales-tools";
+
 export * from "./definitions/recruiter.agent";
 export * from "./definitions/compliance.agent";
 export * from "./definitions/assistant.agent";
@@ -15,3 +17,5 @@ export * from "./definitions/payroll.agent";
 export * from "./definitions/marketing.agent";
 export * from "./definitions/ceo.agent";
 export * from "./definitions/admin.agent";
+export * from "./definitions/market-intelligence.agent";
+export * from "./definitions/revenue.agent";
