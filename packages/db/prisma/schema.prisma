@@ -45,17 +45,53 @@ enum CompanyStatus {
 enum LeadStatus {
   NEW
   CONTACTED
+  INTERESTED
   QUALIFIED
   UNQUALIFIED
   CONVERTED
 }
 
+// F1: reemplaza DISCOVERY/PROPOSAL por las etapas del pipeline de 8 columnas
+// (Decisión CHECKPOINT F1 §2.4, Opción A). Opportunity no tenía filas en F0,
+// así que este cambio de valores es seguro sin backfill.
 enum OpportunityStage {
-  DISCOVERY
-  PROPOSAL
+  MEETING_SCHEDULED
+  PROPOSAL_SENT
   NEGOTIATION
   WON
   LOST
+}
+
+enum CompanySize {
+  MICRO // 1-10
+  SMALL // 11-50
+  MEDIUM // 51-200
+  LARGE // 201-1000
+  ENTERPRISE // 1000+
+}
+
+enum ContactDecisionRole {
+  OWNER
+  HR
+  OPERATIONS_MANAGER
+  PROJECT_MANAGER
+  PLANT_MANAGER
+  RECRUITER
+  OTHER
+}
+
+enum FollowUpType {
+  CALL
+  EMAIL
+  LINKEDIN
+  MEETING
+}
+
+enum FollowUpStatus {
+  PENDING
+  DONE
+  SNOOZED
+  CANCELLED
 }
 
 enum ActivityType {
@@ -321,46 +357,55 @@ model Industry {
   isGlobal   Boolean       @default(false)
   companies  Company[]
   categories JobCategory[]
+  leads      Lead[] // F1
 
   @@index([tenantId])
 }
 
 model Company {
-  id            String        @id @default(cuid())
-  tenantId      String
-  name          String
-  industryId    String
-  industry      Industry      @relation(fields: [industryId], references: [id])
-  status        CompanyStatus @default(LEAD)
-  website       String?
-  phone         String?
-  address       Json? // { street, city, state, zip }
-  notes         String?
-  contacts      Contact[]
-  leads         Lead[]
-  opportunities Opportunity[]
-  jobOrders     JobOrder[]
-  projects      Project[]
-  contracts     Contract[]
-  invoices      Invoice[]
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id                 String        @id @default(cuid())
+  tenantId           String
+  name               String
+  industryId         String
+  industry           Industry      @relation(fields: [industryId], references: [id])
+  status             CompanyStatus @default(LEAD)
+  website            String?
+  phone              String?
+  address            Json? // { street, zip } — city/state promovidos a columnas (F1)
+  city               String? // F1: promovido de address.city para agregaciones (Revenue Intelligence)
+  state              String? // F1: promovido de address.state
+  estimatedSize      CompanySize? // F1
+  possibleCategories JobCategory[] @relation("CompanyPossibleCategories") // F1: "necesidades posibles"
+  commercialScore    Float? // F1: score comercial a nivel empresa
+  notes              String?
+  contacts           Contact[]
+  leads              Lead[]
+  opportunities      Opportunity[]
+  jobOrders          JobOrder[]
+  projects           Project[]
+  contracts          Contract[]
+  invoices           Invoice[]
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   @@index([tenantId, status])
+  @@index([tenantId, state])
 }
 
 model Contact {
-  id        String   @id @default(cuid())
-  tenantId  String
-  companyId String
-  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  firstName String
-  lastName  String
-  email     String?
-  phone     String?
-  title     String?
-  isPrimary Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id           String               @id @default(cuid())
+  tenantId     String
+  companyId    String
+  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  firstName    String
+  lastName     String
+  email        String?
+  phone        String?
+  title        String?
+  linkedinUrl  String? // F1
+  decisionRole ContactDecisionRole? // F1: distinto de `title` (texto libre) — rol categorizado para targeting comercial
+  isPrimary    Boolean              @default(false)
+  createdAt    DateTime             @default(now())
 
   @@index([tenantId])
   @@index([companyId])
@@ -371,6 +416,11 @@ model Lead {
   tenantId      String
   companyId     String?
   company       Company?   @relation(fields: [companyId], references: [id])
+  industryId    String? // F1: un lead puede existir antes de tener Company
+  industry      Industry?  @relation(fields: [industryId], references: [id])
+  city          String? // F1
+  state         String? // F1
+  priority      RiskLevel  @default(MEDIUM) // F1: reutiliza RiskLevel, ver F1_REVENUE_ENGINE_PLAN §2.3
   source        String? // referral, web, cold-outreach, indeed...
   status        LeadStatus @default(NEW)
   ownerId       String? // User.id (sin relation, ver decisión #2)
@@ -381,23 +431,28 @@ model Lead {
   updatedAt     DateTime   @updatedAt
 
   @@index([tenantId, status])
+  @@index([tenantId, industryId])
 }
 
 model Opportunity {
-  id                String           @id @default(cuid())
+  id                String            @id @default(cuid())
   tenantId          String
   companyId         String
-  company           Company          @relation(fields: [companyId], references: [id])
+  company           Company           @relation(fields: [companyId], references: [id])
   title             String
-  stage             OpportunityStage @default(DISCOVERY)
+  stage             OpportunityStage  @default(MEETING_SCHEDULED)
+  categoryId        String? // F1: "tipo de trabajadores"
+  category          JobCategory?      @relation(fields: [categoryId], references: [id])
   estimatedWorkers  Int?
-  estimatedRevenue  Decimal?         @db.Decimal(12, 2)
+  estimatedPayRate  Decimal?          @db.Decimal(10, 2) // F1
+  estimatedBillRate Decimal?          @db.Decimal(10, 2) // F1
+  estimatedRevenue  Decimal?          @db.Decimal(12, 2)
   probability       Int? // 0-100
   expectedCloseDate DateTime?
   ownerId           String?
   pricingScenarios  PricingScenario[]
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   @@index([tenantId, stage])
 }
@@ -408,7 +463,7 @@ model Activity {
   type               ActivityType
   subject            String
   body               String?
-  entityType         String // "company" | "candidate" | "jobOrder" | ...
+  entityType         String // "company" | "candidate" | "jobOrder" | "lead" | "opportunity" | "contact" | ...
   entityId           String
   performedById      String? // User.id
   performedByAgentId String? // AgentInstance.id
@@ -417,17 +472,41 @@ model Activity {
   @@index([tenantId, entityType, entityId])
 }
 
+// F1: sigue el mismo patrón polimórfico que Activity (entityType/entityId como
+// strings, sin FK — decisión #2 del header: referencias de actor sin relation).
+model FollowUp {
+  id           String         @id @default(cuid())
+  tenantId     String
+  entityType   String // "company" | "lead" | "opportunity" | "contact"
+  entityId     String
+  type         FollowUpType
+  dueDate      DateTime
+  priority     RiskLevel      @default(MEDIUM)
+  assignedToId String? // User.id (sin relation, ver decisión #2)
+  status       FollowUpStatus @default(PENDING)
+  reminderAt   DateTime?
+  notes        String?
+  completedAt  DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([tenantId, status, dueDate])
+  @@index([tenantId, entityType, entityId])
+}
+
 // ================= TALENTO =================
 
 model JobCategory {
-  id                     String      @id @default(cuid())
+  id                     String        @id @default(cuid())
   tenantId               String? // null = global (seed)
   name                   String // "Journeyman Electrician", "Forklift Operator"...
   industryId             String?
-  industry               Industry?   @relation(fields: [industryId], references: [id])
-  requiredCertifications Json        @default("[]") // keys de DocumentType
+  industry               Industry?     @relation(fields: [industryId], references: [id])
+  requiredCertifications Json          @default("[]") // keys de DocumentType
   candidates             Candidate[]
   jobOrders              JobOrder[]
+  opportunities          Opportunity[] // F1
+  possibleForCompanies   Company[]     @relation("CompanyPossibleCategories") // F1
 
   @@index([tenantId])
 }
@@ -461,21 +540,21 @@ model Candidate {
 }
 
 model Worker {
-  id               String           @id @default(cuid())
+  id               String            @id @default(cuid())
   tenantId         String
-  candidateId      String           @unique
-  candidate        Candidate        @relation(fields: [candidateId], references: [id])
-  employmentType   EmploymentType   @default(W2)
-  defaultPayRate   Decimal          @db.Decimal(10, 2)
-  status           WorkerStatus     @default(AVAILABLE)
-  complianceStatus ComplianceStatus @default(PENDING)
+  candidateId      String            @unique
+  candidate        Candidate         @relation(fields: [candidateId], references: [id])
+  employmentType   EmploymentType    @default(W2)
+  defaultPayRate   Decimal           @db.Decimal(10, 2)
+  status           WorkerStatus      @default(AVAILABLE)
+  complianceStatus ComplianceStatus  @default(PENDING)
   hiredAt          DateTime?
   documents        Document[]
   assignments      Assignment[]
   payrollItems     PayrollItem[]
   alerts           ComplianceAlert[]
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, complianceStatus])
@@ -484,31 +563,31 @@ model Worker {
 // ================= VACANTES Y OPERACIONES =================
 
 model JobOrder {
-  id            String         @id @default(cuid())
-  tenantId      String
-  companyId     String
-  company       Company        @relation(fields: [companyId], references: [id])
-  projectId     String?
-  project       Project?       @relation(fields: [projectId], references: [id])
-  categoryId    String
-  category      JobCategory    @relation(fields: [categoryId], references: [id])
-  title         String
-  workersNeeded Int
-  workersFilled Int            @default(0)
-  billRate      Decimal        @db.Decimal(10, 2)
-  payRate       Decimal        @db.Decimal(10, 2)
-  location      Json? // { city, state, address }
-  shiftType     ShiftType      @default(DAY)
-  scheduleNotes String?
-  startDate     DateTime
-  endDate       DateTime?
-  status        JobOrderStatus @default(OPEN)
-  requirements  Json           @default("[]") // keys de DocumentType requeridos
-  urgency       RiskLevel      @default(MEDIUM)
-  assignments   Assignment[]
+  id               String            @id @default(cuid())
+  tenantId         String
+  companyId        String
+  company          Company           @relation(fields: [companyId], references: [id])
+  projectId        String?
+  project          Project?          @relation(fields: [projectId], references: [id])
+  categoryId       String
+  category         JobCategory       @relation(fields: [categoryId], references: [id])
+  title            String
+  workersNeeded    Int
+  workersFilled    Int               @default(0)
+  billRate         Decimal           @db.Decimal(10, 2)
+  payRate          Decimal           @db.Decimal(10, 2)
+  location         Json? // { city, state, address }
+  shiftType        ShiftType         @default(DAY)
+  scheduleNotes    String?
+  startDate        DateTime
+  endDate          DateTime?
+  status           JobOrderStatus    @default(OPEN)
+  requirements     Json              @default("[]") // keys de DocumentType requeridos
+  urgency          RiskLevel         @default(MEDIUM)
+  assignments      Assignment[]
   pricingScenarios PricingScenario[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   @@index([tenantId, status])
   @@index([companyId])
@@ -532,24 +611,24 @@ model Project {
 }
 
 model Assignment {
-  id          String           @id @default(cuid())
-  tenantId    String
-  workerId    String
-  worker      Worker           @relation(fields: [workerId], references: [id])
-  jobOrderId  String
-  jobOrder    JobOrder         @relation(fields: [jobOrderId], references: [id])
-  projectId   String?
-  project     Project?         @relation(fields: [projectId], references: [id])
-  payRate     Decimal          @db.Decimal(10, 2) // snapshot al asignar
-  billRate    Decimal          @db.Decimal(10, 2) // snapshot al asignar
-  startDate   DateTime
-  endDate     DateTime?
-  status      AssignmentStatus @default(SCHEDULED)
-  shifts      Shift[]
-  timeEntries TimeEntry[]
+  id           String           @id @default(cuid())
+  tenantId     String
+  workerId     String
+  worker       Worker           @relation(fields: [workerId], references: [id])
+  jobOrderId   String
+  jobOrder     JobOrder         @relation(fields: [jobOrderId], references: [id])
+  projectId    String?
+  project      Project?         @relation(fields: [projectId], references: [id])
+  payRate      Decimal          @db.Decimal(10, 2) // snapshot al asignar
+  billRate     Decimal          @db.Decimal(10, 2) // snapshot al asignar
+  startDate    DateTime
+  endDate      DateTime?
+  status       AssignmentStatus @default(SCHEDULED)
+  shifts       Shift[]
+  timeEntries  TimeEntry[]
   payrollItems PayrollItem[]
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
   @@index([tenantId, workerId, status])
   @@index([tenantId, jobOrderId])
@@ -606,25 +685,25 @@ model DocumentType {
 }
 
 model Document {
-  id               String         @id @default(cuid())
-  tenantId         String
-  documentTypeId   String
-  documentType     DocumentType   @relation(fields: [documentTypeId], references: [id])
-  candidateId      String?
-  candidate        Candidate?     @relation(fields: [candidateId], references: [id])
-  workerId         String?
-  worker           Worker?        @relation(fields: [workerId], references: [id])
-  fileUrl          String?
-  issuedDate       DateTime?
-  expirationDate   DateTime?
-  status           DocumentStatus @default(PENDING_REVIEW)
-  verifiedById     String?
-  verifiedByAgent  Boolean        @default(false)
-  aiExtraction     Json?
-  rejectionReason  String?
-  alerts           ComplianceAlert[]
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  id              String            @id @default(cuid())
+  tenantId        String
+  documentTypeId  String
+  documentType    DocumentType      @relation(fields: [documentTypeId], references: [id])
+  candidateId     String?
+  candidate       Candidate?        @relation(fields: [candidateId], references: [id])
+  workerId        String?
+  worker          Worker?           @relation(fields: [workerId], references: [id])
+  fileUrl         String?
+  issuedDate      DateTime?
+  expirationDate  DateTime?
+  status          DocumentStatus    @default(PENDING_REVIEW)
+  verifiedById    String?
+  verifiedByAgent Boolean           @default(false)
+  aiExtraction    Json?
+  rejectionReason String?
+  alerts          ComplianceAlert[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, expirationDate])
@@ -739,17 +818,17 @@ model Contract {
 // ================= PRICING INTELLIGENCE =================
 
 model LaborBurdenConfig {
-  id               String      @id @default(cuid())
-  tenantId         String
-  state            String // "IL", "IN"...
-  jobCategoryId    String? // null = default del estado
-  workersCompRate  Decimal     @db.Decimal(5, 2) // % sobre payroll, por class code
-  ficaRate         Decimal     @default(7.65) @db.Decimal(5, 2)
-  futaRate         Decimal     @default(0.60) @db.Decimal(5, 2)
-  sutaRate         Decimal     @db.Decimal(5, 2)
-  liabilityRate    Decimal?    @db.Decimal(5, 2)
-  otherCostsPerHour Decimal?   @db.Decimal(8, 2)
-  effectiveDate    DateTime    @db.Date
+  id                String   @id @default(cuid())
+  tenantId          String
+  state             String // "IL", "IN"...
+  jobCategoryId     String? // null = default del estado
+  workersCompRate   Decimal  @db.Decimal(5, 2) // % sobre payroll, por class code
+  ficaRate          Decimal  @default(7.65) @db.Decimal(5, 2)
+  futaRate          Decimal  @default(0.60) @db.Decimal(5, 2)
+  sutaRate          Decimal  @db.Decimal(5, 2)
+  liabilityRate     Decimal? @db.Decimal(5, 2)
+  otherCostsPerHour Decimal? @db.Decimal(8, 2)
+  effectiveDate     DateTime @db.Date
 
   @@index([tenantId, state])
 }
@@ -773,26 +852,26 @@ model RateBenchmark {
 }
 
 model PricingScenario {
-  id                  String                @id @default(cuid())
-  tenantId            String
-  jobOrderId          String?
-  jobOrder            JobOrder?             @relation(fields: [jobOrderId], references: [id])
-  opportunityId       String?
-  opportunity         Opportunity?          @relation(fields: [opportunityId], references: [id])
-  inputs              Json // { volumen, urgencia, turno, dificultad, duración }
-  recommendedPayMin   Decimal               @db.Decimal(10, 2)
-  recommendedPayMax   Decimal               @db.Decimal(10, 2)
-  recommendedBillMin  Decimal               @db.Decimal(10, 2)
-  recommendedBillMax  Decimal               @db.Decimal(10, 2)
-  grossMarginPerHour  Decimal               @db.Decimal(10, 2)
-  netMarginPerHour    Decimal?              @db.Decimal(10, 2)
-  hiringRisk          HiringRisk            @default(MEDIUM)
-  dataConfidence      RiskLevel             @default(MEDIUM) // según sampleSize/antigüedad
-  rationale           String
-  status              PricingScenarioStatus @default(DRAFT)
-  decidedById         String?
+  id                   String                @id @default(cuid())
+  tenantId             String
+  jobOrderId           String?
+  jobOrder             JobOrder?             @relation(fields: [jobOrderId], references: [id])
+  opportunityId        String?
+  opportunity          Opportunity?          @relation(fields: [opportunityId], references: [id])
+  inputs               Json // { volumen, urgencia, turno, dificultad, duración }
+  recommendedPayMin    Decimal               @db.Decimal(10, 2)
+  recommendedPayMax    Decimal               @db.Decimal(10, 2)
+  recommendedBillMin   Decimal               @db.Decimal(10, 2)
+  recommendedBillMax   Decimal               @db.Decimal(10, 2)
+  grossMarginPerHour   Decimal               @db.Decimal(10, 2)
+  netMarginPerHour     Decimal?              @db.Decimal(10, 2)
+  hiringRisk           HiringRisk            @default(MEDIUM)
+  dataConfidence       RiskLevel             @default(MEDIUM) // según sampleSize/antigüedad
+  rationale            String
+  status               PricingScenarioStatus @default(DRAFT)
+  decidedById          String?
   createdByAgentTaskId String?
-  createdAt           DateTime              @default(now())
+  createdAt            DateTime              @default(now())
 
   @@index([tenantId, status])
 }
@@ -828,23 +907,23 @@ model AgentInstance {
 }
 
 model AgentTask {
-  id              String          @id @default(cuid())
+  id              String            @id @default(cuid())
   tenantId        String
   agentInstanceId String
-  agentInstance   AgentInstance   @relation(fields: [agentInstanceId], references: [id])
+  agentInstance   AgentInstance     @relation(fields: [agentInstanceId], references: [id])
   type            String // "screen_candidate", "verify_document", "recommend_rates"...
   input           Json
   output          Json?
-  status          AgentTaskStatus @default(QUEUED)
+  status          AgentTaskStatus   @default(QUEUED)
   triggeredBy     TaskTrigger
   parentTaskId    String?
-  parentTask      AgentTask?      @relation("TaskChain", fields: [parentTaskId], references: [id])
-  childTasks      AgentTask[]     @relation("TaskChain")
+  parentTask      AgentTask?        @relation("TaskChain", fields: [parentTaskId], references: [id])
+  childTasks      AgentTask[]       @relation("TaskChain")
   errorMessage    String?
   tokensUsed      Int?
-  costUsd         Decimal?        @db.Decimal(10, 4)
+  costUsd         Decimal?          @db.Decimal(10, 4)
   approvals       ApprovalRequest[]
-  createdAt       DateTime        @default(now())
+  createdAt       DateTime          @default(now())
   completedAt     DateTime?
 
   @@index([tenantId, status])
