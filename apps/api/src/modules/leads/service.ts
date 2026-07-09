@@ -12,14 +12,8 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
+import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
-
-async function labelOwners(ownerIds: string[]): Promise<Map<string, string>> {
-  const ids = [...new Set(ownerIds)];
-  if (ids.length === 0) return new Map();
-  const users = await scopedDb.user.findMany({ where: { id: { in: ids } } });
-  return new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`]));
-}
 
 async function nextFollowUpsFor(leadIds: string[]) {
   if (leadIds.length === 0) return new Map<string, { id: string; type: string; dueDate: Date }>();
@@ -50,7 +44,7 @@ export async function listLeads(query: LeadQuery): Promise<Paginated<LeadListIte
 
   const { items, nextCursor } = toCursorPage(rows, query.limit);
   const [ownerLabels, nextFollowUps] = await Promise.all([
-    labelOwners(items.filter((l) => l.ownerId).map((l) => l.ownerId!)),
+    labelUsers(items.filter((l) => l.ownerId).map((l) => l.ownerId!)),
     nextFollowUpsFor(items.map((l) => l.id)),
   ]);
 
@@ -94,11 +88,11 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
       orderBy: { createdAt: "desc" },
       take: 10,
     }),
-    labelOwners(lead.ownerId ? [lead.ownerId] : []),
+    labelUsers(lead.ownerId ? [lead.ownerId] : []),
   ]);
 
   const actorIds = activities.filter((a) => a.performedById).map((a) => a.performedById!);
-  const actorLabels = await labelOwners(actorIds);
+  const actorLabels = await labelUsers(actorIds);
 
   return {
     id: lead.id,

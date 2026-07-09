@@ -1,5 +1,12 @@
 import { z } from "zod";
 import { activityItemSchema, followUpSummarySchema } from "./crm";
+import { paginationQuerySchema } from "./common";
+
+export const opportunityQuerySchema = paginationQuerySchema.extend({
+  stage: z.string().optional(),
+  companyId: z.string().optional(),
+});
+export type OpportunityQuery = z.infer<typeof opportunityQuerySchema>;
 
 export const opportunityStageSchema = z.enum([
   "MEETING_SCHEDULED",
@@ -51,7 +58,11 @@ export const createOpportunityInputSchema = z.object({
 });
 export type CreateOpportunityInput = z.infer<typeof createOpportunityInputSchema>;
 
-export const updateOpportunityInputSchema = createOpportunityInputSchema.partial().omit({ companyId: true });
+// stage is deliberately excluded — changes go through PATCH
+// /opportunities/:id/stage so every stage change reliably logs an Activity.
+export const updateOpportunityInputSchema = createOpportunityInputSchema
+  .partial()
+  .omit({ companyId: true, stage: true });
 export type UpdateOpportunityInput = z.infer<typeof updateOpportunityInputSchema>;
 
 export const updateOpportunityStageInputSchema = z.object({
