@@ -8,6 +8,7 @@ import {
   type LLMCompletionResult,
   type LLMProvider,
 } from "@ai-staffing-os/agents";
+import type { AgentTaskDetail } from "@ai-staffing-os/shared";
 import { getTenancyContext, runWithTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
@@ -290,4 +291,49 @@ export async function createAndRunTaskSync(tenantId: string, operatorUserId: str
     await runTaskInner(task.id);
     return scopedDb.agentTask.findUniqueOrThrow({ where: { id: task.id } });
   });
+}
+
+/**
+ * Construye la forma pública AgentTaskDetail a partir de una fila
+ * AgentTask cruda — compartido entre agents/service.ts y
+ * prospecting/service.ts para no duplicar el mapeo.
+ */
+export async function toAgentTaskDetail(task: {
+  id: string;
+  agentInstanceId: string;
+  type: string;
+  status: string;
+  triggeredBy: string;
+  tokensUsed: number | null;
+  costUsd: { toString(): string } | null;
+  errorMessage: string | null;
+  parentTaskId: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
+  input: unknown;
+  output: unknown;
+}): Promise<AgentTaskDetail> {
+  const agentInstance = await scopedDb.agentInstance.findUniqueOrThrow({
+    where: { id: task.agentInstanceId },
+    include: { definition: true },
+  });
+  const approval = await scopedDb.approvalRequest.findFirst({ where: { agentTaskId: task.id } });
+
+  return {
+    id: task.id,
+    agentInstanceId: task.agentInstanceId,
+    agentKey: agentInstance.definition.key,
+    type: task.type,
+    status: task.status as AgentTaskDetail["status"],
+    triggeredBy: task.triggeredBy as AgentTaskDetail["triggeredBy"],
+    tokensUsed: task.tokensUsed,
+    costUsd: task.costUsd?.toString() ?? null,
+    errorMessage: task.errorMessage,
+    parentTaskId: task.parentTaskId,
+    createdAt: task.createdAt.toISOString(),
+    completedAt: task.completedAt?.toISOString() ?? null,
+    input: task.input,
+    output: task.output,
+    approvalRequestId: approval?.id ?? null,
+  };
 }

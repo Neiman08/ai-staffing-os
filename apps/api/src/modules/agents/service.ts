@@ -8,7 +8,7 @@ import type {
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { createQueuedTask, runTaskAsync } from "./task-executor";
+import { createQueuedTask, runTaskAsync, toAgentTaskDetail } from "./task-executor";
 
 export async function listAgentInstances(): Promise<AgentInstanceListItem[]> {
   const instances = await scopedDb.agentInstance.findMany({
@@ -61,28 +61,7 @@ export async function invokeSalesAgentTask(input: InvokeSalesAgentInput): Promis
 
   runTaskAsync(task.id, ctx.tenantId, ctx.userId);
 
-  const agentInstance = await scopedDb.agentInstance.findUniqueOrThrow({
-    where: { id: task.agentInstanceId },
-    include: { definition: true },
-  });
-
-  return {
-    id: task.id,
-    agentInstanceId: task.agentInstanceId,
-    agentKey: agentInstance.definition.key,
-    type: task.type,
-    status: task.status,
-    triggeredBy: task.triggeredBy,
-    tokensUsed: task.tokensUsed,
-    costUsd: task.costUsd?.toString() ?? null,
-    errorMessage: task.errorMessage,
-    parentTaskId: task.parentTaskId,
-    createdAt: task.createdAt.toISOString(),
-    completedAt: task.completedAt?.toISOString() ?? null,
-    input: task.input,
-    output: task.output,
-    approvalRequestId: null,
-  };
+  return toAgentTaskDetail(task);
 }
 
 export async function listAgentTasks(query: AgentTaskQuery): Promise<AgentTaskListItem[]> {
