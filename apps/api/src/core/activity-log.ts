@@ -13,7 +13,7 @@ export async function logActivity(params: {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
-  await scopedDb.activity.create({
+  return scopedDb.activity.create({
     data: {
       tenantId: ctx.tenantId,
       type: params.type,

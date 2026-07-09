@@ -14,6 +14,8 @@ import { pricingRouter } from "./modules/pricing/router";
 import { agentsRouter } from "./modules/agents/router";
 import { leadsRouter } from "./modules/leads/router";
 import { opportunitiesRouter } from "./modules/opportunities/router";
+import { followUpsRouter } from "./modules/followups/router";
+import { activitiesRouter } from "./modules/activities/router";
 
 export function createApp() {
   const app = express();
@@ -42,6 +44,8 @@ export function createApp() {
   app.use("/api/v1", agentsRouter);
   app.use("/api/v1", leadsRouter);
   app.use("/api/v1", opportunitiesRouter);
+  app.use("/api/v1", followUpsRouter);
+  app.use("/api/v1", activitiesRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

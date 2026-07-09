@@ -1,9 +1,18 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./common";
 
 export const followUpTypeSchema = z.enum(["CALL", "EMAIL", "LINKEDIN", "MEETING"]);
 export const followUpStatusSchema = z.enum(["PENDING", "DONE", "SNOOZED", "CANCELLED"]);
 export const followUpEntityTypeSchema = z.enum(["company", "lead", "opportunity", "contact"]);
 export const followUpPrioritySchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
+
+export const followUpQuerySchema = paginationQuerySchema.extend({
+  status: followUpStatusSchema.optional(),
+  assignedToId: z.string().optional(),
+  entityType: followUpEntityTypeSchema.optional(),
+  overdue: z.coerce.boolean().optional(),
+});
+export type FollowUpQuery = z.infer<typeof followUpQuerySchema>;
 
 export const followUpListItemSchema = z.object({
   id: z.string(),
