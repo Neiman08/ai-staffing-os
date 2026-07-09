@@ -16,6 +16,7 @@
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@ai-staffing-os/agents": "workspace:*",
     "@ai-staffing-os/shared": "workspace:*",
     "@prisma/client": "^5.20.0"
   },

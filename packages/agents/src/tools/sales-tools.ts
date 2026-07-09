@@ -3,10 +3,13 @@ import type { AgentTool } from "../core/AgentTool";
 import { NotImplementedError } from "../core/AgentRuntime";
 
 /**
- * F1: typed tool contracts for the Sales / Market Intelligence / Revenue
- * agents (F2). Defining the Zod input/output shape now forces the data
- * contract to be thought through without committing to an implementation —
- * every execute() throws until F2. No network calls, no OpenAI.
+ * F1 defined these as typed contracts with execute() throwing until F2.
+ * F2: all 7 belong to the Sales Agent (see ../definitions/sales.agent.ts)
+ * — real execute() implementations live in apps/api (regla de oro:
+ * ninguna tool toca SQL directo, todas pasan por los services que también
+ * usan los humanos). This file only defines name/description/inputSchema;
+ * apps/api's factory rebuilds each tool with a real execute() bound to a
+ * specific AgentTask.
  *
  * Per Arquitectura §3.4 (autonomy matrix): creating internal records
  * (createLead, suggestFollowUp) is FULL_AUTO-eligible; anything that
@@ -35,6 +38,10 @@ export const searchCompaniesTool: AgentTool<z.infer<typeof searchCompaniesInputS
 
 export const detectHiringSignalsInputSchema = z.object({
   companyId: z.string(),
+  // F2 §5: el humano puede pegar una señal de texto libre (ej. "vi que
+  // publicaron una vacante en Indeed") — no reemplaza scraping, es un
+  // input explícito y controlado por el humano.
+  manualSignal: z.string().optional(),
 });
 export const detectHiringSignalsTool: AgentTool<
   z.infer<typeof detectHiringSignalsInputSchema>,
@@ -98,15 +105,21 @@ export const suggestFollowUpTool: AgentTool<
   execute: notImplemented(),
 };
 
-export const scoreOpportunityInputSchema = z.object({
-  opportunityId: z.string(),
+// F2: renombrado de scoreOpportunity → scoreCompany. F1 lo había asociado
+// al Revenue Agent (stub) con input opportunityId, pero el único campo de
+// schema aprobado para scoring es Company.commercialScoreReason — este
+// tool califica empresas prospecto, no oportunidades ya abiertas. Ver F2
+// plan §7 y decisión de alcance aprobada (Company.commercialScore ya
+// existía desde F1; solo se agregó el campo de razón).
+export const scoreCompanyInputSchema = z.object({
+  companyId: z.string(),
 });
-export const scoreOpportunityTool: AgentTool<
-  z.infer<typeof scoreOpportunityInputSchema>,
+export const scoreCompanyTool: AgentTool<
+  z.infer<typeof scoreCompanyInputSchema>,
   { score: number; rationale: string }
 > = {
-  name: "scoreOpportunity",
-  description: "Califica la probabilidad de cierre de una oportunidad con una explicación auditable.",
-  inputSchema: scoreOpportunityInputSchema,
+  name: "scoreCompany",
+  description: "Califica el potencial comercial de una empresa (0-100) con una explicación auditable.",
+  inputSchema: scoreCompanyInputSchema,
   execute: notImplemented(),
 };

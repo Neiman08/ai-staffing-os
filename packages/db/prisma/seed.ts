@@ -1,5 +1,6 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import { ALL_PERMISSIONS } from "@ai-staffing-os/shared";
+import { salesAgent } from "@ai-staffing-os/agents";
 
 const prisma = new PrismaClient();
 
@@ -1418,10 +1419,14 @@ async function seedAgents(tenantId: string) {
   const definitionMap = new Map<string, string>();
 
   for (const def of AGENT_DEFINITIONS) {
+    // F2: solo el Sales Agent tiene un systemPromptTemplate real —
+    // versionado en código junto a sus tools (ver ../src/definitions en
+    // packages/agents), no copiado a mano acá. Los demás siguen "" (stubs).
+    const systemPromptTemplate = def.key === "sales" ? salesAgent.systemPromptTemplate! : "";
     const definition = await prisma.agentDefinition.upsert({
       where: { key: def.key },
-      update: { name: def.name, description: def.description },
-      create: { key: def.key, name: def.name, description: def.description, systemPromptTemplate: "" },
+      update: { name: def.name, description: def.description, systemPromptTemplate },
+      create: { key: def.key, name: def.name, description: def.description, systemPromptTemplate },
     });
     definitionMap.set(def.key, definition.id);
   }

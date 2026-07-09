@@ -1,9 +1,14 @@
 export * from "./core/LLMProvider";
 export * from "./core/AgentTool";
 export * from "./core/ToolRegistry";
+export * from "./core/InMemoryToolRegistry";
 export * from "./core/AgentContext";
 export * from "./core/AgentDefinitionStub";
 export * from "./core/AgentRuntime";
+export * from "./core/CostTracker";
+export * from "./core/ApprovalGate";
+
+export * from "./providers/openai-provider";
 
 export * from "./tools/sales-tools";
 
