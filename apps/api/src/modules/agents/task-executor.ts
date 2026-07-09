@@ -13,6 +13,8 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
 import { env } from "../../core/env";
 import { createSalesTools } from "./tools/sales-tools.impl";
+import { createMarketIntelligenceTools } from "./tools/market-intelligence-tools.impl";
+import { createProspectingTools, type RunChildTask } from "./tools/prospecting-tools.impl";
 import { UsageAccumulator } from "./usage";
 import { getMonthlyBudgetStatus } from "./budget";
 
@@ -34,8 +36,8 @@ const TASK_TYPE_TO_TOOL_NAME: Record<string, string> = {
   suggest_follow_up: "suggestFollowUp",
   create_opportunity: "createOpportunity", // F3
   create_follow_up: "createFollowUp", // F3
-  // analyze_industry / process_company_pipeline: registrados en F3-5,
-  // cuando existan sus implementaciones reales en apps/api.
+  analyze_industry: "analyzeIndustry", // F3
+  process_company_pipeline: "processCompanyPipeline", // F3
 };
 
 class MissingApiKeyProvider implements LLMProvider {
@@ -72,8 +74,10 @@ async function updateAgentInstanceMetrics(
 }
 
 /**
- * F3: registro de tools por agente. Extensible — F3-5 agrega las ramas
- * "market_intelligence" y "prospecting" cuando existan sus implementaciones.
+ * F3: registro de tools por agente. La rama "prospecting" inyecta
+ * runChildTask (en vez de importar createAndRunTaskSync directamente
+ * desde prospecting-tools.impl.ts) para evitar un import circular entre
+ * este archivo y ese — ver RunChildTask en prospecting-tools.impl.ts.
  */
 function buildToolRegistry(
   agentKey: string,
@@ -84,8 +88,33 @@ function buildToolRegistry(
 
   if (agentKey === "sales") {
     tools = createSalesTools(common);
+  } else if (agentKey === "market_intelligence") {
+    tools = createMarketIntelligenceTools(common);
+  } else if (agentKey === "prospecting") {
+    const runChildTask: RunChildTask = async ({ agentKey: childAgentKey, type, input }) => {
+      const ctx = getTenancyContext();
+      if (!ctx) throw AppError.unauthorized();
+
+      const settled = await createAndRunTaskSync(ctx.tenantId, ctx.userId, {
+        agentKey: childAgentKey,
+        type,
+        input,
+        triggeredBy: "AGENT",
+        parentTaskId: common.taskId,
+      });
+      const approval = await scopedDb.approvalRequest.findFirst({ where: { agentTaskId: settled.id } });
+
+      return {
+        id: settled.id,
+        status: settled.status,
+        output: settled.output,
+        errorMessage: settled.errorMessage,
+        approvalRequestId: approval?.id ?? null,
+      };
+    };
+    tools = createProspectingTools({ taskId: common.taskId, agentInstanceId: common.agentInstanceId, runChildTask });
   } else {
-    throw new Error(`buildToolRegistry: no tool factory registered yet for agent key "${agentKey}"`);
+    throw new Error(`buildToolRegistry: no tool factory registered for agent key "${agentKey}"`);
   }
 
   for (const tool of tools) registry.register(tool);
