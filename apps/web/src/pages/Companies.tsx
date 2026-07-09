@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CompanyListItem,
   CreateCompanyInput,
+  ImportCompaniesResult,
+  ImportCompanyRow,
   IndustryListItem,
   Paginated,
 } from "@ai-staffing-os/shared";
@@ -22,7 +24,8 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
-import { Plus } from "lucide-react";
+import { normalizeImportRow, parseSpreadsheetFile } from "@/lib/importCompanies";
+import { Plus, Upload } from "lucide-react";
 
 const COMPANY_SIZES = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"];
 
@@ -125,10 +128,106 @@ function NewCompanyForm({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+function ImportCompaniesDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [fileName, setFileName] = useState("");
+  const [rows, setRows] = useState<ImportCompanyRow[]>([]);
+  const [invalidCount, setInvalidCount] = useState(0);
+
+  const importMutation = useMutation({
+    mutationFn: (rows: ImportCompanyRow[]) =>
+      apiFetch<ImportCompaniesResult>("/prospecting/import", { method: "POST", body: JSON.stringify({ rows }) }),
+    onSuccess: (result) => {
+      toast({
+        title: `${result.importedCount} empresa(s) importada(s)`,
+        description: result.skipped.length ? `${result.skipped.length} fila(s) omitida(s) — ver detalle` : undefined,
+        variant: "success",
+      });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      setRows([]);
+      setFileName("");
+      onClose();
+    },
+    onError: (err) => toast({ title: "No se pudo importar", description: String(err), variant: "error" }),
+  });
+
+  async function handleFile(file: File) {
+    setFileName(file.name);
+    try {
+      const raw = await parseSpreadsheetFile(file);
+      const normalized = raw.map(normalizeImportRow);
+      const valid = normalized.filter((r): r is ImportCompanyRow => r !== null);
+      setInvalidCount(normalized.length - valid.length);
+      setRows(valid);
+    } catch (err) {
+      toast({ title: "No se pudo leer el archivo", description: String(err), variant: "error" });
+    }
+  }
+
+  return (
+    <Drawer open={open} onClose={onClose} title="Importar empresas">
+      <div className="space-y-4">
+        <p className="text-xs text-muted-foreground">
+          CSV o Excel (Google Sheets: exportar como CSV primero) con columnas <code>name</code>,{" "}
+          <code>industryName</code> (debe coincidir con una industria existente — no se inventa una nueva), y
+          opcionalmente <code>city</code>, <code>state</code>, <code>website</code>, <code>estimatedSize</code>,{" "}
+          <code>contactFirstName</code>, <code>contactLastName</code>, <code>contactEmail</code>,{" "}
+          <code>contactTitle</code>.
+        </p>
+        <input
+          type="file"
+          accept=".csv,.xlsx"
+          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+          className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm"
+        />
+        {fileName && (
+          <p className="text-xs text-muted-foreground">
+            {fileName}: {rows.length} fila(s) válida(s)
+            {invalidCount > 0 ? `, ${invalidCount} sin nombre/industria (omitidas)` : ""}
+          </p>
+        )}
+        {rows.length > 0 && (
+          <div className="max-h-64 overflow-y-auto rounded-md border border-border">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-secondary/40">
+                  <th className="p-2 text-left font-medium">Empresa</th>
+                  <th className="p-2 text-left font-medium">Industria</th>
+                  <th className="p-2 text-left font-medium">Contacto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 25).map((r, i) => (
+                  <tr key={i} className="border-b border-border last:border-0">
+                    <td className="p-2">{r.name}</td>
+                    <td className="p-2 text-muted-foreground">{r.industryName}</td>
+                    <td className="p-2 text-muted-foreground">
+                      {r.contactFirstName ? `${r.contactFirstName} ${r.contactLastName ?? ""}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <Button
+          className="w-full"
+          disabled={rows.length === 0 || importMutation.isPending}
+          onClick={() => importMutation.mutate(rows)}
+        >
+          {importMutation.isPending ? "Importando…" : `Importar ${rows.length || ""} empresa(s)`}
+        </Button>
+      </div>
+    </Drawer>
+  );
+}
+
 export default function Companies() {
   const navigate = useNavigate();
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const cursor = cursorStack[cursorStack.length - 1];
 
   const { data, isLoading } = useQuery({
@@ -143,10 +242,16 @@ export default function Companies() {
         title="Companies"
         description="Clientes y prospectos de la agencia"
         action={
-          <Button onClick={() => setDrawerOpen(true)}>
-            <Plus className="h-4 w-4" />
-            New Company
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload className="h-4 w-4" />
+              Importar empresas
+            </Button>
+            <Button onClick={() => setDrawerOpen(true)}>
+              <Plus className="h-4 w-4" />
+              New Company
+            </Button>
+          </div>
         }
       />
       <Card>
@@ -213,6 +318,8 @@ export default function Companies() {
       <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} title="New Company">
         <NewCompanyForm onCreated={() => setDrawerOpen(false)} />
       </Drawer>
+
+      <ImportCompaniesDrawer open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );
 }
