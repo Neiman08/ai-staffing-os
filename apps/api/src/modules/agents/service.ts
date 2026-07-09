@@ -8,7 +8,7 @@ import type {
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { runSalesAgentTask } from "./task-runner";
+import { createQueuedTask, runTaskAsync } from "./task-executor";
 
 export async function listAgentInstances(): Promise<AgentInstanceListItem[]> {
   const instances = await scopedDb.agentInstance.findMany({
@@ -52,24 +52,19 @@ export async function invokeSalesAgentTask(input: InvokeSalesAgentInput): Promis
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
-  const agentInstance = await scopedDb.agentInstance.findFirst({
-    where: { definition: { key: "sales" } },
+  const task = await createQueuedTask({
+    agentKey: "sales",
+    type: input.type,
+    input: input.input,
+    triggeredBy: "USER",
+  });
+
+  runTaskAsync(task.id, ctx.tenantId, ctx.userId);
+
+  const agentInstance = await scopedDb.agentInstance.findUniqueOrThrow({
+    where: { id: task.agentInstanceId },
     include: { definition: true },
   });
-  if (!agentInstance) throw AppError.internal("Sales Agent instance not found for this tenant");
-
-  const task = await scopedDb.agentTask.create({
-    data: {
-      tenantId: ctx.tenantId,
-      agentInstanceId: agentInstance.id,
-      type: input.type,
-      input: input.input as never,
-      status: "QUEUED",
-      triggeredBy: "USER",
-    },
-  });
-
-  runSalesAgentTask(task.id, ctx.tenantId, ctx.userId);
 
   return {
     id: task.id,

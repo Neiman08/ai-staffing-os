@@ -1,8 +1,12 @@
 import { z } from "zod";
 import {
   DEFAULT_MODEL,
+  createFollowUpTool as createFollowUpToolStub,
+  createFollowUpInputSchema,
   createLeadTool as createLeadToolStub,
   createLeadInputSchema,
+  createOpportunityTool as createOpportunityToolStub,
+  createOpportunityInputSchema,
   detectHiringSignalsTool as detectHiringSignalsToolStub,
   detectHiringSignalsInputSchema,
   draftOutreachTool as draftOutreachToolStub,
@@ -24,6 +28,8 @@ import { getTenancyContext } from "../../../core/tenancy/context";
 import { logActivity } from "../../../core/activity-log";
 import { AppError } from "../../../core/errors";
 import * as leadsService from "../../leads/service";
+import * as opportunitiesService from "../../opportunities/service";
+import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
 
 const COMPANY_SIZE_ORDER = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"] as const;
@@ -43,6 +49,41 @@ function businessDaysFromNow(count: number): Date {
     if (day !== 0 && day !== 6) added += 1;
   }
   return d;
+}
+
+// F3: compartido entre suggestFollowUp (solo propone) y createFollowUp
+// (persiste) — mismo cálculo determinista, un solo lugar.
+async function computeFollowUpSuggestion(
+  entityType: string,
+  entityId: string,
+): Promise<{ suggestedDueDate: Date; suggestedType: "CALL" | "EMAIL"; reason: string }> {
+  const lastActivity = await scopedDb.activity.findFirst({
+    where: { entityType, entityId },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!lastActivity) {
+    return {
+      suggestedDueDate: businessDaysFromNow(2),
+      suggestedType: "CALL",
+      reason: "Sin actividad registrada todavía — se recomienda un primer contacto por llamada.",
+    };
+  }
+
+  const daysSince = Math.floor((Date.now() - lastActivity.createdAt.getTime()) / (24 * 60 * 60 * 1000));
+  if (daysSince > 14) {
+    return {
+      suggestedDueDate: businessDaysFromNow(1),
+      suggestedType: "CALL",
+      reason: `Han pasado ${daysSince} días desde la última actividad — se recomienda retomar contacto pronto.`,
+    };
+  }
+
+  return {
+    suggestedDueDate: businessDaysFromNow(5),
+    suggestedType: "EMAIL",
+    reason: "Seguimiento de rutina — última actividad reciente.",
+  };
 }
 
 async function activeIndustries(): Promise<string[]> {
@@ -434,33 +475,87 @@ Responde ÚNICAMENTE con un JSON de la forma {${input.channel === "EMAIL" ? '"su
     {
       ...suggestFollowUpToolStub,
       async execute(input: z.infer<typeof suggestFollowUpInputSchema>) {
-        const lastActivity = await scopedDb.activity.findFirst({
-          where: { entityType: input.entityType, entityId: input.entityId },
-          orderBy: { createdAt: "desc" },
+        const suggestion = await computeFollowUpSuggestion(input.entityType, input.entityId);
+        return {
+          suggestedDueDate: suggestion.suggestedDueDate.toISOString(),
+          suggestedType: suggestion.suggestedType,
+          reason: suggestion.reason,
+        };
+      },
+    },
+
+    // ---- createOpportunity: F3, deterministic — never sets rates (siempre humano/Pricing Agent) ----
+    {
+      ...createOpportunityToolStub,
+      async execute(input: z.infer<typeof createOpportunityInputSchema>) {
+        const ctx = getTenancyContext();
+        if (!ctx) throw AppError.unauthorized();
+
+        const lead = await scopedDb.lead.findUnique({ where: { id: input.leadId } });
+        if (!lead) throw AppError.notFound("Lead not found");
+        if (!lead.companyId) {
+          throw AppError.badRequest("Lead has no company yet — createOpportunity requires an identified company");
+        }
+
+        const company = await scopedDb.company.findUnique({
+          where: { id: lead.companyId },
+          include: { possibleCategories: true },
+        });
+        if (!company) throw AppError.notFound("Company not found");
+
+        const opportunity = await opportunitiesService.createOpportunity({
+          companyId: company.id,
+          title: `${company.name} — prospección IA`,
+          stage: "MEETING_SCHEDULED",
+          categoryId: company.possibleCategories[0]?.id,
+          probability: 10, // conservador: pipeline frío recién creado, no una reunión real agendada
         });
 
-        if (!lastActivity) {
-          return {
-            suggestedDueDate: businessDaysFromNow(2).toISOString(),
-            suggestedType: "CALL",
-            reason: "Sin actividad registrada todavía — se recomienda un primer contacto por llamada.",
-          };
-        }
+        await scopedDb.opportunity.update({
+          where: { id: opportunity.id },
+          data: { createdByAgentTaskId: deps.taskId },
+        });
+        await scopedDb.lead.update({ where: { id: lead.id }, data: { status: "CONVERTED" } });
+        await auditAgentAction({
+          agentInstanceId: deps.agentInstanceId,
+          action: "opportunity.created_by_agent",
+          entityType: "opportunity",
+          entityId: opportunity.id,
+          after: { companyId: company.id, leadId: lead.id },
+        });
 
-        const daysSince = Math.floor((Date.now() - lastActivity.createdAt.getTime()) / (24 * 60 * 60 * 1000));
-        if (daysSince > 14) {
-          return {
-            suggestedDueDate: businessDaysFromNow(1).toISOString(),
-            suggestedType: "CALL",
-            reason: `Han pasado ${daysSince} días desde la última actividad — se recomienda retomar contacto pronto.`,
-          };
-        }
+        return { opportunityId: opportunity.id };
+      },
+    },
 
-        return {
-          suggestedDueDate: businessDaysFromNow(5).toISOString(),
-          suggestedType: "EMAIL",
-          reason: "Seguimiento de rutina — última actividad reciente.",
-        };
+    // ---- createFollowUp: F3, deterministic — persists what suggestFollowUp only proposed ----
+    {
+      ...createFollowUpToolStub,
+      async execute(input: z.infer<typeof createFollowUpInputSchema>) {
+        const suggestion = await computeFollowUpSuggestion(input.entityType, input.entityId);
+
+        const followUp = await followUpsService.createFollowUp({
+          entityType: input.entityType,
+          entityId: input.entityId,
+          type: suggestion.suggestedType,
+          dueDate: suggestion.suggestedDueDate.toISOString(),
+          priority: "MEDIUM",
+          notes: suggestion.reason,
+        });
+
+        await scopedDb.followUp.update({
+          where: { id: followUp.id },
+          data: { createdByAgentTaskId: deps.taskId },
+        });
+        await auditAgentAction({
+          agentInstanceId: deps.agentInstanceId,
+          action: "followUp.created_by_agent",
+          entityType: "followUp",
+          entityId: followUp.id,
+          after: { entityType: input.entityType, entityId: input.entityId, reason: suggestion.reason },
+        });
+
+        return { followUpId: followUp.id };
       },
     },
   ];
