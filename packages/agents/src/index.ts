@@ -11,6 +11,8 @@ export * from "./core/ApprovalGate";
 export * from "./providers/openai-provider";
 
 export * from "./tools/sales-tools";
+export * from "./tools/market-intelligence-tools";
+export * from "./tools/prospecting-tools";
 
 export * from "./definitions/recruiter.agent";
 export * from "./definitions/compliance.agent";
@@ -24,3 +26,4 @@ export * from "./definitions/ceo.agent";
 export * from "./definitions/admin.agent";
 export * from "./definitions/market-intelligence.agent";
 export * from "./definitions/revenue.agent";
+export * from "./definitions/prospecting.agent";

@@ -1,6 +1,8 @@
 import type { AgentDefinitionStub } from "../core/AgentDefinitionStub";
 import {
+  createFollowUpTool,
   createLeadTool,
+  createOpportunityTool,
   detectHiringSignalsTool,
   draftOutreachTool,
   identifyContactsTool,
@@ -39,6 +41,8 @@ export const salesAgent: AgentDefinitionStub = {
     scoreCompanyTool,
     draftOutreachTool,
     suggestFollowUpTool,
+    createOpportunityTool, // F3
+    createFollowUpTool, // F3
   ],
   systemPromptTemplate: SALES_AGENT_SYSTEM_PROMPT,
 };

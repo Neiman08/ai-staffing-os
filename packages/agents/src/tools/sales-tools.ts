@@ -123,3 +123,32 @@ export const scoreCompanyTool: AgentTool<
   inputSchema: scoreCompanyInputSchema,
   execute: notImplemented(),
 };
+
+// F3: paso determinista del pipeline de prospección (Prospecting Agent,
+// ver F3_PROSPECTING_ENGINE_PLAN.md §5). Nunca decide tarifas — igual que
+// el resto de F2, eso sigue siendo exclusivo de un humano o del futuro
+// Pricing Agent.
+export const createOpportunityInputSchema = z.object({
+  leadId: z.string(),
+});
+export const createOpportunityTool: AgentTool<z.infer<typeof createOpportunityInputSchema>, { opportunityId: string }> = {
+  name: "createOpportunity",
+  description:
+    "Crea una Opportunity a partir de un Lead ya calificado, con probability conservador y sin tarifas (esas las decide un humano).",
+  inputSchema: createOpportunityInputSchema,
+  execute: notImplemented(),
+};
+
+// F3: en F2 suggestFollowUp solo proponía; este tool sí persiste — sigue
+// siendo FULL_AUTO porque crear un recordatorio interno nunca sale del
+// tenant (Arquitectura §3.4).
+export const createFollowUpInputSchema = z.object({
+  entityType: z.enum(["company", "lead", "opportunity", "contact"]),
+  entityId: z.string(),
+});
+export const createFollowUpTool: AgentTool<z.infer<typeof createFollowUpInputSchema>, { followUpId: string }> = {
+  name: "createFollowUp",
+  description: "Crea el próximo follow-up para una entidad comercial según su actividad reciente (persiste la sugerencia de suggestFollowUp).",
+  inputSchema: createFollowUpInputSchema,
+  execute: notImplemented(),
+};
