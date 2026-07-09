@@ -3,6 +3,9 @@ import App from "./App";
 import Dashboard from "./pages/Dashboard";
 import Companies from "./pages/Companies";
 import CompanyDetail from "./pages/CompanyDetail";
+import Contacts from "./pages/Contacts";
+import Leads from "./pages/Leads";
+import LeadDetail from "./pages/LeadDetail";
 import JobOrders from "./pages/JobOrders";
 import Candidates from "./pages/Candidates";
 import Compliance from "./pages/Compliance";
@@ -19,6 +22,9 @@ export const router = createBrowserRouter([
       { index: true, element: <Dashboard /> },
       { path: "companies", element: <Companies /> },
       { path: "companies/:id", element: <CompanyDetail /> },
+      { path: "contacts", element: <Contacts /> },
+      { path: "leads", element: <Leads /> },
+      { path: "leads/:id", element: <LeadDetail /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "candidates", element: <Candidates /> },
       { path: "compliance", element: <Compliance /> },

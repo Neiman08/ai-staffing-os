@@ -18,11 +18,11 @@ import { formatStatusLabel, statusVariant } from "@/lib/status";
 const TABS = ["overview", "contacts", "opportunities", "followups", "activity"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Record<Tab, string> = {
-  overview: "Overview",
-  contacts: "Contacts",
-  opportunities: "Opportunities",
-  followups: "Follow-ups",
-  activity: "Activity",
+  overview: "Resumen",
+  contacts: "Contactos",
+  opportunities: "Oportunidades",
+  followups: "Seguimientos",
+  activity: "Actividad",
 };
 
 const DECISION_ROLES = ["OWNER", "HR", "OPERATIONS_MANAGER", "PROJECT_MANAGER", "PLANT_MANAGER", "RECRUITER", "OTHER"];
@@ -36,11 +36,11 @@ function AddContactForm({ companyId, onDone }: { companyId: string; onDone: () =
     mutationFn: (input: ContactInput) =>
       apiFetch(`/companies/${companyId}/contacts`, { method: "POST", body: JSON.stringify(input) }),
     onSuccess: () => {
-      toast({ title: "Contact added", variant: "success" });
+      toast({ title: "Contacto agregado", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["company", companyId] });
       onDone();
     },
-    onError: (err) => toast({ title: "Could not add contact", description: String(err), variant: "error" }),
+    onError: (err) => toast({ title: "No se pudo agregar el contacto", description: String(err), variant: "error" }),
   });
 
   return (
@@ -52,19 +52,19 @@ function AddContactForm({ companyId, onDone }: { companyId: string; onDone: () =
       }}
     >
       <div>
-        <Label>First name</Label>
+        <Label>Nombre</Label>
         <Input required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
       </div>
       <div>
-        <Label>Last name</Label>
+        <Label>Apellido</Label>
         <Input required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
       </div>
       <div>
-        <Label>Title</Label>
+        <Label>Cargo</Label>
         <Input value={form.title ?? ""} onChange={(e) => setForm({ ...form, title: e.target.value })} />
       </div>
       <div>
-        <Label>Decision role</Label>
+        <Label>Rol de decisión</Label>
         <Select
           value={form.decisionRole ?? ""}
           onChange={(e) => setForm({ ...form, decisionRole: (e.target.value || undefined) as never })}
@@ -82,12 +82,12 @@ function AddContactForm({ companyId, onDone }: { companyId: string; onDone: () =
         <Input type="email" value={form.email ?? ""} onChange={(e) => setForm({ ...form, email: e.target.value })} />
       </div>
       <div>
-        <Label>Phone</Label>
+        <Label>Teléfono</Label>
         <Input value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
       </div>
       <div className="col-span-2">
         <Button type="submit" size="sm" disabled={mutation.isPending}>
-          {mutation.isPending ? "Adding…" : "Add contact"}
+          {mutation.isPending ? "Agregando…" : "Agregar contacto"}
         </Button>
       </div>
     </form>
@@ -107,12 +107,12 @@ function LogActivityForm({ companyId, onDone }: { companyId: string; onDone: () 
         body: JSON.stringify({ entityType: "company", entityId: companyId, type, subject }),
       }),
     onSuccess: () => {
-      toast({ title: "Activity logged", variant: "success" });
+      toast({ title: "Actividad registrada", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["company", companyId] });
       setSubject("");
       onDone();
     },
-    onError: (err) => toast({ title: "Could not log activity", description: String(err), variant: "error" }),
+    onError: (err) => toast({ title: "No se pudo registrar la actividad", description: String(err), variant: "error" }),
   });
 
   return (
@@ -130,9 +130,9 @@ function LogActivityForm({ companyId, onDone }: { companyId: string; onDone: () 
           </option>
         ))}
       </Select>
-      <Input placeholder="What happened?" value={subject} onChange={(e) => setSubject(e.target.value)} />
+      <Input placeholder="¿Qué pasó?" value={subject} onChange={(e) => setSubject(e.target.value)} />
       <Button type="submit" size="sm" disabled={mutation.isPending}>
-        Log
+        Registrar
       </Button>
     </form>
   );
@@ -149,7 +149,7 @@ export default function CompanyDetail() {
   });
 
   if (isLoading || !company) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted-foreground">Cargando…</p>;
   }
 
   return (
@@ -178,38 +178,38 @@ export default function CompanyDetail() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Details</CardTitle>
+              <CardTitle>Detalles</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Website</span>
+                <span className="text-muted-foreground">Sitio web</span>
                 <span>{company.website ?? "—"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Phone</span>
+                <span className="text-muted-foreground">Teléfono</span>
                 <span>{company.phone ?? "—"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Estimated size</span>
+                <span className="text-muted-foreground">Tamaño estimado</span>
                 <span>{company.estimatedSize ? formatStatusLabel(company.estimatedSize) : "—"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Commercial score</span>
+                <span className="text-muted-foreground">Score comercial</span>
                 <span>{company.commercialScore ?? "—"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Possible needs</span>
+                <span className="text-muted-foreground">Necesidades posibles</span>
                 <span>{company.possibleCategoryNames.join(", ") || "—"}</span>
               </div>
               <div className="pt-2">
-                <span className="text-muted-foreground">Notes</span>
+                <span className="text-muted-foreground">Notas</span>
                 <p className="mt-1">{company.notes ?? "—"}</p>
               </div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Upcoming follow-ups</CardTitle>
+              <CardTitle>Próximos seguimientos</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               {company.upcomingFollowUps.length ? (
@@ -220,7 +220,7 @@ export default function CompanyDetail() {
                   </div>
                 ))
               ) : (
-                <p className="text-muted-foreground">No pending follow-ups.</p>
+                <p className="text-muted-foreground">Sin seguimientos pendientes.</p>
               )}
             </CardContent>
           </Card>
@@ -236,7 +236,7 @@ export default function CompanyDetail() {
                 <div key={c.id} className="flex items-center justify-between rounded-md border border-border p-3 text-sm">
                   <div>
                     <div className="font-medium">
-                      {c.firstName} {c.lastName} {c.isPrimary && <Badge variant="primary">Primary</Badge>}
+                      {c.firstName} {c.lastName} {c.isPrimary && <Badge variant="primary">Principal</Badge>}
                     </div>
                     <div className="text-muted-foreground">
                       {c.title ?? "—"} {c.decisionRole ? `· ${formatStatusLabel(c.decisionRole)}` : ""}
@@ -267,7 +267,7 @@ export default function CompanyDetail() {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">No opportunities yet.</p>
+              <p className="text-sm text-muted-foreground">Sin oportunidades todavía.</p>
             )}
           </CardContent>
         </Card>
@@ -285,7 +285,7 @@ export default function CompanyDetail() {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">No pending follow-ups.</p>
+              <p className="text-sm text-muted-foreground">Sin seguimientos pendientes.</p>
             )}
           </CardContent>
         </Card>

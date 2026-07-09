@@ -1,12 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  CompanyListItem,
-  CreateCompanyInput,
-  IndustryListItem,
-  Paginated,
-} from "@ai-staffing-os/shared";
+import type { CreateLeadInput, IndustryListItem, LeadListItem, Paginated } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -24,28 +19,23 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { Plus } from "lucide-react";
 
-const COMPANY_SIZES = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"];
-
-function NewCompanyForm({ onCreated }: { onCreated: () => void }) {
+function NewLeadForm({ onCreated }: { onCreated: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: industries } = useQuery({
     queryKey: ["industries"],
     queryFn: () => apiFetch<IndustryListItem[]>("/industries"),
   });
-
-  const [form, setForm] = useState<CreateCompanyInput>({ name: "", industryId: "" });
+  const [form, setForm] = useState<CreateLeadInput>({});
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateCompanyInput) => apiFetch<{ id: string }>("/companies", { method: "POST", body: JSON.stringify(input) }),
+    mutationFn: (input: CreateLeadInput) => apiFetch("/leads", { method: "POST", body: JSON.stringify(input) }),
     onSuccess: () => {
-      toast({ title: "Empresa creada", variant: "success" });
-      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      toast({ title: "Lead creado", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
       onCreated();
     },
-    onError: (err) => {
-      toast({ title: "No se pudo crear la empresa", description: String(err), variant: "error" });
-    },
+    onError: (err) => toast({ title: "No se pudo crear el lead", description: String(err), variant: "error" }),
   });
 
   return (
@@ -57,18 +47,13 @@ function NewCompanyForm({ onCreated }: { onCreated: () => void }) {
       }}
     >
       <div>
-        <Label htmlFor="name">Nombre</Label>
-        <Input id="name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-      </div>
-      <div>
         <Label htmlFor="industryId">Industria</Label>
         <Select
           id="industryId"
-          required
-          value={form.industryId}
-          onChange={(e) => setForm({ ...form, industryId: e.target.value })}
+          value={form.industryId ?? ""}
+          onChange={(e) => setForm({ ...form, industryId: e.target.value || undefined })}
         >
-          <option value="">Selecciona una industria…</option>
+          <option value="">—</option>
           {industries?.map((i) => (
             <option key={i.id} value={i.id}>
               {i.name}
@@ -88,30 +73,28 @@ function NewCompanyForm({ onCreated }: { onCreated: () => void }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <Label htmlFor="estimatedSize">Tamaño estimado</Label>
+          <Label htmlFor="source">Fuente</Label>
+          <Input
+            id="source"
+            placeholder="referral, web, cold-outreach…"
+            value={form.source ?? ""}
+            onChange={(e) => setForm({ ...form, source: e.target.value })}
+          />
+        </div>
+        <div>
+          <Label htmlFor="priority">Prioridad</Label>
           <Select
-            id="estimatedSize"
-            value={form.estimatedSize ?? ""}
-            onChange={(e) => setForm({ ...form, estimatedSize: (e.target.value || undefined) as never })}
+            id="priority"
+            value={form.priority ?? ""}
+            onChange={(e) => setForm({ ...form, priority: (e.target.value || undefined) as never })}
           >
             <option value="">—</option>
-            {COMPANY_SIZES.map((s) => (
-              <option key={s} value={s}>
-                {formatStatusLabel(s)}
+            {["LOW", "MEDIUM", "HIGH"].map((p) => (
+              <option key={p} value={p}>
+                {formatStatusLabel(p)}
               </option>
             ))}
           </Select>
-        </div>
-        <div>
-          <Label htmlFor="commercialScore">Score comercial</Label>
-          <Input
-            id="commercialScore"
-            type="number"
-            min={0}
-            max={100}
-            value={form.commercialScore ?? ""}
-            onChange={(e) => setForm({ ...form, commercialScore: e.target.value ? Number(e.target.value) : undefined })}
-          />
         </div>
       </div>
       <div>
@@ -119,33 +102,32 @@ function NewCompanyForm({ onCreated }: { onCreated: () => void }) {
         <Textarea id="notes" value={form.notes ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
       </div>
       <Button type="submit" className="w-full" disabled={createMutation.isPending}>
-        {createMutation.isPending ? "Creando…" : "Crear empresa"}
+        {createMutation.isPending ? "Creando…" : "Crear lead"}
       </Button>
     </form>
   );
 }
 
-export default function Companies() {
+export default function Leads() {
   const navigate = useNavigate();
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const cursor = cursorStack[cursorStack.length - 1];
 
   const { data, isLoading } = useQuery({
-    queryKey: ["companies", cursor],
-    queryFn: () =>
-      apiFetch<Paginated<CompanyListItem>>(`/companies?limit=20${cursor ? `&cursor=${cursor}` : ""}`),
+    queryKey: ["leads", cursor],
+    queryFn: () => apiFetch<Paginated<LeadListItem>>(`/leads?limit=20${cursor ? `&cursor=${cursor}` : ""}`),
   });
 
   return (
     <div>
       <PageHeader
-        title="Companies"
-        description="Clientes y prospectos de la agencia"
+        title="Leads"
+        description="Prospectos comerciales antes de calificar"
         action={
           <Button onClick={() => setDrawerOpen(true)}>
             <Plus className="h-4 w-4" />
-            New Company
+            New Lead
           </Button>
         }
       />
@@ -156,46 +138,36 @@ export default function Companies() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Nombre</TableHead>
+                <TableHead>Empresa</TableHead>
                 <TableHead>Industria</TableHead>
                 <TableHead>Ubicación</TableHead>
-                <TableHead>Tamaño</TableHead>
-                <TableHead>Score</TableHead>
-                <TableHead>Oportunidades abiertas</TableHead>
+                <TableHead>Fuente</TableHead>
+                <TableHead>Prioridad</TableHead>
+                <TableHead>Asignado a</TableHead>
                 <TableHead>Próxima acción</TableHead>
-                <TableHead>Último contacto</TableHead>
                 <TableHead>Estado</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data?.items.map((company) => (
-                <TableRow
-                  key={company.id}
-                  className="cursor-pointer"
-                  onClick={() => navigate(`/companies/${company.id}`)}
-                >
-                  <TableCell className="font-medium">{company.name}</TableCell>
-                  <TableCell className="text-muted-foreground">{company.industryName}</TableCell>
+              {data?.items.map((lead) => (
+                <TableRow key={lead.id} className="cursor-pointer" onClick={() => navigate(`/leads/${lead.id}`)}>
+                  <TableCell className="font-medium">{lead.companyName ?? "—"}</TableCell>
+                  <TableCell className="text-muted-foreground">{lead.industryName ?? "—"}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {company.city && company.state ? `${company.city}, ${company.state}` : "—"}
+                    {lead.city && lead.state ? `${lead.city}, ${lead.state}` : "—"}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.estimatedSize ? formatStatusLabel(company.estimatedSize) : "—"}
+                  <TableCell className="text-muted-foreground">{lead.source ?? "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariant(lead.priority)}>{formatStatusLabel(lead.priority)}</Badge>
                   </TableCell>
+                  <TableCell className="text-muted-foreground">{lead.ownerLabel ?? "—"}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {company.commercialScore != null ? company.commercialScore : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{company.openOpportunityCount}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.nextFollowUp
-                      ? `${formatStatusLabel(company.nextFollowUp.type)} · ${new Date(company.nextFollowUp.dueDate).toLocaleDateString()}`
+                    {lead.nextFollowUp
+                      ? `${formatStatusLabel(lead.nextFollowUp.type)} · ${new Date(lead.nextFollowUp.dueDate).toLocaleDateString()}`
                       : "—"}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.lastActivityAt ? new Date(company.lastActivityAt).toLocaleDateString() : "—"}
-                  </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>
+                    <Badge variant={statusVariant(lead.status)}>{formatStatusLabel(lead.status)}</Badge>
                   </TableCell>
                 </TableRow>
               ))}
@@ -210,8 +182,8 @@ export default function Companies() {
         />
       </Card>
 
-      <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} title="New Company">
-        <NewCompanyForm onCreated={() => setDrawerOpen(false)} />
+      <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} title="New Lead">
+        <NewLeadForm onCreated={() => setDrawerOpen(false)} />
       </Drawer>
     </div>
   );
