@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { companySizeSchema, contactDecisionRoleSchema } from "./crm";
 
 export const agentInstanceListItemSchema = z.object({
   id: z.string(),
@@ -10,3 +11,137 @@ export const agentInstanceListItemSchema = z.object({
   metrics: z.record(z.string(), z.unknown()),
 });
 export type AgentInstanceListItem = z.infer<typeof agentInstanceListItemSchema>;
+
+// ============================================================
+// F2: AgentTask invocation, status and approvals
+// ============================================================
+
+export const agentTaskStatusSchema = z.enum(["QUEUED", "RUNNING", "AWAITING_APPROVAL", "DONE", "FAILED"]);
+export type AgentTaskStatusValue = z.infer<typeof agentTaskStatusSchema>;
+
+export const taskTriggerSchema = z.enum(["USER", "EVENT", "AGENT", "SCHEDULE"]);
+
+// The 7 real Sales Agent tools (F2 §3). `type` on AgentTask/invocation
+// maps 1:1 to a tool name in packages/agents/src/tools/sales-tools.ts.
+export const agentTaskTypeSchema = z.enum([
+  "search_companies",
+  "detect_hiring_signals",
+  "identify_contacts",
+  "create_lead",
+  "score_company",
+  "draft_outreach",
+  "suggest_follow_up",
+]);
+export type AgentTaskType = z.infer<typeof agentTaskTypeSchema>;
+
+export const invokeSalesAgentInputSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("search_companies"),
+    input: z.object({
+      industryId: z.string().optional(),
+      state: z.string().optional(),
+      minEstimatedSize: companySizeSchema.optional(),
+    }),
+  }),
+  z.object({
+    type: z.literal("detect_hiring_signals"),
+    input: z.object({
+      companyId: z.string(),
+      manualSignal: z.string().optional(),
+    }),
+  }),
+  z.object({
+    type: z.literal("identify_contacts"),
+    input: z.object({
+      companyId: z.string(),
+      decisionRole: contactDecisionRoleSchema.optional(),
+    }),
+  }),
+  z.object({
+    type: z.literal("create_lead"),
+    input: z.object({
+      companyId: z.string().optional(),
+      industryId: z.string().optional(),
+      city: z.string().optional(),
+      state: z.string().optional(),
+      source: z.string(),
+    }),
+  }),
+  z.object({
+    type: z.literal("score_company"),
+    input: z.object({ companyId: z.string() }),
+  }),
+  z.object({
+    type: z.literal("draft_outreach"),
+    input: z.object({
+      leadId: z.string(),
+      channel: z.enum(["EMAIL", "LINKEDIN"]),
+    }),
+  }),
+  z.object({
+    type: z.literal("suggest_follow_up"),
+    input: z.object({
+      entityType: z.enum(["company", "lead", "opportunity", "contact"]),
+      entityId: z.string(),
+    }),
+  }),
+]);
+export type InvokeSalesAgentInput = z.infer<typeof invokeSalesAgentInputSchema>;
+
+export const agentTaskQuerySchema = z.object({
+  agentInstanceId: z.string().optional(),
+  status: agentTaskStatusSchema.optional(),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+export type AgentTaskQuery = z.infer<typeof agentTaskQuerySchema>;
+
+export const agentTaskListItemSchema = z.object({
+  id: z.string(),
+  agentInstanceId: z.string(),
+  agentKey: z.string(),
+  type: z.string(),
+  status: agentTaskStatusSchema,
+  triggeredBy: taskTriggerSchema,
+  tokensUsed: z.number().nullable(),
+  costUsd: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  parentTaskId: z.string().nullable(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
+});
+export type AgentTaskListItem = z.infer<typeof agentTaskListItemSchema>;
+
+export const agentTaskDetailSchema = agentTaskListItemSchema.extend({
+  input: z.unknown(),
+  output: z.unknown().nullable(),
+  approvalRequestId: z.string().nullable(),
+});
+export type AgentTaskDetail = z.infer<typeof agentTaskDetailSchema>;
+
+// ============================================================
+// F2: Approvals — every draftOutreach ends in one of these (F2 §9)
+// ============================================================
+
+export const approvalStatusSchema = z.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]);
+export const riskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
+
+export const approvalRequestListItemSchema = z.object({
+  id: z.string(),
+  agentTaskId: z.string(),
+  agentTaskType: z.string(),
+  summary: z.string(),
+  proposedAction: z.unknown(),
+  riskLevel: riskLevelSchema,
+  status: approvalStatusSchema,
+  decidedByLabel: z.string().nullable(),
+  decidedAt: z.string().nullable(),
+  decisionNote: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ApprovalRequestListItem = z.infer<typeof approvalRequestListItemSchema>;
+
+export const decideApprovalInputSchema = z.object({
+  decision: z.enum(["APPROVED", "REJECTED"]),
+  note: z.string().optional(),
+});
+export type DecideApprovalInput = z.infer<typeof decideApprovalInputSchema>;

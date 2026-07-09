@@ -64,6 +64,7 @@ export async function listLeads(query: LeadQuery): Promise<Paginated<LeadListIte
         const f = nextFollowUps.get(lead.id);
         return f ? { id: f.id, type: f.type, dueDate: f.dueDate.toISOString() } : null;
       })(),
+      createdByAgentTaskId: lead.createdByAgentTaskId,
       createdAt: lead.createdAt.toISOString(),
     })),
     nextCursor,
@@ -108,6 +109,7 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
     nextFollowUp: followUps[0]
       ? { id: followUps[0].id, type: followUps[0].type, dueDate: followUps[0].dueDate.toISOString() }
       : null,
+    createdByAgentTaskId: lead.createdByAgentTaskId,
     createdAt: lead.createdAt.toISOString(),
     companyId: lead.companyId,
     industryId: lead.industryId,

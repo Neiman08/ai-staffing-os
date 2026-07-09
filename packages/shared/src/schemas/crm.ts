@@ -80,6 +80,7 @@ export type ActivityItem = z.infer<typeof activityItemSchema>;
 export const companyDetailSchema = companyListItemSchema.extend({
   website: z.string().nullable(),
   phone: z.string().nullable(),
+  commercialScoreReason: z.string().nullable(), // F2: explicación auditable del Sales Agent
   notes: z.string().nullable(),
   possibleCategoryNames: z.array(z.string()),
   contacts: z.array(contactSummarySchema),

@@ -26,6 +26,7 @@ export const leadListItemSchema = z.object({
   ownerLabel: z.string().nullable(),
   aiScore: z.number().nullable(),
   nextFollowUp: nextFollowUpSchema,
+  createdByAgentTaskId: z.string().nullable(), // F2: badge "AI" en la UI cuando no es null
   createdAt: z.string(),
 });
 export type LeadListItem = z.infer<typeof leadListItemSchema>;

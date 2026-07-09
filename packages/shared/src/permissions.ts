@@ -20,6 +20,7 @@ const SPECIAL_PERMISSION_KEYS = [
   "compliance.block",
   "agents.view",
   "agents.configure",
+  "agents.execute", // F2: invoke a Sales Agent task (distinct from configuring autonomy/settings)
   "approvals.decide",
   "settings.manage",
   "users.manage",
@@ -31,6 +32,7 @@ const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number]
   "compliance.block": "Block/unblock workers",
   "agents.view": "View AI agents",
   "agents.configure": "Configure AI agents",
+  "agents.execute": "Execute AI agent tasks",
   "approvals.decide": "Approve/reject approval requests",
   "settings.manage": "Manage tenant settings",
   "users.manage": "Manage users and roles",

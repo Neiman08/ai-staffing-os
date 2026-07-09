@@ -144,6 +144,7 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
     createdAt: company.createdAt.toISOString(),
     website: company.website,
     phone: company.phone,
+    commercialScoreReason: company.commercialScoreReason,
     notes: company.notes,
     possibleCategoryNames: company.possibleCategories.map((c) => c.name),
     contacts: company.contacts.map((c) => ({

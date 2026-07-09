@@ -35,7 +35,17 @@ const decimal = (value: number) => new Prisma.Decimal(value);
 async function seedTenant() {
   return prisma.tenant.upsert({
     where: { id: "tenant-titan" },
-    update: { name: "Titan Staffing Group", slug: "titan", plan: "PRO" },
+    update: {
+      name: "Titan Staffing Group",
+      slug: "titan",
+      plan: "PRO",
+      settings: {
+        branding: { accentColor: "#7C5CFF" },
+        timezone: "America/Chicago",
+        activeIndustries: ["Construction", "Warehouse/Logistics"],
+        aiMonthlyBudgetUsd: 50, // F2 §16: presupuesto aprobado, configurable en Settings
+      },
+    },
     create: {
       id: "tenant-titan",
       name: "Titan Staffing Group",
@@ -45,6 +55,7 @@ async function seedTenant() {
         branding: { accentColor: "#7C5CFF" },
         timezone: "America/Chicago",
         activeIndustries: ["Construction", "Warehouse/Logistics"],
+        aiMonthlyBudgetUsd: 50, // F2 §16: presupuesto aprobado, configurable en Settings
       },
     },
   });
@@ -143,6 +154,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "jobOrders.view",
     "pricingScenarios.view",
     "agents.view",
+    "agents.execute", // F2: Sales invoca al Sales Agent
+    "approvals.decide", // F2: Sales decide sobre sus propios borradores de outreach
   ],
   Operations: [
     "jobOrders.view",
@@ -1423,7 +1436,7 @@ async function seedAgents(tenantId: string) {
         definitionId,
         autonomyLevel: "ASSISTED",
         isActive: true,
-        metrics: { tasksCompleted: 0 },
+        metrics: { tasksCompleted: 0, costUsdThisMonth: 0, budgetExceeded: false },
       },
     });
   }
