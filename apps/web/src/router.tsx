@@ -2,6 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import App from "./App";
 import Dashboard from "./pages/Dashboard";
 import Companies from "./pages/Companies";
+import CompanyDetail from "./pages/CompanyDetail";
 import JobOrders from "./pages/JobOrders";
 import Candidates from "./pages/Candidates";
 import Compliance from "./pages/Compliance";
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Dashboard /> },
       { path: "companies", element: <Companies /> },
+      { path: "companies/:id", element: <CompanyDetail /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "candidates", element: <Candidates /> },
       { path: "compliance", element: <Compliance /> },
