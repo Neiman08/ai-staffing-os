@@ -1,0 +1,933 @@
+// =============================================================
+// AI Staffing OS — Prisma Schema v1.0 (Fase 0)
+// Basado en el Documento de Arquitectura v1.1 (aprobado)
+//
+// DECISIONES DE DISEÑO (no re-decidir en Claude Code):
+// 1. tenantId es String indexado SIN @relation a Tenant.
+//    El aislamiento se garantiza con Prisma Client Extension +
+//    middleware de tenancy, no con FKs. Mantiene el modelo Tenant
+//    limpio y evita ~30 back-relations.
+// 2. Referencias de actor ("quién lo hizo": approvedById, ownerId,
+//    decidedById, verifiedById) son String? sin @relation, validadas
+//    en la capa de servicios. Relaciones reales solo para estructura
+//    de dominio.
+// 3. Dinero y tarifas: siempre Decimal, nunca Float.
+// 4. Todo lo configurable es data: Industry, JobCategory,
+//    DocumentType, Role, Permission.
+// 5. pgvector (AgentMemory.embedding) se difiere a F3 — la columna
+//    se agrega en esa migración. No requerir la extensión en F0.
+// =============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ================= ENUMS =================
+
+enum Plan {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum CompanyStatus {
+  LEAD
+  PROSPECT
+  CLIENT
+  INACTIVE
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  CONVERTED
+}
+
+enum OpportunityStage {
+  DISCOVERY
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum ActivityType {
+  NOTE
+  CALL
+  EMAIL
+  MEETING
+  TASK
+  SYSTEM
+}
+
+enum CandidateStatus {
+  NEW
+  SCREENING
+  QUALIFIED
+  PLACED
+  REJECTED
+  INACTIVE
+}
+
+enum EmploymentType {
+  W2
+  C1099
+}
+
+enum WorkerStatus {
+  AVAILABLE
+  ASSIGNED
+  ON_LEAVE
+  TERMINATED
+}
+
+enum ComplianceStatus {
+  COMPLIANT
+  PENDING
+  BLOCKED
+}
+
+enum JobOrderStatus {
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CLOSED
+  CANCELLED
+}
+
+enum ShiftType {
+  DAY
+  NIGHT
+  WEEKEND
+  ROTATING
+}
+
+enum ProjectStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum AssignmentStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  TERMINATED
+}
+
+enum TimeEntryStatus {
+  PENDING
+  APPROVED
+  LOCKED
+}
+
+enum TimeEntrySource {
+  MANUAL
+  TIMECLOCK
+  IMPORT
+}
+
+enum DocumentStatus {
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum ComplianceAlertType {
+  EXPIRING
+  EXPIRED
+  MISSING
+  FAILED_CHECK
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PayrollRunStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PAID
+  EXPORTED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+enum AutonomyLevel {
+  MANUAL
+  ASSISTED
+  SEMI_AUTO
+  AUTO_WITH_APPROVAL
+  FULL_AUTO
+}
+
+enum AgentTaskStatus {
+  QUEUED
+  RUNNING
+  AWAITING_APPROVAL
+  DONE
+  FAILED
+}
+
+enum TaskTrigger {
+  USER
+  EVENT
+  AGENT
+  SCHEDULE
+}
+
+enum MemoryScope {
+  GLOBAL
+  ENTITY
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum ActorType {
+  HUMAN
+  AGENT
+  SYSTEM
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum BenchmarkSource {
+  INTERNAL_PLACEMENTS
+  BLS_OES
+  JOB_BOARDS
+  MANUAL
+}
+
+enum PricingScenarioStatus {
+  DRAFT
+  PRESENTED
+  ACCEPTED
+  REJECTED
+}
+
+enum HiringRisk {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum NotificationType {
+  INFO
+  ALERT
+  APPROVAL
+  AGENT_ACTIVITY
+}
+
+// ================= NÚCLEO Y TENANCY =================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      Plan     @default(STARTER)
+  settings  Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String
+  clerkId   String?  @unique // null en modo dev-bypass
+  email     String
+  firstName String
+  lastName  String
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id])
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  tenantId    String
+  name        String // CEO, Admin, Recruiter, Sales, Payroll, Compliance, Operations, Marketing, HR, Accounting, Manager
+  description String?
+  isSystem    Boolean          @default(false)
+  users       User[]
+  permissions RolePermission[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Permission {
+  id    String           @id @default(cuid())
+  key   String           @unique // formato "recurso.accion", ej: "candidates.create"
+  label String
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+// ================= CRM =================
+
+model Industry {
+  id         String        @id @default(cuid())
+  tenantId   String? // null = industria global (seed)
+  name       String
+  isGlobal   Boolean       @default(false)
+  companies  Company[]
+  categories JobCategory[]
+
+  @@index([tenantId])
+}
+
+model Company {
+  id            String        @id @default(cuid())
+  tenantId      String
+  name          String
+  industryId    String
+  industry      Industry      @relation(fields: [industryId], references: [id])
+  status        CompanyStatus @default(LEAD)
+  website       String?
+  phone         String?
+  address       Json? // { street, city, state, zip }
+  notes         String?
+  contacts      Contact[]
+  leads         Lead[]
+  opportunities Opportunity[]
+  jobOrders     JobOrder[]
+  projects      Project[]
+  contracts     Contract[]
+  invoices      Invoice[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([tenantId, status])
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  tenantId  String
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  title     String?
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([companyId])
+}
+
+model Lead {
+  id            String     @id @default(cuid())
+  tenantId      String
+  companyId     String?
+  company       Company?   @relation(fields: [companyId], references: [id])
+  source        String? // referral, web, cold-outreach, indeed...
+  status        LeadStatus @default(NEW)
+  ownerId       String? // User.id (sin relation, ver decisión #2)
+  aiScore       Float?
+  aiScoreReason String?
+  notes         String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([tenantId, status])
+}
+
+model Opportunity {
+  id                String           @id @default(cuid())
+  tenantId          String
+  companyId         String
+  company           Company          @relation(fields: [companyId], references: [id])
+  title             String
+  stage             OpportunityStage @default(DISCOVERY)
+  estimatedWorkers  Int?
+  estimatedRevenue  Decimal?         @db.Decimal(12, 2)
+  probability       Int? // 0-100
+  expectedCloseDate DateTime?
+  ownerId           String?
+  pricingScenarios  PricingScenario[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([tenantId, stage])
+}
+
+model Activity {
+  id                 String       @id @default(cuid())
+  tenantId           String
+  type               ActivityType
+  subject            String
+  body               String?
+  entityType         String // "company" | "candidate" | "jobOrder" | ...
+  entityId           String
+  performedById      String? // User.id
+  performedByAgentId String? // AgentInstance.id
+  createdAt          DateTime     @default(now())
+
+  @@index([tenantId, entityType, entityId])
+}
+
+// ================= TALENTO =================
+
+model JobCategory {
+  id                     String      @id @default(cuid())
+  tenantId               String? // null = global (seed)
+  name                   String // "Journeyman Electrician", "Forklift Operator"...
+  industryId             String?
+  industry               Industry?   @relation(fields: [industryId], references: [id])
+  requiredCertifications Json        @default("[]") // keys de DocumentType
+  candidates             Candidate[]
+  jobOrders              JobOrder[]
+
+  @@index([tenantId])
+}
+
+model Candidate {
+  id              String          @id @default(cuid())
+  tenantId        String
+  firstName       String
+  lastName        String
+  email           String?
+  phone           String?
+  languages       String[]        @default([]) // ["es", "en"]
+  city            String?
+  state           String?
+  zip             String?
+  categories      JobCategory[]
+  yearsExperience Int?
+  resumeUrl       String?
+  aiSummary       String?
+  aiScore         Float?
+  status          CandidateStatus @default(NEW)
+  source          String?
+  smsOptIn        Boolean         @default(false) // TCPA desde F0
+  documents       Document[]
+  worker          Worker?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, state, city])
+}
+
+model Worker {
+  id               String           @id @default(cuid())
+  tenantId         String
+  candidateId      String           @unique
+  candidate        Candidate        @relation(fields: [candidateId], references: [id])
+  employmentType   EmploymentType   @default(W2)
+  defaultPayRate   Decimal          @db.Decimal(10, 2)
+  status           WorkerStatus     @default(AVAILABLE)
+  complianceStatus ComplianceStatus @default(PENDING)
+  hiredAt          DateTime?
+  documents        Document[]
+  assignments      Assignment[]
+  payrollItems     PayrollItem[]
+  alerts           ComplianceAlert[]
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, complianceStatus])
+}
+
+// ================= VACANTES Y OPERACIONES =================
+
+model JobOrder {
+  id            String         @id @default(cuid())
+  tenantId      String
+  companyId     String
+  company       Company        @relation(fields: [companyId], references: [id])
+  projectId     String?
+  project       Project?       @relation(fields: [projectId], references: [id])
+  categoryId    String
+  category      JobCategory    @relation(fields: [categoryId], references: [id])
+  title         String
+  workersNeeded Int
+  workersFilled Int            @default(0)
+  billRate      Decimal        @db.Decimal(10, 2)
+  payRate       Decimal        @db.Decimal(10, 2)
+  location      Json? // { city, state, address }
+  shiftType     ShiftType      @default(DAY)
+  scheduleNotes String?
+  startDate     DateTime
+  endDate       DateTime?
+  status        JobOrderStatus @default(OPEN)
+  requirements  Json           @default("[]") // keys de DocumentType requeridos
+  urgency       RiskLevel      @default(MEDIUM)
+  assignments   Assignment[]
+  pricingScenarios PricingScenario[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([tenantId, status])
+  @@index([companyId])
+}
+
+model Project {
+  id                  String        @id @default(cuid())
+  tenantId            String
+  companyId           String
+  company             Company       @relation(fields: [companyId], references: [id])
+  name                String
+  location            Json?
+  status              ProjectStatus @default(PLANNED)
+  supervisorContactId String?
+  jobOrders           JobOrder[]
+  assignments         Assignment[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([tenantId, status])
+}
+
+model Assignment {
+  id          String           @id @default(cuid())
+  tenantId    String
+  workerId    String
+  worker      Worker           @relation(fields: [workerId], references: [id])
+  jobOrderId  String
+  jobOrder    JobOrder         @relation(fields: [jobOrderId], references: [id])
+  projectId   String?
+  project     Project?         @relation(fields: [projectId], references: [id])
+  payRate     Decimal          @db.Decimal(10, 2) // snapshot al asignar
+  billRate    Decimal          @db.Decimal(10, 2) // snapshot al asignar
+  startDate   DateTime
+  endDate     DateTime?
+  status      AssignmentStatus @default(SCHEDULED)
+  shifts      Shift[]
+  timeEntries TimeEntry[]
+  payrollItems PayrollItem[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([tenantId, workerId, status])
+  @@index([tenantId, jobOrderId])
+}
+
+model Shift {
+  id           String     @id @default(cuid())
+  tenantId     String
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  date         DateTime   @db.Date
+  startTime    String // "22:00"
+  endTime      String // "06:00"
+  breakMinutes Int        @default(0)
+
+  @@index([tenantId, date])
+}
+
+model TimeEntry {
+  id            String          @id @default(cuid())
+  tenantId      String
+  assignmentId  String
+  assignment    Assignment      @relation(fields: [assignmentId], references: [id])
+  date          DateTime        @db.Date
+  regularHours  Decimal         @default(0) @db.Decimal(5, 2)
+  overtimeHours Decimal         @default(0) @db.Decimal(5, 2)
+  doubleHours   Decimal         @default(0) @db.Decimal(5, 2)
+  perDiem       Decimal?        @db.Decimal(8, 2)
+  bonus         Decimal?        @db.Decimal(8, 2)
+  status        TimeEntryStatus @default(PENDING)
+  source        TimeEntrySource @default(MANUAL)
+  approvedById  String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([assignmentId, date])
+  @@index([tenantId, status])
+  @@index([tenantId, date])
+}
+
+// ================= COMPLIANCE =================
+
+model DocumentType {
+  id                 String     @id @default(cuid())
+  tenantId           String? // null = global (seed: I-9, W-4, OSHA 10...)
+  key                String // "i9", "w4", "osha10", "forklift_cert", "drug_test", "background_check"
+  name               String
+  category           String // "identity" | "tax" | "safety" | "certification" | "screening"
+  requiresExpiration Boolean    @default(false)
+  appliesTo          Json       @default("{}") // reglas por industria/categoría
+  documents          Document[]
+
+  @@unique([tenantId, key])
+}
+
+model Document {
+  id               String         @id @default(cuid())
+  tenantId         String
+  documentTypeId   String
+  documentType     DocumentType   @relation(fields: [documentTypeId], references: [id])
+  candidateId      String?
+  candidate        Candidate?     @relation(fields: [candidateId], references: [id])
+  workerId         String?
+  worker           Worker?        @relation(fields: [workerId], references: [id])
+  fileUrl          String?
+  issuedDate       DateTime?
+  expirationDate   DateTime?
+  status           DocumentStatus @default(PENDING_REVIEW)
+  verifiedById     String?
+  verifiedByAgent  Boolean        @default(false)
+  aiExtraction     Json?
+  rejectionReason  String?
+  alerts           ComplianceAlert[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, expirationDate])
+}
+
+model ComplianceAlert {
+  id           String              @id @default(cuid())
+  tenantId     String
+  workerId     String?
+  worker       Worker?             @relation(fields: [workerId], references: [id])
+  documentId   String?
+  document     Document?           @relation(fields: [documentId], references: [id])
+  type         ComplianceAlertType
+  severity     Severity            @default(MEDIUM)
+  message      String
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime            @default(now())
+
+  @@index([tenantId, resolvedAt])
+}
+
+// ================= PAYROLL Y FACTURACIÓN =================
+
+model PayrollRun {
+  id           String           @id @default(cuid())
+  tenantId     String
+  periodStart  DateTime         @db.Date
+  periodEnd    DateTime         @db.Date
+  status       PayrollRunStatus @default(DRAFT)
+  totalGross   Decimal          @default(0) @db.Decimal(12, 2)
+  totalBill    Decimal          @default(0) @db.Decimal(12, 2)
+  totalMargin  Decimal          @default(0) @db.Decimal(12, 2)
+  approvedById String?
+  createdById  String?
+  items        PayrollItem[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([tenantId, status])
+}
+
+model PayrollItem {
+  id           String     @id @default(cuid())
+  tenantId     String
+  payrollRunId String
+  payrollRun   PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  workerId     String
+  worker       Worker     @relation(fields: [workerId], references: [id])
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id])
+  regularHours Decimal    @db.Decimal(6, 2)
+  otHours      Decimal    @default(0) @db.Decimal(6, 2)
+  regularPay   Decimal    @db.Decimal(10, 2)
+  otPay        Decimal    @default(0) @db.Decimal(10, 2)
+  perDiem      Decimal    @default(0) @db.Decimal(10, 2)
+  bonus        Decimal    @default(0) @db.Decimal(10, 2)
+  grossPay     Decimal    @db.Decimal(10, 2)
+  billAmount   Decimal    @db.Decimal(10, 2)
+  margin       Decimal    @db.Decimal(10, 2)
+
+  @@index([tenantId])
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  tenantId    String
+  companyId   String
+  company     Company       @relation(fields: [companyId], references: [id])
+  number      String
+  periodStart DateTime      @db.Date
+  periodEnd   DateTime      @db.Date
+  subtotal    Decimal       @db.Decimal(12, 2)
+  total       Decimal       @db.Decimal(12, 2)
+  status      InvoiceStatus @default(DRAFT)
+  dueDate     DateTime?
+  pdfUrl      String?
+  lines       InvoiceLine[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+model InvoiceLine {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Decimal @db.Decimal(8, 2) // horas
+  rate        Decimal @db.Decimal(10, 2)
+  amount      Decimal @db.Decimal(12, 2)
+}
+
+model Contract {
+  id             String         @id @default(cuid())
+  tenantId       String
+  companyId      String
+  company        Company        @relation(fields: [companyId], references: [id])
+  fileUrl        String?
+  signedDate     DateTime?
+  expirationDate DateTime?
+  markupPercent  Decimal?       @db.Decimal(5, 2)
+  terms          Json           @default("{}")
+  status         ContractStatus @default(DRAFT)
+  createdAt      DateTime       @default(now())
+
+  @@index([tenantId, status])
+}
+
+// ================= PRICING INTELLIGENCE =================
+
+model LaborBurdenConfig {
+  id               String      @id @default(cuid())
+  tenantId         String
+  state            String // "IL", "IN"...
+  jobCategoryId    String? // null = default del estado
+  workersCompRate  Decimal     @db.Decimal(5, 2) // % sobre payroll, por class code
+  ficaRate         Decimal     @default(7.65) @db.Decimal(5, 2)
+  futaRate         Decimal     @default(0.60) @db.Decimal(5, 2)
+  sutaRate         Decimal     @db.Decimal(5, 2)
+  liabilityRate    Decimal?    @db.Decimal(5, 2)
+  otherCostsPerHour Decimal?   @db.Decimal(8, 2)
+  effectiveDate    DateTime    @db.Date
+
+  @@index([tenantId, state])
+}
+
+model RateBenchmark {
+  id            String          @id @default(cuid())
+  tenantId      String? // null = benchmark global compartido (BLS)
+  source        BenchmarkSource
+  jobCategoryId String
+  city          String?
+  state         String
+  shiftType     ShiftType?
+  payRateP25    Decimal         @db.Decimal(10, 2)
+  payRateP50    Decimal         @db.Decimal(10, 2)
+  payRateP75    Decimal         @db.Decimal(10, 2)
+  billRateP50   Decimal?        @db.Decimal(10, 2)
+  sampleSize    Int?
+  capturedAt    DateTime
+
+  @@index([jobCategoryId, state, shiftType])
+}
+
+model PricingScenario {
+  id                  String                @id @default(cuid())
+  tenantId            String
+  jobOrderId          String?
+  jobOrder            JobOrder?             @relation(fields: [jobOrderId], references: [id])
+  opportunityId       String?
+  opportunity         Opportunity?          @relation(fields: [opportunityId], references: [id])
+  inputs              Json // { volumen, urgencia, turno, dificultad, duración }
+  recommendedPayMin   Decimal               @db.Decimal(10, 2)
+  recommendedPayMax   Decimal               @db.Decimal(10, 2)
+  recommendedBillMin  Decimal               @db.Decimal(10, 2)
+  recommendedBillMax  Decimal               @db.Decimal(10, 2)
+  grossMarginPerHour  Decimal               @db.Decimal(10, 2)
+  netMarginPerHour    Decimal?              @db.Decimal(10, 2)
+  hiringRisk          HiringRisk            @default(MEDIUM)
+  dataConfidence      RiskLevel             @default(MEDIUM) // según sampleSize/antigüedad
+  rationale           String
+  status              PricingScenarioStatus @default(DRAFT)
+  decidedById         String?
+  createdByAgentTaskId String?
+  createdAt           DateTime              @default(now())
+
+  @@index([tenantId, status])
+}
+
+// ================= AGENTES IA =================
+
+model AgentDefinition {
+  id                   String          @id @default(cuid())
+  key                  String          @unique // "recruiter", "compliance", "assistant", "pricing", "sales", "operations", "payroll", "marketing", "ceo", "admin"
+  name                 String
+  description          String
+  systemPromptTemplate String          @default("") // vacío en F0, se llena en F3
+  availableTools       Json            @default("[]")
+  defaultAutonomy      AutonomyLevel   @default(ASSISTED)
+  instances            AgentInstance[]
+}
+
+model AgentInstance {
+  id            String          @id @default(cuid())
+  tenantId      String
+  definitionId  String
+  definition    AgentDefinition @relation(fields: [definitionId], references: [id])
+  autonomyLevel AutonomyLevel   @default(ASSISTED)
+  config        Json            @default("{}")
+  isActive      Boolean         @default(true)
+  metrics       Json            @default("{}") // KPIs: tareas, precisión, costo mensual
+  tasks         AgentTask[]
+  memories      AgentMemory[]
+  createdAt     DateTime        @default(now())
+
+  @@unique([tenantId, definitionId])
+  @@index([tenantId])
+}
+
+model AgentTask {
+  id              String          @id @default(cuid())
+  tenantId        String
+  agentInstanceId String
+  agentInstance   AgentInstance   @relation(fields: [agentInstanceId], references: [id])
+  type            String // "screen_candidate", "verify_document", "recommend_rates"...
+  input           Json
+  output          Json?
+  status          AgentTaskStatus @default(QUEUED)
+  triggeredBy     TaskTrigger
+  parentTaskId    String?
+  parentTask      AgentTask?      @relation("TaskChain", fields: [parentTaskId], references: [id])
+  childTasks      AgentTask[]     @relation("TaskChain")
+  errorMessage    String?
+  tokensUsed      Int?
+  costUsd         Decimal?        @db.Decimal(10, 4)
+  approvals       ApprovalRequest[]
+  createdAt       DateTime        @default(now())
+  completedAt     DateTime?
+
+  @@index([tenantId, status])
+  @@index([agentInstanceId, createdAt])
+}
+
+model AgentMemory {
+  id              String        @id @default(cuid())
+  tenantId        String
+  agentInstanceId String
+  agentInstance   AgentInstance @relation(fields: [agentInstanceId], references: [id], onDelete: Cascade)
+  scope           MemoryScope   @default(GLOBAL)
+  entityType      String?
+  entityId        String?
+  content         String
+  // embedding vector — SE AGREGA EN F3 con pgvector (ver decisión #5)
+  importance      Float         @default(0.5)
+  lastAccessedAt  DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+
+  @@index([tenantId, agentInstanceId])
+  @@index([tenantId, entityType, entityId])
+}
+
+model ApprovalRequest {
+  id             String         @id @default(cuid())
+  tenantId       String
+  agentTaskId    String
+  agentTask      AgentTask      @relation(fields: [agentTaskId], references: [id])
+  summary        String
+  proposedAction Json
+  riskLevel      RiskLevel      @default(MEDIUM)
+  status         ApprovalStatus @default(PENDING)
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  expiresAt      DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@index([tenantId, status])
+}
+
+// ================= AUDITORÍA, EVENTOS, NOTIFICACIONES =================
+
+model AuditLog {
+  id         String    @id @default(cuid())
+  tenantId   String
+  actorType  ActorType
+  actorId    String // User.id o AgentInstance.id o "system"
+  action     String // "candidate.created", "payroll.approved"...
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+}
+
+model DomainEvent {
+  id          String    @id @default(cuid())
+  tenantId    String
+  type        String // "jobOrder.created", "document.expired"...
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([processedAt])
+  @@index([tenantId, type])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  tenantId  String
+  userId    String
+  type      NotificationType @default(INFO)
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([tenantId, userId, readAt])
+}
