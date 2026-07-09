@@ -363,30 +363,31 @@ model Industry {
 }
 
 model Company {
-  id                 String        @id @default(cuid())
-  tenantId           String
-  name               String
-  industryId         String
-  industry           Industry      @relation(fields: [industryId], references: [id])
-  status             CompanyStatus @default(LEAD)
-  website            String?
-  phone              String?
-  address            Json? // { street, zip } — city/state promovidos a columnas (F1)
-  city               String? // F1: promovido de address.city para agregaciones (Revenue Intelligence)
-  state              String? // F1: promovido de address.state
-  estimatedSize      CompanySize? // F1
-  possibleCategories JobCategory[] @relation("CompanyPossibleCategories") // F1: "necesidades posibles"
-  commercialScore    Float? // F1: score comercial a nivel empresa
-  notes              String?
-  contacts           Contact[]
-  leads              Lead[]
-  opportunities      Opportunity[]
-  jobOrders          JobOrder[]
-  projects           Project[]
-  contracts          Contract[]
-  invoices           Invoice[]
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  id                    String        @id @default(cuid())
+  tenantId              String
+  name                  String
+  industryId            String
+  industry              Industry      @relation(fields: [industryId], references: [id])
+  status                CompanyStatus @default(LEAD)
+  website               String?
+  phone                 String?
+  address               Json? // { street, zip } — city/state promovidos a columnas (F1)
+  city                  String? // F1: promovido de address.city para agregaciones (Revenue Intelligence)
+  state                 String? // F1: promovido de address.state
+  estimatedSize         CompanySize? // F1
+  possibleCategories    JobCategory[] @relation("CompanyPossibleCategories") // F1: "necesidades posibles"
+  commercialScore       Float? // F1: score comercial a nivel empresa
+  commercialScoreReason String? // F2: explicación auditable del score (Sales Agent, ver F2 §7)
+  notes                 String?
+  contacts              Contact[]
+  leads                 Lead[]
+  opportunities         Opportunity[]
+  jobOrders             JobOrder[]
+  projects              Project[]
+  contracts             Contract[]
+  invoices              Invoice[]
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, state])
@@ -412,23 +413,24 @@ model Contact {
 }
 
 model Lead {
-  id            String     @id @default(cuid())
-  tenantId      String
-  companyId     String?
-  company       Company?   @relation(fields: [companyId], references: [id])
-  industryId    String? // F1: un lead puede existir antes de tener Company
-  industry      Industry?  @relation(fields: [industryId], references: [id])
-  city          String? // F1
-  state         String? // F1
-  priority      RiskLevel  @default(MEDIUM) // F1: reutiliza RiskLevel, ver F1_REVENUE_ENGINE_PLAN §2.3
-  source        String? // referral, web, cold-outreach, indeed...
-  status        LeadStatus @default(NEW)
-  ownerId       String? // User.id (sin relation, ver decisión #2)
-  aiScore       Float?
-  aiScoreReason String?
-  notes         String?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  id                   String     @id @default(cuid())
+  tenantId             String
+  companyId            String?
+  company              Company?   @relation(fields: [companyId], references: [id])
+  industryId           String? // F1: un lead puede existir antes de tener Company
+  industry             Industry?  @relation(fields: [industryId], references: [id])
+  city                 String? // F1
+  state                String? // F1
+  priority             RiskLevel  @default(MEDIUM) // F1: reutiliza RiskLevel, ver F1_REVENUE_ENGINE_PLAN §2.3
+  source               String? // referral, web, cold-outreach, indeed...
+  status               LeadStatus @default(NEW)
+  ownerId              String? // User.id (sin relation, ver decisión #2)
+  aiScore              Float?
+  aiScoreReason        String?
+  createdByAgentTaskId String? // F2: mismo patrón que PricingScenario.createdByAgentTaskId
+  notes                String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, industryId])
