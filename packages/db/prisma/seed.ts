@@ -345,29 +345,49 @@ async function seedJobCategories(industryMap: Map<string, string>) {
 // ============================================================
 
 const DOCUMENT_TYPES = [
-  { key: "i9", name: "I-9", category: "identity", requiresExpiration: false },
-  { key: "w4", name: "W-4", category: "tax", requiresExpiration: false },
-  { key: "osha10", name: "OSHA 10", category: "safety", requiresExpiration: false },
-  { key: "osha30", name: "OSHA 30", category: "safety", requiresExpiration: false },
-  { key: "forklift_cert", name: "Forklift Certification", category: "certification", requiresExpiration: true },
-  { key: "drug_test", name: "Drug Test", category: "screening", requiresExpiration: true },
-  { key: "background_check", name: "Background Check", category: "screening", requiresExpiration: true },
-  { key: "electrical_license", name: "Electrical License", category: "certification", requiresExpiration: true },
+  { id: "doctype-i9", key: "i9", name: "I-9", category: "identity", requiresExpiration: false },
+  { id: "doctype-w4", key: "w4", name: "W-4", category: "tax", requiresExpiration: false },
+  { id: "doctype-osha10", key: "osha10", name: "OSHA 10", category: "safety", requiresExpiration: false },
+  { id: "doctype-osha30", key: "osha30", name: "OSHA 30", category: "safety", requiresExpiration: false },
+  {
+    id: "doctype-forklift-cert",
+    key: "forklift_cert",
+    name: "Forklift Certification",
+    category: "certification",
+    requiresExpiration: true,
+  },
+  { id: "doctype-drug-test", key: "drug_test", name: "Drug Test", category: "screening", requiresExpiration: true },
+  {
+    id: "doctype-background-check",
+    key: "background_check",
+    name: "Background Check",
+    category: "screening",
+    requiresExpiration: true,
+  },
+  {
+    id: "doctype-electrical-license",
+    key: "electrical_license",
+    name: "Electrical License",
+    category: "certification",
+    requiresExpiration: true,
+  },
 ];
 
 async function seedDocumentTypes() {
+  // Prisma rejects `null` inside a compound-unique WhereUniqueInput at
+  // runtime even though tenantId is nullable, so global (tenantId=null)
+  // rows are upserted by a fixed id instead of the tenantId_key index.
   const map = new Map<string, string>();
   for (const dt of DOCUMENT_TYPES) {
     const documentType = await prisma.documentType.upsert({
-      // Prisma types compound-unique lookups as non-null even though the
-      // column is nullable; global DocumentTypes intentionally use tenantId=null.
-      where: { tenantId_key: { tenantId: null as unknown as string, key: dt.key } },
+      where: { id: dt.id },
       update: {
         name: dt.name,
         category: dt.category,
         requiresExpiration: dt.requiresExpiration,
       },
       create: {
+        id: dt.id,
         tenantId: null,
         key: dt.key,
         name: dt.name,
@@ -711,11 +731,15 @@ async function seedDocuments(
       const requiresExpiration = DOCUMENT_TYPES.find((d) => d.key === key)!.requiresExpiration;
 
       if (requiresExpiration) {
-        if (expiredUsed < 2 && wIdx === 0) {
+        // Assign EXPIRED/EXPIRING to the first documents encountered
+        // (across all workers, in order) so the exact counts required by
+        // the spec (2 EXPIRED, 3 EXPIRING) are always hit regardless of
+        // which categories/workers happen to carry expiring cert types.
+        if (expiredUsed < 2) {
           expirationDate = daysFromNow(-10 - expiredUsed * 5);
           status = "EXPIRED";
           expiredUsed += 1;
-        } else if (expiringUsed < 3 && wIdx <= 2) {
+        } else if (expiringUsed < 3) {
           expirationDate = daysFromNow(5 + expiringUsed * 7);
           status = "VERIFIED";
           expiringUsed += 1;

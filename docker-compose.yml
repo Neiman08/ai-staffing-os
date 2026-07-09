@@ -8,7 +8,11 @@ services:
       POSTGRES_PASSWORD: staffing
       POSTGRES_DB: ai_staffing_os
     ports:
-      - "5432:5432"
+      # Host port 5433 (not 5432): this machine already runs a local
+      # Postgres via Homebrew on 5432, which macOS resolves ahead of
+      # Docker's proxy for "localhost". Mapping to 5433 avoids fighting
+      # over the port instead of touching an unrelated existing service.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
