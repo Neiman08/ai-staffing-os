@@ -16,6 +16,7 @@ import { leadsRouter } from "./modules/leads/router";
 import { opportunitiesRouter } from "./modules/opportunities/router";
 import { followUpsRouter } from "./modules/followups/router";
 import { activitiesRouter } from "./modules/activities/router";
+import { revenueRouter } from "./modules/revenue/router";
 
 export function createApp() {
   const app = express();
@@ -46,6 +47,7 @@ export function createApp() {
   app.use("/api/v1", opportunitiesRouter);
   app.use("/api/v1", followUpsRouter);
   app.use("/api/v1", activitiesRouter);
+  app.use("/api/v1", revenueRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
