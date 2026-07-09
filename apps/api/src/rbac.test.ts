@@ -1,6 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
+import { prisma } from "@ai-staffing-os/db";
 import { createApp } from "./app";
 
 let server: Server;
@@ -47,4 +48,33 @@ test("GET /api/v1/companies as sales@titan.dev returns 200 (Sales does have comp
     headers: { "x-dev-user": "sales@titan.dev" },
   });
   assert.equal(res.status, 200);
+});
+
+// F1: new leads/opportunities/followUps permissions (12 new keys, §6 of the plan)
+test("GET /api/v1/leads as compliance@titan.dev returns 403 (Compliance has no leads.view permission)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/leads`, {
+    headers: { "x-dev-user": "compliance@titan.dev" },
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST /api/v1/leads as sales@titan.dev succeeds (Sales has leads.create)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/leads`, {
+    method: "POST",
+    headers: { "x-dev-user": "sales@titan.dev", "content-type": "application/json" },
+    body: JSON.stringify({ source: "rbac-test", city: "Test City", state: "IL" }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { id: string };
+  assert.ok(body.id);
+  await prisma.lead.delete({ where: { id: body.id } });
+});
+
+test("POST /api/v1/leads as compliance@titan.dev returns 403 (Compliance has no leads.create)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/leads`, {
+    method: "POST",
+    headers: { "x-dev-user": "compliance@titan.dev", "content-type": "application/json" },
+    body: JSON.stringify({ source: "rbac-test" }),
+  });
+  assert.equal(res.status, 403);
 });
