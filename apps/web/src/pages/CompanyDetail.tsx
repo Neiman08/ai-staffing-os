@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ActivityItem, CompanyDetail, ContactInput } from "@ai-staffing-os/shared";
+import type { ActivityItem, CompanyDetail, ContactInput, UpdateCompanyInput } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -9,11 +9,122 @@ import { Timeline } from "@/components/shared/Timeline";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Drawer } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
+
+const COMPANY_STATUSES = ["LEAD", "PROSPECT", "CLIENT", "INACTIVE"];
+const COMPANY_SIZES = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"];
+
+function EditCompanyForm({ company, onDone }: { company: CompanyDetail; onDone: () => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState<UpdateCompanyInput>({
+    name: company.name,
+    status: company.status as UpdateCompanyInput["status"],
+    website: company.website ?? "",
+    phone: company.phone ?? "",
+    city: company.city ?? "",
+    state: company.state ?? "",
+    estimatedSize: company.estimatedSize ?? undefined,
+    commercialScore: company.commercialScore ?? undefined,
+    notes: company.notes ?? "",
+  });
+
+  const mutation = useMutation({
+    mutationFn: (input: UpdateCompanyInput) =>
+      apiFetch(`/companies/${company.id}`, { method: "PATCH", body: JSON.stringify(input) }),
+    onSuccess: () => {
+      toast({ title: "Empresa actualizada", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["company", company.id] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      onDone();
+    },
+    onError: (err) => toast({ title: "No se pudo actualizar la empresa", description: String(err), variant: "error" }),
+  });
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        mutation.mutate(form);
+      }}
+    >
+      <div>
+        <Label>Nombre</Label>
+        <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      </div>
+      <div>
+        <Label>Estado comercial</Label>
+        <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UpdateCompanyInput["status"] })}>
+          {COMPANY_STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {formatStatusLabel(s)}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Ciudad</Label>
+          <Input value={form.city ?? ""} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+        </div>
+        <div>
+          <Label>Estado</Label>
+          <Input value={form.state ?? ""} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Sitio web</Label>
+          <Input value={form.website ?? ""} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+        </div>
+        <div>
+          <Label>Teléfono</Label>
+          <Input value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Tamaño estimado</Label>
+          <Select
+            value={form.estimatedSize ?? ""}
+            onChange={(e) => setForm({ ...form, estimatedSize: (e.target.value || undefined) as never })}
+          >
+            <option value="">—</option>
+            {COMPANY_SIZES.map((s) => (
+              <option key={s} value={s}>
+                {formatStatusLabel(s)}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label>Score comercial</Label>
+          <Input
+            type="number"
+            min={0}
+            max={100}
+            value={form.commercialScore ?? ""}
+            onChange={(e) => setForm({ ...form, commercialScore: e.target.value ? Number(e.target.value) : undefined })}
+          />
+        </div>
+      </div>
+      <div>
+        <Label>Notas</Label>
+        <Textarea value={form.notes ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+      </div>
+      <Button type="submit" className="w-full" disabled={mutation.isPending}>
+        {mutation.isPending ? "Guardando…" : "Guardar cambios"}
+      </Button>
+    </form>
+  );
+}
 
 const TABS = ["overview", "contacts", "opportunities", "followups", "activity"] as const;
 type Tab = (typeof TABS)[number];
@@ -94,6 +205,108 @@ function AddContactForm({ companyId, onDone }: { companyId: string; onDone: () =
   );
 }
 
+function ContactRow({ contact, companyId }: { contact: CompanyDetail["contacts"][number]; companyId: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<ContactInput>({
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    title: contact.title ?? "",
+    decisionRole: contact.decisionRole ?? undefined,
+    email: contact.email ?? "",
+    phone: contact.phone ?? "",
+  });
+
+  const mutation = useMutation({
+    mutationFn: (input: ContactInput) =>
+      apiFetch(`/contacts/${contact.id}`, { method: "PATCH", body: JSON.stringify(input) }),
+    onSuccess: () => {
+      toast({ title: "Contacto actualizado", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["company", companyId] });
+      setEditing(false);
+    },
+    onError: (err) => toast({ title: "No se pudo actualizar el contacto", description: String(err), variant: "error" }),
+  });
+
+  if (editing) {
+    return (
+      <form
+        className="grid grid-cols-2 gap-3 rounded-md border border-primary/40 bg-primary/5 p-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          mutation.mutate(form);
+        }}
+      >
+        <div>
+          <Label>Nombre</Label>
+          <Input required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
+        </div>
+        <div>
+          <Label>Apellido</Label>
+          <Input required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+        </div>
+        <div>
+          <Label>Cargo</Label>
+          <Input value={form.title ?? ""} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        </div>
+        <div>
+          <Label>Rol de decisión</Label>
+          <Select
+            value={form.decisionRole ?? ""}
+            onChange={(e) => setForm({ ...form, decisionRole: (e.target.value || undefined) as never })}
+          >
+            <option value="">—</option>
+            {DECISION_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {formatStatusLabel(r)}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label>Email</Label>
+          <Input type="email" value={form.email ?? ""} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        </div>
+        <div>
+          <Label>Teléfono</Label>
+          <Input value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+        </div>
+        <div className="col-span-2 flex gap-2">
+          <Button type="submit" size="sm" disabled={mutation.isPending}>
+            {mutation.isPending ? "Guardando…" : "Guardar"}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setEditing(false)}>
+            Cancelar
+          </Button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between rounded-md border border-border p-3 text-sm">
+      <div>
+        <div className="font-medium">
+          {contact.firstName} {contact.lastName} {contact.isPrimary && <Badge variant="primary">Principal</Badge>}
+        </div>
+        <div className="text-muted-foreground">
+          {contact.title ?? "—"} {contact.decisionRole ? `· ${formatStatusLabel(contact.decisionRole)}` : ""}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <div className="text-right text-muted-foreground">
+          <div>{contact.email ?? "—"}</div>
+          <div>{contact.phone ?? "—"}</div>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+          Editar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function LogActivityForm({ companyId, onDone }: { companyId: string; onDone: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -141,6 +354,7 @@ function LogActivityForm({ companyId, onDone }: { companyId: string; onDone: () 
 export default function CompanyDetail() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>("overview");
+  const [editOpen, setEditOpen] = useState(false);
 
   const { data: company, isLoading } = useQuery({
     queryKey: ["company", id],
@@ -157,8 +371,19 @@ export default function CompanyDetail() {
       <PageHeader
         title={company.name}
         description={`${company.industryName}${company.city && company.state ? ` · ${company.city}, ${company.state}` : ""}`}
-        action={<Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>}
+        action={
+          <div className="flex items-center gap-2">
+            <Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>
+            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+              Editar
+            </Button>
+          </div>
+        }
       />
+
+      <Drawer open={editOpen} onClose={() => setEditOpen(false)} title="Editar empresa">
+        <EditCompanyForm company={company} onDone={() => setEditOpen(false)} />
+      </Drawer>
 
       <div className="mb-4 flex gap-1 rounded-md border border-border bg-secondary/40 p-1 w-fit">
         {TABS.map((t) => (
@@ -233,20 +458,7 @@ export default function CompanyDetail() {
             <AddContactForm companyId={company.id} onDone={() => {}} />
             <div className="space-y-2">
               {company.contacts.map((c) => (
-                <div key={c.id} className="flex items-center justify-between rounded-md border border-border p-3 text-sm">
-                  <div>
-                    <div className="font-medium">
-                      {c.firstName} {c.lastName} {c.isPrimary && <Badge variant="primary">Principal</Badge>}
-                    </div>
-                    <div className="text-muted-foreground">
-                      {c.title ?? "—"} {c.decisionRole ? `· ${formatStatusLabel(c.decisionRole)}` : ""}
-                    </div>
-                  </div>
-                  <div className="text-right text-muted-foreground">
-                    <div>{c.email ?? "—"}</div>
-                    <div>{c.phone ?? "—"}</div>
-                  </div>
-                </div>
+                <ContactRow key={c.id} contact={c} companyId={company.id} />
               ))}
             </div>
           </CardContent>
