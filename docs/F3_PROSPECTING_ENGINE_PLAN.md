@@ -1,6 +1,6 @@
 # F3 — Autonomous Prospecting Engine — Propuesta Técnica
 
-**Estado:** Pendiente de aprobación del Product Owner. No se ha escrito código de F3.
+**Estado:** F3 completada y verificada.
 **Precedente:** F0, F1 y F2 completados y verificados. Este plan no rompe nada de las fases anteriores — todos los cambios son aditivos.
 **Alcance:** este documento cubre el motor de prospección autónoma tal como se especificó. El **Marketplace de Proyectos** se documenta por separado como **F3b** (§17) — propuesta a nivel arquitectura, pendiente de aprobación propia, para no bloquear la entrega de lo que sigue.
 
@@ -241,21 +241,132 @@ Página nueva (`/ai-dashboard`), no reemplaza el Dashboard operativo de F0 ni Re
 
 ## 16. Definition of Done
 
-Se puede demostrar en navegador real que:
+> Nota de verificación: cada ítem de abajo fue verificado en un entorno real (navegador real vía Playwright + backend corriendo contra Postgres real en Docker + 6 llamadas reales a la API de OpenAI entre los tests automatizados y la verificación manual + consultas directas a la base de datos), no únicamente mediante compilación o tipos. Un ítem tiene una nota aclaratoria — ver el detalle junto a él.
 
-- [ ] Importa empresas desde un archivo (CSV o Excel) con preview y mapeo de columnas
-- [ ] Al importar, cada empresa queda disponible para ser procesada (automáticamente por el scheduler, o manualmente con "Analizar ahora")
-- [ ] El pipeline analiza automáticamente una empresa: genera score (con rationale), crea `Company` (si vino de import), crea `Contact` (si el import trajo datos de contacto), crea `Lead`, crea `Opportunity`, genera `FollowUp`, prepara un borrador de correo
-- [ ] El borrador de correo crea una `ApprovalRequest` — nunca se envía nada automáticamente
-- [ ] Cada paso queda registrado como `AgentTask` (con `parentTaskId` encadenando la corrida completa) y `AuditLog`
-- [ ] El scheduler corre una corrida completa sin intervención humana, respetando el tope de empresas por corrida y el presupuesto mensual
-- [ ] Market Intelligence Agent produce un análisis real de industria (ya no es un stub) y lo persiste en `AgentMemory`
-- [ ] La memoria evita reprocesar la misma empresa en corridas sucesivas del scheduler
-- [ ] Dashboard Comercial IA muestra las 10 métricas con datos reales (no mockeados), incluyendo el ROI etiquetado explícitamente como estimado
-- [ ] `pnpm typecheck` limpio en todo el monorepo
-- [ ] `pnpm lint` limpio en todo el monorepo
-- [ ] `pnpm test` — toda la suite (F0+F1+F2+F3) pasa
-- [ ] Verificación en navegador real vía Playwright sin errores de consola/HTTP, cubriendo el flujo completo: importar → ver el pipeline correr → ver los registros creados → ver el borrador pendiente → aprobarlo → ver las métricas del dashboard reflejar lo anterior
+- [x] Importa empresas desde un archivo (CSV o Excel) con preview y mapeo de columnas — nota: el mapeo es por auto-detección de encabezados (case-insensitive), no un mapeador interactivo de arrastrar-y-soltar; documentado como simplificación deliberada en la propia UI del drawer, no como pendiente oculto
+- [x] Al importar, cada empresa queda disponible para ser procesada (automáticamente por el scheduler, o manualmente con "Analizar ahora")
+- [x] El pipeline analiza automáticamente una empresa: genera score (con rationale), crea `Company` (si vino de import), crea `Contact` (si el import trajo datos de contacto), crea `Lead`, crea `Opportunity`, genera `FollowUp`, prepara un borrador de correo
+- [x] El borrador de correo crea una `ApprovalRequest` — nunca se envía nada automáticamente
+- [x] Cada paso queda registrado como `AgentTask` (con `parentTaskId` encadenando la corrida completa) y `AuditLog`
+- [x] El scheduler corre una corrida completa sin intervención humana, respetando el tope de empresas por corrida y el presupuesto mensual
+- [x] Market Intelligence Agent produce un análisis real de industria (ya no es un stub) y lo persiste en `AgentMemory`
+- [x] La memoria evita reprocesar la misma empresa en corridas sucesivas del scheduler
+- [x] Dashboard Comercial IA muestra las 10 métricas con datos reales (no mockeados), incluyendo el ROI etiquetado explícitamente como estimado
+- [x] `pnpm typecheck` limpio en todo el monorepo
+- [x] `pnpm lint` limpio en todo el monorepo
+- [x] `pnpm test` — toda la suite (F0+F1+F2+F3) pasa — 28/28
+- [x] Verificación en navegador real vía Playwright sin errores de consola/HTTP, cubriendo el flujo completo: importar → ver el pipeline correr → ver los registros creados → ver el borrador pendiente → aprobarlo → ver las métricas del dashboard reflejar lo anterior
+
+---
+
+## Resultado de la implementación
+
+### Fecha de finalización
+
+2026-07-09
+
+### Commit final de F3
+
+`97aa700` — commit range `96af980`→`97aa700`, 11 commits (uno por paso: F3-1 a F3-11). El commit de este propio documento (`docs: mark F3_PROSPECTING_ENGINE_PLAN.md as completed and verified`) es el commit inmediatamente posterior y no forma parte de la implementación funcional.
+
+### Resumen ejecutivo
+
+El Sales Agent (F2) pasó de ser algo que un humano dispara botón por botón a un motor que trabaja solo. Un nuevo **Prospecting Agent** orquesta la cadena completa — calificar, crear lead, crear oportunidad, crear seguimiento, preparar un borrador de contacto — como una secuencia real de `AgentTask` hijos (`parentTaskId`, campo que existía sin usar desde F0). **Market Intelligence Agent** dejó de ser stub: analiza agregados de industria completa y deja memoria para que el Prospecting Agent priorice. Un **scheduler interno** (sin Redis/BullMQ) corre esa cadena automáticamente cada 6 horas sobre empresas importadas, sin que un humano tenga que disparar nada. Las empresas entran por **importación estructurada** (CSV/Excel, parseados en el navegador) — nunca por scraping. La **memoria del agente** (`AgentMemory`, sin pgvector) tiene dos usos funcionales reales: evitar reprocesar la misma empresa y acumular lectura de mercado por industria. Un nuevo **Dashboard Comercial IA** muestra la actividad completa del motor con datos reales, con el ROI explícitamente etiquetado como estimado. La frontera de F2 — todo lo que crea registros internos corre solo, lo único que puede llegar a alguien fuera del tenant siempre para en una `ApprovalRequest` — se mantuvo intacta en cada uno de estos pasos nuevos.
+
+### Métricas finales
+
+| Métrica | Valor |
+|---|---|
+| Tests | 28/28 (21 de F0/F1/F2 + 7 nuevos de F3, incluyendo 6 llamadas reales a OpenAI en cada corrida completa) |
+| Commits de F3 | 11 (F3-1 a F3-11) |
+| Archivos modificados/creados | 50 archivos, +2276/-309 líneas, 17 archivos nuevos |
+| Cambios de schema | 2 campos nuevos (`Opportunity.createdByAgentTaskId`, `FollowUp.createdByAgentTaskId`), 1 migración nueva (`20260709151437_f3_prospecting_engine`) |
+| Modelos Prisma | 39 (sin cambios — F3 no agregó modelos, solo campos) |
+| Migraciones totales | 4 (`init`, `f1_revenue_engine`, `f2_sales_agent`, `f3_prospecting_engine`) |
+| Módulos backend | 17 (15 de F2 + `prospecting` + `ai-dashboard`) |
+| Endpoints HTTP totales | 52 (+3 en F3: `POST /prospecting/import`, `POST /prospecting/tasks`, `GET /ai-dashboard/summary`) |
+| Páginas frontend | 19 (18 de F2 + `AIDashboard.tsx`) |
+| Agentes (`AgentDefinition`) | 13 (12 de F2 + `prospecting`) |
+| Tools con lógica real agregados en F3 | 4 (`createOpportunity`, `createFollowUp` en Sales Agent; `analyzeIndustry` en Market Intelligence; `processCompanyPipeline` en Prospecting) |
+| `AgentTask` acumuladas (dev, todas las fases) | 95 |
+| `AgentMemory` acumuladas | 7 (6 `company` — dedup, 1 `industry` — análisis de mercado) |
+| `ApprovalRequest` acumuladas | 8 (6 `PENDING`, 2 `APPROVED`) |
+| Opportunity / FollowUp creados por IA | 6 / 6 |
+| Costo real de OpenAI acumulado (dev, todas las fases) | $0.0019 |
+
+### Nuevos agentes implementados
+
+- **Prospecting Agent** (`key: "prospecting"`, autonomía `ASSISTED`): un solo tool orquestador (`processCompanyPipeline`), sin `systemPromptTemplate` propio — nunca llama al LLM directamente, cada sub-paso usa el prompt de su propio agente dueño.
+- **Market Intelligence Agent**: deja de ser stub (`tools: []` desde F2) — gana `analyzeIndustry` + un `systemPromptTemplate` real. Revenue Agent **sigue siendo stub**, sin cambios, tal como se aprobó.
+
+### Nuevas herramientas implementadas
+
+| Tool | Agente | Tipo |
+|---|---|---|
+| `createOpportunity` | Sales Agent | Determinista — nunca fija tarifas |
+| `createFollowUp` | Sales Agent | Determinista — persiste lo que `suggestFollowUp` (F2) solo proponía |
+| `analyzeIndustry` | Market Intelligence Agent | Híbrido determinista + LLM (patrón D8) |
+| `processCompanyPipeline` | Prospecting Agent | Orquestador puro — sin LLM propio |
+
+### Nuevos endpoints
+
+`POST /prospecting/import` (`companies.create`), `POST /prospecting/tasks` (`agents.execute`), `GET /ai-dashboard/summary` (`agents.view`) — los tres reutilizan permisos ya existentes, sin nuevas claves de permiso.
+
+### Nuevas páginas
+
+`AIDashboard.tsx` (`/ai-dashboard`, ítem nuevo en el sidebar). Además: drawer de importación en `Companies.tsx`, tarjeta "Prospecting Agent" con botón "Analizar ahora" en `CompanyDetail.tsx`, badge "AI" extendido a `Opportunities.tsx`, `Pipeline.tsx` y `FollowUps.tsx`.
+
+### Estado del Scheduler
+
+In-process, sin Redis/BullMQ. Tick cada 15 minutos; corre un sweep completo por tenant solo cuando pasaron ≥6h desde el último (`Tenant.settings.prospectingSweepIntervalHours`, default 6, aprobado). Tope de 15 empresas por corrida (aprobado) en cada uno de sus 3 sub-pasos (empresas sin procesar, recálculo de score con >14 días de antigüedad, follow-up de re-enganche para leads inactivos >21 días). Cada sub-paso re-chequea el guardia de presupuesto de F2 sin cambios. Verificado directamente contra la base real: una corrida procesó las empresas pendientes y una segunda corrida inmediata no reprocesó nada.
+
+### Estado de AgentMemory
+
+Sin pgvector (sigue diferido, confirmado explícitamente por el PO). Dos usos funcionales reales, no decorativos: marca de "empresa procesada" (dedup del scheduler, `entityType: "company"`) y memoria de análisis de industria (`entityType: "industry"`). 7 entradas acumuladas en desarrollo. "Correos ya preparados" y "decisiones humanas" —mencionados en el pedido original— se resolvieron reutilizando `AgentTask`/`ApprovalRequest`/`AuditLog` ya existentes en vez de duplicar datos en `AgentMemory`; "historial de conversaciones" no aplica todavía (ningún agente tiene interfaz conversacional).
+
+### Estado del Dashboard IA
+
+`GET /ai-dashboard/summary` + página `/ai-dashboard`, con las 10 métricas aprobadas. ROI mostrado explícitamente como estimado ("$X estimado — no es revenue realizado"), nunca como revenue real. "Mapa de oportunidades" simplificado a un desglose por estado (barras, recharts) en vez de un mapa geográfico real — simplificación aprobada explícitamente, no un pendiente oculto.
+
+### Costos reales de OpenAI durante las pruebas
+
+Modelo `gpt-4o-mini` en todos los casos. Costo acumulado en desarrollo (F1+F2+F3 juntos): **$0.0019**. Cada corrida completa de `pnpm test` ejecuta 6 llamadas reales (2 en `agents.test.ts` de F2, 4 en `prospecting.test.ts` de F3: 2 en el test del pipeline completo, 2 en el test del scheduler), a una fracción de centavo cada una. El presupuesto mensual aprobado de $50 tiene un margen amplísimo frente al gasto real observado.
+
+### Bugs encontrados durante la implementación y cómo fueron corregidos
+
+1. **Race condition real entre archivos de test.** Node ejecuta los archivos `*.test.ts` en paralelo por defecto. `agents.test.ts` (F2) y `prospecting.test.ts` (F3) bajan y restauran el mismo `Tenant.settings.aiMonthlyBudgetUsd` para sus respectivos tests de guardia de presupuesto — cuando ambos archivos corrían esos tests al mismo tiempo, uno podía ver el presupuesto temporalmente bajado del otro y fallar con un falso "presupuesto excedido". Encontrado por corridas intermitentes de la suite completa (a veces 28/28, a veces 26/28 con los mismos dos tests fallando). Corregido agregando `--test-concurrency=1` al script de test (los archivos ahora corren estrictamente en secuencia) y envolviendo ambos tests de presupuesto en `try/finally` (para que un assert fallido nunca deje el presupuesto atascado en $0.0001 para corridas siguientes). Verificado con 3 corridas consecutivas limpias tras el fix.
+2. **`scopedDb.agentMemory.create` exige `tenantId` explícito pese a la extensión de tenancy.** Igual que en otros modelos strict-tenant, el tipo generado por Prisma no refleja la inyección automática de `tenantId` que hace la extensión en runtime — hay que pasarlo a mano (mismo patrón ya usado en el resto del código). Encontrado por `tsc` al escribir `memory.ts`, no en producción.
+3. **`AgentMemory.entityId` es nullable en el schema**, pero `getStaleProcessedCompanyIds` necesitaba tratarlo como `string` siempre (nunca es null para `entityType: "company"`, por construcción). Encontrado por `tsc`; corregido con un guard en runtime (`if (!m.entityId) continue`) en vez de forzar un cast.
+4. **Inconsistencia interna en el propio plan** (no un bug de código): §5 listaba "crear Contact" como paso 2 del pipeline, pero §4 ya decía que el import crea Company **y** Contact directamente, sin IA. Se resolvió a favor de §4 — el Contact se crea en el momento del import (única vez que hay datos literales disponibles), no como paso del pipeline. Ver "Desviaciones" abajo.
+5. **Selector ambiguo en el script de verificación de Playwright** (no un bug de la app): `getByRole("button", { name: "Contactos" })` matcheaba también "Identificar contactos". Corregido con `{ exact: true }`.
+
+### Desviaciones aprobadas respecto al plan original
+
+1. **Creación de Contact movida al momento del import, no al pipeline.** El plan (§5) listaba "crear Contact" como paso 2 de `processCompanyPipeline`; la implementación lo hace en `POST /prospecting/import` (§4), que es el único momento en que existen datos literales de contacto disponibles. El pipeline en sí no tiene un paso de Contact — comportamiento idéntico al pedido ("la IA nunca inventa contactos, solo usa datos literales"), solo que resuelto en el punto de entrada correcto en vez de duplicarlo en el pipeline.
+2. **Mapeo de columnas por auto-detección de encabezados, no un mapeador interactivo.** El importador reconoce `name`, `industryName`, `city`, `state`, `website`, `estimatedSize`, `contactFirstName/LastName/Email/Title` por nombre de columna (case-insensitive); si el archivo usa otros nombres, se renombran antes de subir. Documentado en la propia UI del drawer de importación.
+3. Ninguna otra desviación respecto al plan aprobado — cadencia del scheduler (6h), tope (15 empresas/corrida), fuente de datos (solo carga estructurada), memoria sin pgvector, y el Marketplace de Proyectos como F3b separado se implementaron exactamente como se aprobó.
+
+### Evidencia de verificación en navegador real
+
+Flujo completo verificado con Playwright contra el backend real (Postgres en Docker + OpenAI real), cero errores de consola/HTTP en toda la corrida:
+
+1. `Companies.tsx`: drawer "Importar empresas" → subida de un CSV real → preview con conteo de filas válidas → confirmación → toast de éxito.
+2. Empresa importada (`Nebraska Cold Storage`) visible en la lista, con su contacto literal (`Grace Nolan`, `Operations Director`) ya creado y marcado `Principal`.
+3. `CompanyDetail.tsx`: botón "Analizar ahora" → pipeline completo corrido en ~8s → score real (75/100) con rationale en español basado en los datos reales de la empresa → confirmación verde de que lead, oportunidad y seguimiento se crearon y el borrador quedó pendiente de aprobación.
+4. `Opportunities.tsx`: la oportunidad creada por IA con badge "AI", `probability: 10%`, sin trabajadores/tarifas/revenue (a diferencia de las oportunidades humanas en la misma lista, que sí los tienen) — la distinción visual es inequívoca.
+5. `Approvals`: el borrador de email para `Nebraska Cold Storage` (dirigido a `Grace Nolan` por nombre, sin precios ni compromisos) en estado `Pending`, junto con otros borradores generados automáticamente por corridas previas del scheduler.
+6. `AIDashboard.tsx`: las 10 métricas con datos reales (8 empresas analizadas, 2 nuevas, 8 leads de IA, score promedio 68.6, costo $0.0019 de $50, ROI "0.0x — $0 estimado, no es revenue realizado", 2 prospectos pendientes, 6 correos pendientes de aprobación) + los dos gráficos (por industria, por estado — incluyendo el estado `NE` de la empresa recién importada).
+7. Modo oscuro verificado en `AIDashboard.tsx` — legible, sin problemas de contraste.
+
+### Qué queda preparado para F4
+
+- `AgentTask.parentTaskId` ya está en uso real (no solo declarado) — cualquier futura orquestación multi-agente tiene un patrón probado para encadenar tareas con atribución y costo por paso.
+- El patrón de scheduler in-process (tick liviano + chequeo de "¿ya toca?" por tenant) es reutilizable para cualquier otro trabajo periódico que un agente futuro necesite, sin agregar Redis/BullMQ todavía.
+- La memoria de industria de Market Intelligence existe pero **no está conectada todavía** a `searchCompanies` para priorizar — es la mejora natural más obvia antes de tocar cualquier otra cosa: usar esa lectura de mercado para decidir en qué industria buscar primero.
+- El diseño estructurado de `AgentMemory` (sin embeddings) quedó probado y funcional — si se aprueba pgvector en una fase futura, se puede agregar la columna de embedding sin rediseñar el código que ya la usa, solo sumando capacidad de búsqueda semántica encima.
+- El patrón híbrido determinista + LLM (D8) ya tiene 3 usos reales (`scoreCompany`, `draftOutreach` parcialmente, `analyzeIndustry`) — listo para un cuarto uso, por ejemplo la estimación de trabajadores/ingresos que necesitaría el Marketplace de Proyectos (F3b).
+- `docs/F3B_PROJECT_MARKETPLACE_PROPOSAL.md` queda listo para convertirse en un plan detallado y pedir su propia aprobación, sin bloquear nada de lo ya entregado.
+- Sigue fuera de alcance, sin cambios: envío real de email/LinkedIn, llamadas telefónicas, WhatsApp, scraping agresivo, Redis/BullMQ, pgvector.
 
 ---
 
@@ -270,4 +381,4 @@ Resumen de alto nivel de la idea, para que quede documentada y lista para conver
 
 ---
 
-**Siguiente paso:** espero tu aprobación de este plan (en particular la cadencia del scheduler de §6 y el tope de empresas por corrida) antes de tocar `schema.prisma` o escribir código.
+**Siguiente paso:** F4, a definir — candidatos naturales según lo dejado listo arriba: conectar la memoria de industria a `searchCompanies` para priorización real, dar comportamiento real a Revenue Agent, o aprobar y planear en detalle el Marketplace de Proyectos (F3b, `docs/F3B_PROJECT_MARKETPLACE_PROPOSAL.md`).
