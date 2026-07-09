@@ -1,6 +1,6 @@
 # F1 — Revenue Engine (Sales CRM) — Propuesta Técnica
 
-**Estado:** Pendiente de aprobación del Product Owner. No se ha escrito código de F1.
+**Estado:** F1 completada y verificada.
 **Precedente:** F0 aprobado (`docs/F0_COMPLETION_REPORT.md`). Este plan no rompe nada de F0 — todos los cambios son aditivos.
 
 ---
@@ -265,20 +265,98 @@ Nada de esto llama a un LLM en F1 — son solo los puntos de enchufe, siguiendo 
 
 ## 10. Definition of Done
 
-- [ ] Migración de Prisma aplicada limpia sobre la DB de F0 sin pérdida de datos existentes
-- [ ] Seed ampliado con volumen realista de leads/opportunities/follow-ups en distintos estados/industrias/stages, sigue siendo idempotente
-- [ ] CRUD completo y verificado en navegador real: Companies (ya no solo lectura), Contacts, Leads, Opportunities, Follow-ups
-- [ ] Pipeline permite mover oportunidades entre columnas, el cambio persiste y genera una `Activity`
-- [ ] `Revenue.tsx` muestra métricas calculadas desde la DB (no hardcodeadas), verificado cambiando datos en vivo como se hizo en F0
-- [ ] Extensión de tenancy: patrón verify-then-act implementado; test que confirme que un `update`/`delete` no puede tocar un registro de otro tenant
-- [ ] RBAC: los 12 permisos nuevos aplicados y probados (ej. Sales puede crear un lead, Compliance recibe 403)
-- [ ] Todos los tests de F0 (tenancy + RBAC) siguen pasando sin modificarse — no regresión
-- [ ] `packages/agents` tiene los 2 stubs nuevos + tools tipadas sin red, `pnpm typecheck` limpio
-- [ ] `pnpm typecheck`, `pnpm lint` y `pnpm test` limpios en todo el monorepo
-- [ ] Sin código muerto ni TODOs críticos
-- [ ] Verificación visual en navegador real de cada página nueva, con capturas guardadas en `docs/screenshots/f1/`
-- [ ] Un commit por paso, ningún módulo ni página de F0 eliminado o roto
+> **Nota de verificación:** cada ítem de abajo fue verificado en un entorno real (navegador real vía Playwright + backend corriendo contra Postgres real en Docker + consultas directas a la base de datos para confirmar persistencia), no únicamente mediante compilación o tipos. Ver el detalle en "Resultado de la implementación" más abajo.
+
+- [x] Migración de Prisma aplicada limpia sobre la DB de F0 sin pérdida de datos existentes
+- [x] Seed ampliado con volumen realista de leads/opportunities/follow-ups en distintos estados/industrias/stages, sigue siendo idempotente
+- [x] CRUD completo y verificado en navegador real: Companies (ya no solo lectura), Contacts, Leads, Opportunities, Follow-ups
+- [x] Pipeline permite mover oportunidades entre columnas, el cambio persiste y genera una `Activity`
+- [x] `Revenue.tsx` muestra métricas calculadas desde la DB (no hardcodeadas), verificado cambiando datos en vivo como se hizo en F0
+- [x] Extensión de tenancy: patrón verify-then-act implementado; test que confirme que un `update`/`delete` no puede tocar un registro de otro tenant
+- [x] RBAC: los 12 permisos nuevos aplicados y probados (ej. Sales puede crear un lead, Compliance recibe 403)
+- [x] Todos los tests de F0 (tenancy + RBAC) siguen pasando sin modificarse — no regresión
+- [x] `packages/agents` tiene los 2 stubs nuevos + tools tipadas sin red, `pnpm typecheck` limpio
+- [x] `pnpm typecheck`, `pnpm lint` y `pnpm test` limpios en todo el monorepo
+- [x] Sin código muerto ni TODOs críticos
+- [x] Verificación visual en navegador real de cada página nueva, con capturas guardadas en `docs/screenshots/f1/`
+- [x] Un commit por paso, ningún módulo ni página de F0 eliminado o roto
 
 ---
 
-**Siguiente paso:** espero tu aprobación de este plan completo antes de tocar `schema.prisma` o escribir código. La decisión de modelado de §2.4 ya está confirmada (Opción A).
+## Resultado de la implementación
+
+**Fecha de finalización:** 2026-07-09
+**Commit final de F1:** `25ac51f` — "F1-17: DoD verification pass complete"
+**Rango de commits de la fase:** `8444fd8` (F1-1: schema) → `25ac51f` (F1-17: verificación final), 22 commits, uno por paso.
+
+### Resumen ejecutivo de lo construido
+
+AI Staffing OS pasó de ser un sistema operativo de staffing (F0) a incluir un **Revenue Engine** completo: CRM comercial con Leads, Pipeline visual (Kanban drag-and-drop), Opportunities con cálculo de márgenes, Follow-ups accionables, timeline de actividad polimórfico, y un dashboard de Revenue Intelligence — todo funcional sin IA real, dejando la arquitectura lista para el Sales Agent de F2.
+
+- **Backend:** 5 módulos nuevos (`leads`, `opportunities`, `followups`, `activities`, `revenue`) + `crm` ampliado (Companies con escritura, Contacts CRUD completo). 14 módulos backend en total (9 de F0 + 5 nuevos).
+- **Frontend:** 8 páginas nuevas (`CompanyDetail`, `Contacts`, `Leads`, `LeadDetail`, `Pipeline`, `Opportunities`, `FollowUps`, `Revenue`) + `Companies` ampliada. 17 páginas en total (9 de F0 + 8 nuevas). Sidebar reorganizado en secciones (Sales CRM / Operations).
+- **Componentes UI nuevos:** Input, Textarea, Select, Label, Drawer, Toast, Timeline, StatCard — primera vez que la app tiene formularios y mutaciones reales (F0 era 100% de solo lectura).
+- **Base de datos:** 1 migración nueva (`f1_revenue_engine`) sobre la de F0, aditiva salvo el enum `OpportunityStage` (justificado en §2.4, seguro porque la tabla estaba vacía).
+- **Agentes:** groundwork para Sales/Market Intelligence/Revenue Agent (stubs tipados, cero red).
+
+### Métricas finales
+
+| Métrica | Valor |
+|---|---|
+| Tests (`pnpm test`) | 15/15 pasando (8 tenancy + 7 RBAC) |
+| `pnpm typecheck` | limpio en las 5 unidades del monorepo |
+| `pnpm lint` | limpio (2 warnings preexistentes de Fast Refresh, sin errores) |
+| Modelos Prisma | 39 (38 de F0 + `FollowUp`) |
+| Enums Prisma | 36 (32 de F0 + `CompanySize`, `ContactDecisionRole`, `FollowUpType`, `FollowUpStatus`) |
+| Migraciones | 2 (`init` de F0, `f1_revenue_engine`) |
+| Módulos backend | 14 (9 F0 + `leads`, `opportunities`, `followups`, `activities`, `revenue`) |
+| Endpoints HTTP | 43 rutas (29 GET, 7 POST, 6 PATCH, 1 DELETE) |
+| Páginas frontend | 17 (9 F0 + 8 F1) |
+| Permission keys | 52 (40 de F0 + 12 de `leads`/`opportunities`/`followUps`) |
+| AgentDefinition / AgentInstance | 12 / 6 (F0 tenía 10 / 3) |
+| Commits de la fase | 22, uno por paso, ninguno rompe el build |
+| Capturas de verificación | 18 en `docs/screenshots/f1/` |
+
+### Bugs encontrados durante la implementación y cómo fueron corregidos
+
+Todos se detectaron por verificación real (navegador o consultas a la DB), no por typecheck — ninguno era detectable solo con tipos:
+
+1. **Catálogo de permisos duplicado en `seed.ts`.** El seed mantenía su propia copia de `PERMISSION_RESOURCES`/`ALL_PERMISSIONS` en vez de importar `packages/shared`, así que los 12 permission keys nuevos de F1 nunca llegaron a la base de datos — cada request a `/leads` devolvía 403 aunque el código parecía correcto. Corregido importando `ALL_PERMISSIONS` desde `@ai-staffing-os/shared` como única fuente de verdad.
+2. **`findUnique` con filtro `AND` roto en runtime.** Prisma acepta en TypeScript un `WhereUniqueInput` envuelto en `AND`, pero lo rechaza en ejecución — rompía `/auth/me` en cada request tras extender la extensión de tenancy para `update`/`delete`. Corregido redirigiendo `findUnique`/`findUniqueOrThrow` a `findFirst`/`findFirstOrThrow` sobre el cliente base (mismo patrón que F0 ya había resuelto para el caso de lectura simple).
+3. **Label roto para leads sin empresa.** `id.slice(-6)` truncaba `"lead-01"` desde el extremo equivocado, mostrando "Lead ead-01". Corregido con un fallback `"Lead sin empresa · ciudad · estado"`.
+4. **Eje Y del gráfico de Revenue con apariencia invertida.** No era un bug de datos: `width={36}` en el `YAxis` de recharts recortaba el primer dígito de valores de 6 cifras (`380000` se veía como `80000`), dando la impresión de un eje descendente. Corregido con `tickFormatter` a formato `$Nk` y más ancho.
+5. **Inconsistencia de idioma.** Los formularios nuevos (Companies, Leads, CompanyDetail) se escribieron en inglés mientras el resto de la app — incluidos sus propios encabezados de tabla — está en español. Corregido traduciendo labels, botones y toasts, manteniendo en inglés solo la convención ya establecida en F0 de los botones "New X".
+6. **Companies y Contacts sin UI de edición.** El backend soportaba `PATCH` desde el primer commit del módulo, pero el frontend solo exponía creación — un gap real contra el DoD, detectado en la revisión final, no durante la construcción. Corregido agregando edición de Company (Drawer) y edición inline por fila de Contact.
+7. **Test de RBAC dejaba una `Activity` huérfana.** El test que crea un lead vía `POST /leads` limpiaba el `Lead` pero no la `Activity` que `logActivity()` escribe automáticamente al crearlo — cada corrida de la suite inflaba el conteo de `Activity` en 1. Detectado corriendo el seed dos veces seguidas y notando que el conteo esperado (4) no cuadraba (5). Corregido limpiando también la `Activity` en el test.
+
+Todos verificados con datos reales cambiados en vivo y revertidos vía SQL cuando correspondía, no solo con capturas de pantalla.
+
+### Desviaciones aprobadas respecto al plan original
+
+- **§2.4 (Lead/Opportunity/Pipeline):** el plan presentó dos opciones sin decidir; el PO aprobó explícitamente la Opción A (Lead y Opportunity separados) antes de tocar el schema — documentado en su propio commit (`d525c2f`) antes de iniciar la implementación.
+- **`Lead.priority`:** decisión de bajo impacto resuelta unilateralmente durante la planificación (reutilizar `RiskLevel` en vez de crear `LeadPriority`) para no abrir una ronda de aprobación extra por algo reversible; documentado en §2.3.
+- Ninguna otra desviación de alcance: los 6 módulos backend, 8 páginas frontend, 12 permisos y 3 agentes stub se construyeron tal como se planificaron.
+
+### Estado final del schema
+
+Migración `f1_revenue_engine` aplicada limpia sobre la base de datos poblada de F0 (verificado: los 40 candidates/8 companies/10 workers de F0 quedaron intactos después de migrar). Único cambio no aditivo: los valores de `OpportunityStage` se reemplazaron por completo — seguro porque `Opportunity` no tenía filas en F0. Todo lo demás (`Company`, `Contact`, `Lead` ampliados + modelo `FollowUp` nuevo) es aditivo, sin pérdida de datos.
+
+### Estado de RBAC
+
+52 permission keys (40 F0 + 12 F1). Sales tiene CRUD completo sobre `leads`/`opportunities`/`followUps` + `contacts.delete`; Marketing y Manager ganaron visibilidad de solo lectura sobre leads/opportunities (y follow-ups en el caso de Manager); el resto de los roles no cambió. Probado con tests automatizados (Sales crea un lead exitosamente, Compliance recibe 403 tanto en `GET` como en `POST /leads`) además de verificación manual en navegador con distintos `x-dev-user`.
+
+### Estado del Revenue Engine
+
+Funcional de punta a punta con datos reales del seed: 12 leads en distintos estados/prioridades/fuentes, 8 opportunities repartidas en las 5 etapas del pipeline (incluida una `WON` y una `LOST`), 10 follow-ups (vencidos, de hoy, próximos, uno completado), 4 activities con antigüedad controlada para que Revenue Intelligence muestre un cliente dormido real (Hoosier Distribution Partners, 90 días sin contacto) y leads sin seguimiento reales. El pipeline por etapa, el valor ponderado por probabilidad, y las métricas de conversión por industria/estado se calculan desde la base de datos en cada request, no están hardcodeadas — verificado cambiando el estado de un follow-up directamente en la DB y confirmando que `/revenue/summary` reflejó el cambio (9→8→9).
+
+### Preparación dejada para F2 (Sales Agent)
+
+- `packages/agents/src/tools/sales-tools.ts`: 7 tools tipadas con Zod (`searchCompanies`, `detectHiringSignals`, `identifyContacts`, `createLead`, `draftOutreach`, `suggestFollowUp`, `scoreOpportunity`), cada una con `execute()` lanzando `NotImplementedError("F2")` — el contrato de datos ya está pensado, la implementación no.
+- 3 `AgentDefinition` activas con instancia (`sales`, `market_intelligence`, `revenue`) visibles en AI Agents Center, en autonomía `ASSISTED`, listas para que F2 les dé comportamiento real sin tocar el schema.
+- `Activity.performedByAgentId` y `FollowUp.assignedToId` ya aceptan un `AgentInstance.id` sin migración adicional — cuando F2 implemente los agentes, pueden empezar a registrar actividad y recibir follow-ups asignados de inmediato.
+- La matriz de autonomía de la Arquitectura (§3.4) ya está reflejada en el diseño de las tools: `createLead`/`suggestFollowUp` son candidatas a autonomía alta (crear registros internos), `draftOutreach` requiere aprobación antes de tocar a un cliente real — ninguna tool decide precios ni firma nada.
+- Cero dependencias de red u OpenAI agregadas en F1; el primer `pnpm install` de F2 que agregue el SDK de OpenAI será el primer punto real de contacto con un proveedor de LLM.
+
+---
+
+**Siguiente fase:** F2 — AI Sales Agent, sobre la base de datos y RBAC ya construidos en F1. Pendiente de un nuevo documento de propuesta técnica antes de escribir código, siguiendo el mismo protocolo de CHECKPOINT usado en F0 y F1.
