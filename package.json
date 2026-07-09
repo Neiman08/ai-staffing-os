@@ -2,6 +2,7 @@
   "name": "ai-staffing-os",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "engines": {
     "node": ">=20"
   },
@@ -15,5 +16,11 @@
     "db:migrate": "pnpm --filter @ai-staffing-os/db run migrate",
     "db:seed": "pnpm --filter @ai-staffing-os/db run seed",
     "db:studio": "pnpm --filter @ai-staffing-os/db run studio"
+  },
+  "devDependencies": {
+    "eslint": "^9.11.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "typescript-eslint": "^8.8.0"
   }
 }
