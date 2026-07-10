@@ -26,6 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { normalizeImportRow, parseSpreadsheetFile } from "@/lib/importCompanies";
 import { timeAgo } from "@/lib/agentTaskStats";
+import { CompanyOriginBadge } from "@/components/shared/CompanyOriginBadge";
 import { Bot, Briefcase, Calendar, Plus, Sparkles, Upload } from "lucide-react";
 
 const COMPANY_SIZES = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"];
@@ -288,6 +289,7 @@ function CompanyCard({
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>
+          <CompanyOriginBadge origin={company.origin} title={company.sourceUrl ?? undefined} />
           {isAiTouched && (
             <Badge variant="primary" title="Con actividad del Prospecting Agent">
               <Bot className="mr-0.5 h-3 w-3" />

@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { Sparkles } from "lucide-react";
+import { CompanyOriginBadge } from "@/components/shared/CompanyOriginBadge";
 
 const CAMPAIGN_STATUSES = ["DRAFT", "ACTIVE", "PAUSED", "COMPLETED"];
 
@@ -196,6 +197,7 @@ export default function CampaignDetail() {
                 <span className="font-medium">{c.companyName}</span>
                 <div className="flex items-center gap-2">
                   <Badge variant={statusVariant(c.status)}>{formatStatusLabel(c.status)}</Badge>
+                  <CompanyOriginBadge origin={c.companyOrigin} title={c.companySourceUrl ?? undefined} />
                   {c.lastIntent && <Badge variant="neutral">{formatStatusLabel(c.lastIntent)}</Badge>}
                 </div>
               </Link>

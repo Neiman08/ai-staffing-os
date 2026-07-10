@@ -558,6 +558,9 @@ async function seedCompanies(industryMap: Map<string, string>, categoryMap: Map<
         estimatedSize: c.estimatedSize as never,
         commercialScore: c.commercialScore,
         possibleCategories: { set: possibleCategoryIds.map((id) => ({ id })) },
+        // F4.5: corrige empresas ya sembradas que quedaron en el default
+        // MANUAL de la migración — toda empresa de este seed es DEMO_SEED.
+        origin: "DEMO_SEED",
       },
       create: {
         id: c.id,
@@ -571,6 +574,7 @@ async function seedCompanies(industryMap: Map<string, string>, categoryMap: Map<
         estimatedSize: c.estimatedSize as never,
         commercialScore: c.commercialScore,
         possibleCategories: { connect: possibleCategoryIds.map((id) => ({ id })) },
+        origin: "DEMO_SEED",
       },
     });
     map.set(c.id, company.id);

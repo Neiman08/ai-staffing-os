@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { activityItemSchema, companySizeSchema, followUpSummarySchema } from "./crm";
+import {
+  activityItemSchema,
+  companyOriginSchema,
+  companySizeSchema,
+  followUpSummarySchema,
+} from "./crm";
 import { paginationQuerySchema } from "./common";
 
 // ============================================================
@@ -61,6 +66,9 @@ export const campaignCompanyListItemSchema = z.object({
   lastIntent: conversationIntentSchema.nullable(),
   lastIntentAt: z.string().nullable(),
   createdAt: z.string(),
+  // F4.5: transparencia de origen de la Company dentro de la campaña.
+  companyOrigin: companyOriginSchema,
+  companySourceUrl: z.string().nullable(),
 });
 export type CampaignCompanyListItem = z.infer<typeof campaignCompanyListItemSchema>;
 

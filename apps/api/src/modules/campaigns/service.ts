@@ -109,6 +109,8 @@ export async function getCampaignDetail(id: string): Promise<CampaignDetail> {
       lastIntent: c.lastIntent as never,
       lastIntentAt: c.lastIntentAt?.toISOString() ?? null,
       createdAt: c.createdAt.toISOString(),
+      companyOrigin: c.company.origin,
+      companySourceUrl: c.company.sourceUrl,
     })),
   };
 }
@@ -176,6 +178,8 @@ export async function getCampaignCompanyDetail(id: string): Promise<CampaignComp
     lastIntent: cc.lastIntent as never,
     lastIntentAt: cc.lastIntentAt?.toISOString() ?? null,
     createdAt: cc.createdAt.toISOString(),
+    companyOrigin: cc.company.origin,
+    companySourceUrl: cc.company.sourceUrl,
     industryName: cc.company.industry.name,
     commercialScore: cc.company.commercialScore,
     sequence: sequence.map((f) => ({

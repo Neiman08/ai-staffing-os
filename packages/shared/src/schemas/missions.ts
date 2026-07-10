@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentTaskListItemSchema } from "./agents";
+import { companyOriginSchema } from "./crm";
 
 // ============================================================
 // F4: Daily Revenue Mission — ver F4_AUTONOMOUS_OUTREACH_PLAN.md,
@@ -82,9 +83,21 @@ export const missionListItemSchema = z.object({
 });
 export type MissionListItem = z.infer<typeof missionListItemSchema>;
 
+// F4.5: transparencia — empresa seleccionada por la misión, con su
+// procedencia y fuente, para que nunca haya duda de dónde salió cada una.
+export const missionCompanySchema = z.object({
+  companyId: z.string(),
+  companyName: z.string(),
+  industryName: z.string(),
+  origin: companyOriginSchema,
+  sourceUrl: z.string().nullable(),
+});
+export type MissionCompany = z.infer<typeof missionCompanySchema>;
+
 export const missionDetailSchema = missionListItemSchema.extend({
   unrecognizedTerms: z.array(z.string()),
   report: z.string().nullable(), // Executive Report — null mientras RUNNING/PAUSED_*
   childTasks: z.array(agentTaskListItemSchema),
+  selectedCompanies: z.array(missionCompanySchema),
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;

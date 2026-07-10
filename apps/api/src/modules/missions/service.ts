@@ -82,11 +82,34 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
   const output = (detail.output ?? {}) as { report?: string | null };
   const input = detail.input as { unrecognizedTerms?: string[] };
 
+  // F4.5: las empresas "seleccionadas" por la misión son las CampaignCompany
+  // de las campañas que esta misión creó (child tasks type create_campaign) —
+  // no hay relación directa Mission->Company en el schema, se deriva.
+  const campaignIds = childTasks
+    .filter((t) => t.type === "create_campaign" && t.output)
+    .map((t) => (t.output as { campaignId?: string }).campaignId)
+    .filter((id): id is string => Boolean(id));
+
+  const campaignCompanies = campaignIds.length
+    ? await scopedDb.campaignCompany.findMany({
+        where: { campaignId: { in: campaignIds } },
+        include: { company: { include: { industry: true } } },
+        orderBy: { createdAt: "asc" },
+      })
+    : [];
+
   return {
     ...listItem,
     unrecognizedTerms: input.unrecognizedTerms ?? [],
     report: output.report ?? null,
     childTasks: await Promise.all(childTasks.map((t) => toAgentTaskDetail(t))),
+    selectedCompanies: campaignCompanies.map((cc) => ({
+      companyId: cc.companyId,
+      companyName: cc.company.name,
+      industryName: cc.company.industry.name,
+      origin: cc.company.origin,
+      sourceUrl: cc.company.sourceUrl,
+    })),
   };
 }
 

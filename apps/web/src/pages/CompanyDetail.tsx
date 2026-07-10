@@ -17,6 +17,15 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
+import { CompanyOriginBadge } from "@/components/shared/CompanyOriginBadge";
+
+const VERIFICATION_LABELS: Record<string, string> = {
+  UNVERIFIED: "Sin verificar",
+  CONFIRMED: "Confirmado",
+  INFERRED: "Inferido",
+};
+
+const EXTERNAL_ORIGINS = new Set(["EXTERNAL_DISCOVERY", "API_PROVIDER"]);
 
 const COMPANY_STATUSES = ["LEAD", "PROSPECT", "CLIENT", "INACTIVE"];
 const COMPANY_SIZES = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"];
@@ -376,6 +385,7 @@ export default function CompanyDetail() {
         action={
           <div className="flex items-center gap-2">
             <Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>
+            <CompanyOriginBadge origin={company.origin} title={company.sourceUrl ?? undefined} />
             <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
               Editar
             </Button>
@@ -439,6 +449,54 @@ export default function CompanyDetail() {
               </div>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Procedencia</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Origen</span>
+                <CompanyOriginBadge origin={company.origin} />
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Estado de verificación</span>
+                <span>{VERIFICATION_LABELS[company.verificationStatus] ?? company.verificationStatus}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Confianza</span>
+                <span>{company.confidenceScore != null ? `${Math.round(company.confidenceScore * 100)}%` : "No disponible"}</span>
+              </div>
+              {EXTERNAL_ORIGINS.has(company.origin) && (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Fuente</span>
+                    <span className="truncate">
+                      {company.sourceUrl ? (
+                        <a href={company.sourceUrl} target="_blank" rel="noreferrer" className="text-primary underline">
+                          {company.sourceUrl}
+                        </a>
+                      ) : (
+                        "No disponible"
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Descubierta el</span>
+                    <span>{company.discoveredAt ? new Date(company.discoveredAt).toLocaleString() : "No disponible"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Última verificación</span>
+                    <span>{company.lastVerifiedAt ? new Date(company.lastVerifiedAt).toLocaleString() : "No disponible"}</span>
+                  </div>
+                </>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Email</span>
+                <span>{company.email ?? "No disponible"}</span>
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Próximos seguimientos</CardTitle>

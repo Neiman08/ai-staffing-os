@@ -51,6 +51,7 @@ export async function importCompanies(input: ImportCompaniesInput): Promise<Impo
         state: row.state,
         website: row.website,
         estimatedSize: row.estimatedSize,
+        origin: "CSV_IMPORT", // F4.5: transparencia de origen
       },
     });
     await logActivity({ entityType: "company", entityId: company.id, type: "SYSTEM", subject: "Company imported" });

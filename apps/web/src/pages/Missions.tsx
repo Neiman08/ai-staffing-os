@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MissionDetail, MissionListItem } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
@@ -11,6 +12,7 @@ import { Drawer } from "@/components/ui/drawer";
 import { Textarea } from "@/components/ui/textarea";
 import { formatStatusLabel } from "@/lib/status";
 import { Sparkles } from "lucide-react";
+import { CompanyOriginBadge } from "@/components/shared/CompanyOriginBadge";
 
 const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral" | "info"> = {
   RUNNING: "info",
@@ -155,6 +157,31 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               <p className="text-sm">{detail.report}</p>
             </div>
           )}
+          <div>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
+              Empresas seleccionadas ({detail.selectedCompanies.length})
+            </p>
+            <div className="space-y-1.5">
+              {detail.selectedCompanies.length ? (
+                detail.selectedCompanies.map((c) => (
+                  <Link
+                    key={c.companyId}
+                    to={`/companies/${c.companyId}`}
+                    className="flex items-center justify-between rounded-md border border-border p-2 text-xs hover:border-primary/40"
+                  >
+                    <span className="min-w-0 truncate" title={c.companyName}>
+                      {c.companyName} <span className="text-muted-foreground">· {c.industryName}</span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <CompanyOriginBadge origin={c.origin} title={c.sourceUrl ?? undefined} />
+                    </div>
+                  </Link>
+                ))
+              ) : (
+                <p className="text-xs text-muted-foreground">Sin empresas seleccionadas todavía.</p>
+              )}
+            </div>
+          </div>
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
               Tareas delegadas ({detail.childTasks.length})

@@ -86,6 +86,10 @@ export async function listCompanies(query: PaginationQuery): Promise<Paginated<C
       })(),
       lastActivityAt: lastActivities.get(company.id)?.createdAt.toISOString() ?? null,
       createdAt: company.createdAt.toISOString(),
+      origin: company.origin,
+      sourceUrl: company.sourceUrl,
+      verificationStatus: company.verificationStatus,
+      confidenceScore: company.confidenceScore,
     })),
     nextCursor,
   };
@@ -142,8 +146,13 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
       : null,
     lastActivityAt: activities[0]?.createdAt.toISOString() ?? null,
     createdAt: company.createdAt.toISOString(),
+    origin: company.origin,
+    sourceUrl: company.sourceUrl,
+    verificationStatus: company.verificationStatus,
+    confidenceScore: company.confidenceScore,
     website: company.website,
     phone: company.phone,
+    email: company.email,
     commercialScoreReason: company.commercialScoreReason,
     notes: company.notes,
     possibleCategoryNames: company.possibleCategories.map((c) => c.name),
@@ -182,6 +191,9 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
       performedByLabel: a.performedById ? (actorMap.get(a.performedById) ?? "Unknown user") : "System",
       createdAt: a.createdAt.toISOString(),
     })),
+    discoveredAt: company.discoveredAt?.toISOString() ?? null,
+    discoveredByAgentTaskId: company.discoveredByAgentTaskId,
+    lastVerifiedAt: company.lastVerifiedAt?.toISOString() ?? null,
   };
 }
 
@@ -205,6 +217,7 @@ export async function createCompany(input: CreateCompanyInput) {
       possibleCategories: input.possibleCategoryIds
         ? { connect: input.possibleCategoryIds.map((id) => ({ id })) }
         : undefined,
+      origin: "MANUAL", // F4.5: transparencia de origen
     },
   });
 

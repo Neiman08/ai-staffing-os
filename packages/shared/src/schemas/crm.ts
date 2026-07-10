@@ -1,6 +1,16 @@
 import { z } from "zod";
 
 export const companySizeSchema = z.enum(["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"]);
+// F4.5: procedencia de una Company — nunca debe haber duda entre demo,
+// manual, CSV, o descubierta externamente.
+export const companyOriginSchema = z.enum([
+  "DEMO_SEED",
+  "MANUAL",
+  "CSV_IMPORT",
+  "EXTERNAL_DISCOVERY",
+  "API_PROVIDER",
+]);
+export const companyVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED"]);
 export const contactDecisionRoleSchema = z.enum([
   "OWNER",
   "HR",
@@ -33,6 +43,11 @@ export const companyListItemSchema = z.object({
   nextFollowUp: nextFollowUpSchema,
   lastActivityAt: z.string().nullable(),
   createdAt: z.string(),
+  // F4.5: transparencia de origen — ver companyOriginSchema.
+  origin: companyOriginSchema,
+  sourceUrl: z.string().nullable(),
+  verificationStatus: companyVerificationStatusSchema,
+  confidenceScore: z.number().nullable(),
 });
 export type CompanyListItem = z.infer<typeof companyListItemSchema>;
 
@@ -82,6 +97,7 @@ export type ActivityItem = z.infer<typeof activityItemSchema>;
 export const companyDetailSchema = companyListItemSchema.extend({
   website: z.string().nullable(),
   phone: z.string().nullable(),
+  email: z.string().nullable(),
   commercialScoreReason: z.string().nullable(), // F2: explicación auditable del Sales Agent
   notes: z.string().nullable(),
   possibleCategoryNames: z.array(z.string()),
@@ -89,6 +105,10 @@ export const companyDetailSchema = companyListItemSchema.extend({
   opportunities: z.array(opportunitySummarySchema),
   upcomingFollowUps: z.array(followUpSummarySchema),
   recentActivity: z.array(activityItemSchema),
+  // F4.5: solo presentes cuando origin es EXTERNAL_DISCOVERY/API_PROVIDER.
+  discoveredAt: z.string().nullable(),
+  discoveredByAgentTaskId: z.string().nullable(),
+  lastVerifiedAt: z.string().nullable(),
 });
 export type CompanyDetail = z.infer<typeof companyDetailSchema>;
 
