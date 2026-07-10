@@ -18,6 +18,11 @@
 //    (decisión reafirmada en F3_PROSPECTING_ENGINE_PLAN.md §7 — la
 //    memoria de F3 usa AgentMemory sin embeddings). No requerir la
 //    extensión todavía.
+// 6. Daily Revenue Mission (F4) NO tiene modelo propio — es un AgentTask
+//    raíz (type: "daily_revenue_mission") con parentTaskId plano hacia
+//    sus tareas delegadas. Objetivo/filtros/businessObjective viven en
+//    input; progreso/objectiveProgress/Executive Report viven en output.
+//    Ver F4_AUTONOMOUS_OUTREACH_PLAN.md, addendum "Daily Revenue Mission".
 // =============================================================
 
 generator client {
@@ -94,6 +99,36 @@ enum FollowUpStatus {
   DONE
   SNOOZED
   CANCELLED
+}
+
+// F4
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+// F4
+enum CampaignCompanyStatus {
+  TARGETED // seleccionada, secuencia todavía no arrancó
+  SEQUENCING // secuencia en curso, sin respuesta clasificada todavía
+  HOT // última intención: interesado / muy interesado / llamar después
+  COLD // secuencia terminada sin respuesta, o intención negativa
+  RECOVERED // estaba COLD y volvió a mostrar intención positiva
+  CONVERTED // el Lead asociado llegó a CONVERTED / la Company a CLIENT
+  EXCLUDED // sacada manualmente de la campaña por un humano
+}
+
+// F4
+enum ConversationIntent {
+  INTERESTED
+  VERY_INTERESTED
+  CALL_LATER
+  NO_BUDGET
+  HAS_PROVIDER
+  NOT_INTERESTED
+  OUT_OF_MARKET
 }
 
 enum ActivityType {
@@ -360,24 +395,25 @@ model Industry {
   companies  Company[]
   categories JobCategory[]
   leads      Lead[] // F1
+  campaigns  Campaign[] // F4
 
   @@index([tenantId])
 }
 
 model Company {
-  id                    String        @id @default(cuid())
+  id                    String            @id @default(cuid())
   tenantId              String
   name                  String
   industryId            String
-  industry              Industry      @relation(fields: [industryId], references: [id])
-  status                CompanyStatus @default(LEAD)
+  industry              Industry          @relation(fields: [industryId], references: [id])
+  status                CompanyStatus     @default(LEAD)
   website               String?
   phone                 String?
   address               Json? // { street, zip } — city/state promovidos a columnas (F1)
   city                  String? // F1: promovido de address.city para agregaciones (Revenue Intelligence)
   state                 String? // F1: promovido de address.state
   estimatedSize         CompanySize? // F1
-  possibleCategories    JobCategory[] @relation("CompanyPossibleCategories") // F1: "necesidades posibles"
+  possibleCategories    JobCategory[]     @relation("CompanyPossibleCategories") // F1: "necesidades posibles"
   commercialScore       Float? // F1: score comercial a nivel empresa
   commercialScoreReason String? // F2: explicación auditable del score (Sales Agent, ver F2 §7)
   notes                 String?
@@ -388,8 +424,9 @@ model Company {
   projects              Project[]
   contracts             Contract[]
   invoices              Invoice[]
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  campaignCompanies     CampaignCompany[] // F4
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, state])
@@ -493,11 +530,57 @@ model FollowUp {
   notes                String?
   completedAt          DateTime?
   createdByAgentTaskId String? // F3: mismo patrón que Lead.createdByAgentTaskId (F2)
+  campaignId           String? // F4: etiqueta un paso de secuencia de campaña — sin @relation, mismo patrón
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
   @@index([tenantId, status, dueDate])
   @@index([tenantId, entityType, entityId])
+}
+
+// F4: ver F4_AUTONOMOUS_OUTREACH_PLAN.md §5-6. Campaign agrupa empresas
+// objetivo bajo criterios de segmentación compartidos; CampaignCompany es
+// la tabla de unión que registra el estado de una empresa DENTRO de una
+// campaña específica (nunca se resolvió con campos sueltos en Lead —
+// ver §5.2 del plan, motivo: historial de múltiples campañas por empresa).
+model Campaign {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  name                 String // "Construction Illinois"
+  status               CampaignStatus    @default(DRAFT)
+  industryId           String?
+  industry             Industry?         @relation(fields: [industryId], references: [id])
+  state                String? // mismo campo promovido que Company.state
+  city                 String?
+  minCompanySize       CompanySize?
+  maxCompanySize       CompanySize?
+  targetCategoryIds    Json              @default("[]") // JobCategory ids — lista simple, sin M:N nueva
+  minScore             Float? // filtro sobre Company.commercialScore
+  priority             RiskLevel         @default(MEDIUM) // reutiliza el enum ya existente (Lead.priority)
+  createdByAgentTaskId String? // Campaign Agent, si la creó la IA — null si la creó un humano
+  companies            CampaignCompany[]
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@index([tenantId, status])
+}
+
+model CampaignCompany {
+  id                   String                @id @default(cuid())
+  tenantId             String
+  campaignId           String
+  campaign             Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  companyId            String
+  company              Company               @relation(fields: [companyId], references: [id])
+  status               CampaignCompanyStatus @default(TARGETED)
+  lastIntent           ConversationIntent?
+  lastIntentAt         DateTime?
+  createdByAgentTaskId String? // qué AgentTask (selectTargetCompanies) la agregó
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  @@unique([campaignId, companyId])
+  @@index([tenantId, status])
 }
 
 // ================= TALENTO =================

@@ -1,6 +1,13 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import { ALL_PERMISSIONS } from "@ai-staffing-os/shared";
-import { marketIntelligenceAgent, salesAgent } from "@ai-staffing-os/agents";
+import {
+  campaignAgent,
+  ceoAgent,
+  conversationAgent,
+  marketIntelligenceAgent,
+  outreachAgent,
+  salesAgent,
+} from "@ai-staffing-os/agents";
 
 const prisma = new PrismaClient();
 
@@ -159,6 +166,13 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "agents.view",
     "agents.execute", // F2: Sales invoca al Sales Agent
     "approvals.decide", // F2: Sales decide sobre sus propios borradores de outreach
+    "campaigns.view", // F4
+    "campaigns.create", // F4
+    "campaigns.update", // F4
+    "campaigns.delete", // F4
+    "missions.view", // F4
+    "missions.create", // F4
+    "missions.update", // F4 — pausar/cancelar/cerrar; missions.delete no se asigna a ningún rol (ver plan §addendum)
   ],
   Operations: [
     "jobOrders.view",
@@ -1410,18 +1424,27 @@ const AGENT_DEFINITIONS = [
   { key: "operations", name: "Operations Agent", description: "Proposes assignments and schedules for open job orders." },
   { key: "payroll", name: "Payroll Agent", description: "Validates time entries and drafts payroll runs." },
   { key: "marketing", name: "Marketing Agent", description: "Proposes job ad campaigns for talent gaps." },
-  { key: "ceo", name: "CEO Agent", description: "Summarizes fill rate, margin, and risk across the tenant." },
+  // F4: graduates from stub — interprets daily directives and orchestrates the Daily Revenue Mission
+  { key: "ceo", name: "CEO Agent", description: "Interprets daily revenue directives and orchestrates Campaign, Sales, Outreach, and Market Intelligence Agents to execute them." },
   { key: "admin", name: "Admin Agent", description: "Assists with tenant configuration and user management." },
   // F1: groundwork for F2's AI Sales Agent (packages/agents/src/tools/sales-tools.ts — stubs, no OpenAI yet)
   { key: "market_intelligence", name: "Market Intelligence Agent", description: "Analyzes industries, detects growth, and generates commercial signals." },
   { key: "revenue", name: "Revenue Agent", description: "Scores opportunities and suggests follow-ups to protect pipeline health." },
   // F3: orchestrates the full company pipeline (score → lead → opportunity → follow-up → draft)
   { key: "prospecting", name: "Prospecting Agent", description: "Discovers and processes companies end-to-end into qualified pipeline." },
+  // F4: Autonomous Outreach Engine
+  { key: "campaign", name: "Campaign Agent", description: "Creates campaigns, selects target companies, measures results, and suggests optimizations." },
+  { key: "outreach", name: "Outreach Agent", description: "Plans sequences, personalizes messages just-in-time, and suggests the next step after a reply." },
+  { key: "conversation", name: "Conversation Agent", description: "Classifies manually-logged replies into an intent category and recommends the next step." },
 ];
 
 const AGENT_PROMPTS: Record<string, string> = {
   sales: salesAgent.systemPromptTemplate!,
   market_intelligence: marketIntelligenceAgent.systemPromptTemplate ?? "",
+  campaign: campaignAgent.systemPromptTemplate!,
+  outreach: outreachAgent.systemPromptTemplate!,
+  conversation: conversationAgent.systemPromptTemplate!,
+  ceo: ceoAgent.systemPromptTemplate!,
 };
 
 async function seedAgents(tenantId: string) {
@@ -1440,15 +1463,37 @@ async function seedAgents(tenantId: string) {
     definitionMap.set(def.key, definition.id);
   }
 
-  for (const key of ["recruiter", "compliance", "assistant", "sales", "market_intelligence", "revenue", "prospecting"]) {
+  // F4 (01_ARQUITECTURA_v1.1.md §3.5): agentes que ya ejecutan acciones
+  // internas automáticamente y solo gatean lo externo con ApprovalRequest
+  // se declaran SEMI_AUTO (Nivel 2) — no ASSISTED (Nivel 1), que describe
+  // "nunca ejecuta". Es una corrección de nomenclatura, sin cambio de
+  // comportamiento (ver F4_AUTONOMOUS_OUTREACH_PLAN.md, addendum). El CEO
+  // Agent se queda ASSISTED: interpreta y reporta, no escribe registros de
+  // negocio directamente — eso lo hacen los agentes a los que delega.
+  const SEMI_AUTO_AGENT_KEYS = new Set(["sales", "market_intelligence", "prospecting", "campaign", "outreach", "conversation"]);
+
+  for (const key of [
+    "recruiter",
+    "compliance",
+    "assistant",
+    "sales",
+    "market_intelligence",
+    "revenue",
+    "prospecting",
+    "campaign",
+    "outreach",
+    "conversation",
+    "ceo",
+  ]) {
     const definitionId = definitionMap.get(key)!;
+    const autonomyLevel = SEMI_AUTO_AGENT_KEYS.has(key) ? "SEMI_AUTO" : "ASSISTED";
     await prisma.agentInstance.upsert({
       where: { tenantId_definitionId: { tenantId, definitionId } },
-      update: {},
+      update: { autonomyLevel },
       create: {
         tenantId,
         definitionId,
-        autonomyLevel: "ASSISTED",
+        autonomyLevel,
         isActive: true,
         metrics: { tasksCompleted: 0, costUsdThisMonth: 0, budgetExceeded: false },
       },

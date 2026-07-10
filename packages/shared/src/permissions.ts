@@ -10,6 +10,8 @@ export const PERMISSION_RESOURCES = [
   "leads", // F1
   "opportunities", // F1
   "followUps", // F1
+  "campaigns", // F4
+  "missions", // F4
 ] as const;
 
 export const PERMISSION_ACTIONS = ["view", "create", "update", "delete"] as const;
