@@ -66,5 +66,19 @@ export const aiDashboardSummarySchema = z.object({
   pendingApprovals: z.number(),
   companiesByIndustry: z.array(z.object({ industryName: z.string(), count: z.number() })),
   companiesByState: z.array(z.object({ state: z.string(), count: z.number() })),
+  // F4: campos aditivos — ver F4_AUTONOMOUS_OUTREACH_PLAN.md §17. El shape
+  // de F3 no se rompe, solo se extiende.
+  campaignsActive: z.number(),
+  campaignsCompleted: z.number(),
+  companiesByCampaign: z.array(z.object({ campaignName: z.string(), count: z.number() })),
+  companiesHot: z.number(),
+  companiesCold: z.number(),
+  companiesRecovered: z.number(),
+  costUsdByCampaign: z.array(z.object({ campaignName: z.string(), costUsd: z.number() })),
+  costPerLeadUsd: z.number().nullable(),
+  costPerOpportunityUsd: z.number().nullable(),
+  // Estimado explícito, no una medición real — F4 §17.
+  estimatedTimeSavedMinutes: z.number(),
+  aiProductivity: z.object({ tasksCompleted: z.number(), costUsd: z.number() }),
 });
 export type AiDashboardSummary = z.infer<typeof aiDashboardSummarySchema>;

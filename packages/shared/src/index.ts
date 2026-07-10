@@ -15,3 +15,5 @@ export * from "./schemas/followups";
 export * from "./schemas/activities";
 export * from "./schemas/revenue";
 export * from "./schemas/prospecting";
+export * from "./schemas/campaigns";
+export * from "./schemas/missions";

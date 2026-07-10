@@ -27,6 +27,7 @@ export const followUpListItemSchema = z.object({
   notes: z.string().nullable(),
   overdue: z.boolean(),
   createdByAgentTaskId: z.string().nullable(), // F3: badge "AI"
+  campaignId: z.string().nullable(), // F4: paso de una secuencia de campaña
   createdAt: z.string(),
 });
 export type FollowUpListItem = z.infer<typeof followUpListItemSchema>;

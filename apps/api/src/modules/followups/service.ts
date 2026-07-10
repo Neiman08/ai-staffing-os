@@ -24,6 +24,7 @@ function toListItem(
     status: string;
     notes: string | null;
     createdByAgentTaskId: string | null;
+    campaignId: string | null;
     createdAt: Date;
   },
   entityLabels: Map<string, string>,
@@ -41,6 +42,7 @@ function toListItem(
     status: f.status as FollowUpListItem["status"],
     notes: f.notes,
     createdByAgentTaskId: f.createdByAgentTaskId,
+    campaignId: f.campaignId,
     overdue: f.status === "PENDING" && f.dueDate < new Date(),
     createdAt: f.createdAt.toISOString(),
   };
