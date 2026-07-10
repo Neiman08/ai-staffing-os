@@ -1440,6 +1440,8 @@ const AGENT_DEFINITIONS = [
   { key: "campaign", name: "Campaign Agent", description: "Creates campaigns, selects target companies, measures results, and suggests optimizations." },
   { key: "outreach", name: "Outreach Agent", description: "Plans sequences, personalizes messages just-in-time, and suggests the next step after a reply." },
   { key: "conversation", name: "Conversation Agent", description: "Classifies manually-logged replies into an intent category and recommends the next step." },
+  // F4.5A: External Discovery Pilot
+  { key: "discovery", name: "Discovery Agent", description: "Finds real companies in public external sources, deduplicates against the CRM, and creates them with full provenance." },
 ];
 
 const AGENT_PROMPTS: Record<string, string> = {
@@ -1474,7 +1476,15 @@ async function seedAgents(tenantId: string) {
   // comportamiento (ver F4_AUTONOMOUS_OUTREACH_PLAN.md, addendum). El CEO
   // Agent se queda ASSISTED: interpreta y reporta, no escribe registros de
   // negocio directamente — eso lo hacen los agentes a los que delega.
-  const SEMI_AUTO_AGENT_KEYS = new Set(["sales", "market_intelligence", "prospecting", "campaign", "outreach", "conversation"]);
+  const SEMI_AUTO_AGENT_KEYS = new Set([
+    "sales",
+    "market_intelligence",
+    "prospecting",
+    "campaign",
+    "outreach",
+    "conversation",
+    "discovery",
+  ]);
 
   for (const key of [
     "recruiter",
@@ -1488,6 +1498,7 @@ async function seedAgents(tenantId: string) {
     "outreach",
     "conversation",
     "ceo",
+    "discovery",
   ]) {
     const definitionId = definitionMap.get(key)!;
     const autonomyLevel = SEMI_AUTO_AGENT_KEYS.has(key) ? "SEMI_AUTO" : "ASSISTED";

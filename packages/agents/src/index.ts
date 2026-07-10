@@ -17,6 +17,7 @@ export * from "./tools/campaign-tools";
 export * from "./tools/outreach-tools";
 export * from "./tools/conversation-tools";
 export * from "./tools/ceo-tools";
+export * from "./tools/discovery-tools";
 
 export * from "./definitions/recruiter.agent";
 export * from "./definitions/compliance.agent";
@@ -34,3 +35,4 @@ export * from "./definitions/prospecting.agent";
 export * from "./definitions/campaign.agent";
 export * from "./definitions/outreach.agent";
 export * from "./definitions/conversation.agent";
+export * from "./definitions/discovery.agent";

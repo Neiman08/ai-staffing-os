@@ -20,6 +20,7 @@ import { createCampaignTools } from "./tools/campaign-tools.impl";
 import { createOutreachTools } from "./tools/outreach-tools.impl";
 import { createConversationTools } from "./tools/conversation-tools.impl";
 import { createCeoTools } from "./tools/ceo-tools.impl";
+import { createDiscoveryTools } from "./tools/discovery-tools.impl";
 import { UsageAccumulator } from "./usage";
 import { getMonthlyBudgetStatus } from "./budget";
 
@@ -51,6 +52,7 @@ const TASK_TYPE_TO_TOOL_NAME: Record<string, string> = {
   personalize_message: "personalizeMessage", // F4
   suggest_next_step: "suggestNextStep", // F4
   classify_conversation: "classifyConversation", // F4
+  discover_companies: "discoverCompanies", // F4.5A
 };
 
 class MissingApiKeyProvider implements LLMProvider {
@@ -134,6 +136,8 @@ function buildToolRegistry(
     tools = createConversationTools(common);
   } else if (agentKey === "ceo") {
     tools = createCeoTools(common);
+  } else if (agentKey === "discovery") {
+    tools = createDiscoveryTools(common);
   } else {
     throw new Error(`buildToolRegistry: no tool factory registered for agent key "${agentKey}"`);
   }

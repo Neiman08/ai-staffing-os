@@ -181,3 +181,19 @@ Esto es independiente y adicional al presupuesto de OpenAI (`aiMonthlyBudgetUsd`
 ---
 
 **Este documento es de planificación anticipada. No se contrata ningún proveedor, no se conecta ninguna cuenta de correo, y no se escribe código de esta fase hasta que F4 esté completo, verificado, y este plan reciba su propia aprobación explícita — separada de la aprobación de F4.**
+
+---
+
+## Addendum — F4.5A External Discovery Pilot (implementación real)
+
+**Estado:** implementado. Alcance deliberadamente más chico que este documento completo — piloto sin envío de correo, sin proveedores pagos, capado a Illinois / Manufacturing-Warehouse-Logistics-Construction / 50 empresas por misión.
+
+**Desviación respecto a §1 de este documento:** §1 recomienda Apollo.io como fuente primaria (paga, ~$49-99/mes) y Google Places como secundaria (paga por uso). El piloto usa una fuente distinta y no contemplada arriba: **OpenStreetMap Overpass API** (`overpass-api.de/api/interpreter`) — gratuita, sin API key, sin cuenta de facturación, datos bajo licencia ODbL. Se eligió porque cumple mejor la prioridad #1 explícita del piloto ("fuente pública autorizada") que Apollo/Google Places (que son proveedores pagos, prioridad #2/#4), y evita el bloqueante de "necesito una API key paga" para poder demostrar el flujo end-to-end sin gasto ni aprobación de compra.
+
+**Limitaciones conocidas de esta fuente** (documentadas para cuando se evalúe reemplazarla por Apollo, ya con aprobación del PO):
+- OSM no tiene datos de contactos con nombre — el pipeline nunca crea `Contact` en este piloto porque nunca hay un dato literal de persona/cargo que citar (regla "nunca inventar" de la fase). Esto es esperado, no un bug.
+- No hay señales de contratación (`hiringSignals` queda `NOT_FOUND` siempre) ni email público — OSM no modela eso.
+- Cobertura depende de qué tan mapeado esté cada negocio en OSM — puede haber falsos negativos (empresa real que no aparece) pero nunca falsos positivos inventados.
+- La instancia pública comparte cuota con el resto de internet — se observó flakiness ocasional (HTTP 406) en algunos patrones de query; el tool implementa reintento y degradación por patrón, nunca inventa un resultado si la fuente falla.
+
+Apollo.io y Google Places siguen siendo la recomendación para una fase posterior con presupuesto aprobado — este piloto no descarta esa decisión, solo la pospone.

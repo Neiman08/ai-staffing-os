@@ -38,6 +38,12 @@ export interface InterpretDailyDirectiveResult {
   desiredVolume: number | null;
   businessObjective: BusinessObjective;
   unrecognizedTerms: string[];
+  // F4.5A: true solo cuando la instrucción pide explícitamente buscar
+  // empresas FUERA del CRM (ej. "busca empresas reales", "descubre
+  // empresas nuevas") — el LLM solo fija esta bandera, mission-orchestrator
+  // es quien decide en código qué pipeline correr (mismo principio de
+  // "el LLM nunca elige el tool ni el orden").
+  useExternalDiscovery: boolean;
 }
 export const interpretDailyDirectiveTool: AgentTool<
   z.infer<typeof interpretDailyDirectiveInputSchema>,

@@ -161,7 +161,8 @@ Responde ÚNICAMENTE con un JSON de la forma {
   "categoryNames": ["<SOLO de la lista de categorías de arriba>"],
   "desiredVolume": <número de empresas deseado> o null,
   "businessObjective": { "type": "meetings"|"new_clients"|"companies_found"|"pipeline_increase"|"custom", "target": <número> o null, "unit": "<palabra corta, SIEMPRE un string aunque target sea null — ej. 'reuniones', 'clientes', 'empresas', 'USD'>", "rawText": "<frase literal de la instrucción que describe el objetivo — si no hay un objetivo explícito, usa la instrucción completa>" },
-  "unrecognizedTerms": ["<términos que el usuario mencionó que NO coinciden con ninguna industria/categoría de arriba>"]
+  "unrecognizedTerms": ["<términos que el usuario mencionó que NO coinciden con ninguna industria/categoría de arriba>"],
+  "useExternalDiscovery": <true ÚNICAMENTE si la instrucción menciona EXPLÍCITAMENTE que las empresas deben buscarse FUERA del CRM o que el sistema no las tiene todavía — frases como "fuera del CRM", "que no tengamos en el CRM/sistema", "que no conozcamos todavía", "búsqueda externa", "en internet", "fuentes externas". Es false (default, el caso normal) para CUALQUIER instrucción que solo diga "busca/encuentra empresas de <industria> en <lugar>" sin esa mención explícita — eso significa buscar entre las empresas YA existentes en el CRM, el comportamiento de siempre. La palabra "nueva/nuevas" SOLA (ej. "encontrar 1 empresa nueva") NO activa esto — en el CRM significa "una empresa todavía no targeteada en esta campaña", no "una empresa fuera del CRM". Ante la duda, false.>
 }`;
 
         const completion = await deps.llmProvider.complete({
@@ -188,6 +189,7 @@ Responde ÚNICAMENTE con un JSON de la forma {
             desiredVolume: z.number().nullable(),
             businessObjective: businessObjectiveSchema.extend({ unit: z.string().nullable() }),
             unrecognizedTerms: z.array(z.string()),
+            useExternalDiscovery: z.boolean().nullable().optional(),
           }),
         );
         if (!parsed) {
@@ -214,6 +216,7 @@ Responde ÚNICAMENTE con un JSON de la forma {
           desiredVolume: parsed.desiredVolume,
           businessObjective: { ...parsed.businessObjective, unit: parsed.businessObjective.unit ?? "empresas" },
           unrecognizedTerms: [...parsed.unrecognizedTerms, ...droppedTerms],
+          useExternalDiscovery: parsed.useExternalDiscovery ?? false,
         };
       },
     },

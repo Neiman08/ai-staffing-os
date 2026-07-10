@@ -97,6 +97,37 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     if (campaignTask.status === "FAILED" || !campaignTask.output) continue;
     const campaignId = (campaignTask.output as { campaignId: string }).campaignId;
 
+    // F4.5A: solo cuando el CEO Agent marcó useExternalDiscovery=true (la
+    // instrucción pidió explícitamente empresas FUERA del CRM) y hay
+    // industria+estado concretos (discoverCompanies los necesita, nunca
+    // busca "cualquier industria/estado"). Crea Company nuevas con
+    // origin=EXTERNAL_DISCOVERY — select_target_companies (abajo, sin
+    // cambios) las recoge igual que a cualquier otra porque ya cumplen
+    // los criterios de la campaña.
+    if (interpreted.useExternalDiscovery && interpreted.state && industry) {
+      if ((await getMissionBudgetStatus(tenantId, missionTaskId)).exceeded) {
+        await syncMissionOutput(missionTaskId, "PAUSED_BUDGET");
+        return;
+      }
+      await createAndRunTaskSync(tenantId, operatorUserId, {
+        agentKey: "discovery",
+        type: "discover_companies",
+        input: {
+          industryNames: [industry.name],
+          state: interpreted.state,
+          city: interpreted.city ?? undefined,
+          limit: perCampaignVolume,
+        },
+        triggeredBy: "AGENT",
+        parentTaskId: missionTaskId,
+      });
+      // Un discover_companies FAILED (ej. estado sin mapeo de área, fuente
+      // caída) no aborta la misión: select_target_companies de abajo
+      // simplemente no encuentra empresas nuevas — resultado real, no se
+      // inventa nada para compensar.
+      await syncMissionOutput(missionTaskId, "RUNNING");
+    }
+
     const selectTask = await createAndRunTaskSync(tenantId, operatorUserId, {
       agentKey: "campaign",
       type: "select_target_companies",
@@ -137,7 +168,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
             industryId: company.industryId,
             city: company.city ?? undefined,
             state: company.state ?? undefined,
-            source: "daily-revenue-mission",
+            source: interpreted.useExternalDiscovery ? "external-discovery-mission" : "daily-revenue-mission",
           },
           triggeredBy: "AGENT",
           parentTaskId: missionTaskId,
@@ -145,15 +176,24 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
         if (leadTask.status !== "FAILED" && leadTask.output) {
           const leadId = (leadTask.output as { leadId: string }).leadId;
           lead = await scopedDb.lead.findUnique({ where: { id: leadId } });
-          await createAndRunTaskSync(tenantId, operatorUserId, {
-            agentKey: "sales",
-            type: "create_opportunity",
-            input: { leadId },
-            triggeredBy: "AGENT",
-            parentTaskId: missionTaskId,
-          });
+          // F4.5A §"No crear ni enviar outreach automáticamente en esta
+          // fase piloto": una misión de descubrimiento externo se detiene
+          // acá — califica y crea el Lead, nunca abre Opportunity ni
+          // planifica secuencia/mensaje. El pipeline F4 normal (abajo)
+          // sigue exactamente igual para misiones que no piden discovery.
+          if (!interpreted.useExternalDiscovery) {
+            await createAndRunTaskSync(tenantId, operatorUserId, {
+              agentKey: "sales",
+              type: "create_opportunity",
+              input: { leadId },
+              triggeredBy: "AGENT",
+              parentTaskId: missionTaskId,
+            });
+          }
         }
       }
+
+      if (interpreted.useExternalDiscovery) continue;
 
       const cc = await scopedDb.campaignCompany.findUnique({
         where: { campaignId_companyId: { campaignId, companyId } },
