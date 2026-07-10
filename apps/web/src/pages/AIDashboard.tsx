@@ -153,6 +153,93 @@ export default function AIDashboard() {
         <MetricCard label="Herramientas distintas usadas" value={String(sortedTools.length)} />
       </div>
 
+      {/* F4: campañas — Autonomous Outreach Engine */}
+      <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <MetricCard label="Campañas activas" value={String(data.campaignsActive)} />
+        <MetricCard label="Campañas finalizadas" value={String(data.campaignsCompleted)} />
+        <MetricCard label="Empresas calientes" value={String(data.companiesHot)} hint="HOT" />
+        <MetricCard label="Empresas frías" value={String(data.companiesCold)} hint="COLD" />
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <MetricCard label="Empresas recuperadas" value={String(data.companiesRecovered)} hint="RECOVERED" />
+        <MetricCard label="Costo por lead" value={data.costPerLeadUsd != null ? `$${data.costPerLeadUsd.toFixed(4)}` : "—"} hint="Estimado" />
+        <MetricCard
+          label="Costo por oportunidad"
+          value={data.costPerOpportunityUsd != null ? `$${data.costPerOpportunityUsd.toFixed(4)}` : "—"}
+          hint="Estimado"
+        />
+        <MetricCard
+          label="Tiempo ahorrado (est.)"
+          value={`${Math.round(data.estimatedTimeSavedMinutes / 60)}h`}
+          hint={`${data.estimatedTimeSavedMinutes} min — supuesto documentado`}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="card-hover">
+          <CardHeader>
+            <CardTitle>Empresas por campaña</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.companiesByCampaign.length ? (
+              data.companiesByCampaign.map((c) => (
+                <div key={c.campaignName} className="flex items-center justify-between text-sm">
+                  <span className="truncate">{c.campaignName}</span>
+                  <Badge variant="neutral">{c.count}</Badge>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin campañas todavía.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="card-hover">
+          <CardHeader>
+            <CardTitle>Costo IA por campaña</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.costUsdByCampaign.length ? (
+              data.costUsdByCampaign.map((c) => (
+                <div key={c.campaignName} className="flex items-center justify-between text-sm">
+                  <span className="truncate">{c.campaignName}</span>
+                  <span className="font-medium">${c.costUsd.toFixed(4)}</span>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin campañas todavía.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="card-hover">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Gauge className="h-4 w-4" />
+              Productividad IA
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Tareas de outreach completadas</span>
+              <span className="font-medium">{data.aiProductivity.tasksCompleted}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Costo asociado</span>
+              <span className="font-medium">${data.aiProductivity.costUsd.toFixed(4)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Costo por tarea</span>
+              <span className="font-medium">
+                {data.aiProductivity.tasksCompleted > 0
+                  ? `$${(data.aiProductivity.costUsd / data.aiProductivity.tasksCompleted).toFixed(4)}`
+                  : "—"}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="card-hover">
           <CardHeader>

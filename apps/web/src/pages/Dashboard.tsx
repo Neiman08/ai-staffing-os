@@ -16,11 +16,19 @@ import {
   CheckSquare,
   DollarSign,
   Mail,
+  Rocket,
   Sparkles,
   Trophy,
   Users,
 } from "lucide-react";
-import type { AiDashboardSummary, AuditLogItem, CompanyListItem, DashboardSummary, Paginated } from "@ai-staffing-os/shared";
+import type {
+  AiDashboardSummary,
+  AuditLogItem,
+  CompanyListItem,
+  DashboardSummary,
+  MissionListItem,
+  Paginated,
+} from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { StatCard } from "@/components/shared/StatCard";
@@ -66,6 +74,16 @@ export default function Dashboard() {
     queryFn: () => apiFetch<Paginated<CompanyListItem>>("/companies?limit=100"),
   });
 
+  const { data: missions } = useQuery({
+    queryKey: ["missions"],
+    queryFn: () => apiFetch<MissionListItem[]>("/missions"),
+    refetchInterval: 5000,
+  });
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todaysMission = missions?.find((m) => new Date(m.createdAt) >= todayStart);
+
   const agentActivity = (auditLog ?? []).filter((e) => e.actorType === "AGENT").slice(0, 8);
   const topScoredCompanies = [...(companies?.items ?? [])]
     .filter((c) => c.commercialScore != null)
@@ -93,6 +111,63 @@ export default function Dashboard() {
             Ver AI Dashboard →
           </Link>
         </div>
+
+        <Card className="card-hover mb-4 border-primary/20">
+          <CardContent className="p-4">
+            {todaysMission ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Rocket className="h-4 w-4 shrink-0 text-primary" />
+                    <span className="truncate text-sm font-medium" title={todaysMission.rawInstruction}>
+                      {todaysMission.rawInstruction}
+                    </span>
+                  </div>
+                  <Badge
+                    variant={
+                      todaysMission.missionState === "COMPLETED"
+                        ? "success"
+                        : todaysMission.missionState === "CANCELLED"
+                          ? "neutral"
+                          : "info"
+                    }
+                  >
+                    {formatStatusLabel(todaysMission.missionState)}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    {todaysMission.objectiveProgress.rawText || "Objetivo de la misión"} —{" "}
+                    {todaysMission.objectiveProgress.current}
+                    {todaysMission.objectiveProgress.target ? ` / ${todaysMission.objectiveProgress.target}` : ""}{" "}
+                    {todaysMission.objectiveProgress.unit}
+                  </span>
+                  <Link to="/missions" className="font-medium text-primary hover:underline">
+                    Ver misión →
+                  </Link>
+                </div>
+                {todaysMission.objectiveProgress.percentComplete != null && (
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all"
+                      style={{ width: `${Math.min(100, todaysMission.objectiveProgress.percentComplete)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Rocket className="h-4 w-4 text-primary" />
+                  Sin misión lanzada hoy — dale una instrucción diaria al CEO Agent.
+                </div>
+                <Link to="/missions" className="text-xs font-medium text-primary hover:underline">
+                  Lanzar misión →
+                </Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {aiSummary && (
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">

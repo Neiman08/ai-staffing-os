@@ -22,6 +22,7 @@ import Settings from "./pages/Settings";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
+import Missions from "./pages/Missions";
 
 export const router = createBrowserRouter([
   {
@@ -40,6 +41,7 @@ export const router = createBrowserRouter([
       { path: "campaigns", element: <Campaigns /> },
       { path: "campaigns/:id", element: <CampaignDetail /> },
       { path: "campaigns/:campaignId/companies/:companyId", element: <CampaignCompanyDetail /> },
+      { path: "missions", element: <Missions /> },
       { path: "revenue", element: <Revenue /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "candidates", element: <Candidates /> },
