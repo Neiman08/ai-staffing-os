@@ -19,6 +19,7 @@ import { createProspectingTools, type RunChildTask } from "./tools/prospecting-t
 import { createCampaignTools } from "./tools/campaign-tools.impl";
 import { createOutreachTools } from "./tools/outreach-tools.impl";
 import { createConversationTools } from "./tools/conversation-tools.impl";
+import { createCeoTools } from "./tools/ceo-tools.impl";
 import { UsageAccumulator } from "./usage";
 import { getMonthlyBudgetStatus } from "./budget";
 
@@ -131,6 +132,8 @@ function buildToolRegistry(
     tools = createOutreachTools(common);
   } else if (agentKey === "conversation") {
     tools = createConversationTools(common);
+  } else if (agentKey === "ceo") {
+    tools = createCeoTools(common);
   } else {
     throw new Error(`buildToolRegistry: no tool factory registered for agent key "${agentKey}"`);
   }
@@ -225,7 +228,7 @@ async function executeTaskById(taskId: string, agentInstanceId: string, agentKey
   }
 }
 
-async function resolveAgentInstance(agentKey: string) {
+export async function resolveAgentInstance(agentKey: string) {
   const agentInstance = await scopedDb.agentInstance.findFirst({ where: { definition: { key: agentKey } } });
   if (!agentInstance) throw AppError.internal(`No AgentInstance found for agent key "${agentKey}"`);
   return agentInstance;
@@ -308,6 +311,45 @@ export async function createAndRunTaskSync(tenantId: string, operatorUserId: str
     await runTaskInner(task.id);
     return scopedDb.agentTask.findUniqueOrThrow({ where: { id: task.id } });
   });
+}
+
+/**
+ * F4: corre un tool del CEO Agent DIRECTAMENTE contra un AgentTask ya
+ * existente (la misión raíz), en vez de crear una tarea hija — usado por
+ * mission-orchestrator.ts para interpretDailyDirective (al crear la
+ * misión) y closeDailyMission (al cerrarla). El costo/tokens de esta
+ * llamada se ACUMULAN sobre la misión raíz (no la reemplazan), porque
+ * ambas tools pueden correr más de una vez a lo largo del día de una
+ * misión. La misión sigue en RUNNING — este helper no toca su status.
+ */
+export async function runCeoToolDirectly(taskId: string, toolName: string, toolInput: unknown): Promise<unknown> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const agentInstance = await resolveAgentInstance("ceo");
+  const usage = new UsageAccumulator();
+  const llmProvider = buildLLMProvider();
+  const registry = buildToolRegistry("ceo", { taskId, agentInstanceId: agentInstance.id, llmProvider, usage });
+  const runtime = new AgentRuntime(registry);
+
+  const context: AgentContext = {
+    tenantId: ctx.tenantId,
+    agentInstanceId: agentInstance.id,
+    taskId,
+    triggeredBy: "USER",
+  };
+  const output = await runtime.run(context, { toolName, toolInput });
+
+  const task = await scopedDb.agentTask.findUniqueOrThrow({ where: { id: taskId } });
+  await scopedDb.agentTask.update({
+    where: { id: taskId },
+    data: {
+      tokensUsed: (task.tokensUsed ?? 0) + usage.tokensUsed,
+      costUsd: Number(task.costUsd ?? 0) + usage.costUsd,
+    },
+  });
+
+  return output;
 }
 
 /**
