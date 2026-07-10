@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 interface PageHeaderProps {
   title: ReactNode;
-  description?: string;
+  description?: ReactNode;
   action?: ReactNode;
 }
 

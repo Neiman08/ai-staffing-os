@@ -19,6 +19,9 @@ import AgentsCenter from "./pages/AgentsCenter";
 import Approvals from "./pages/Approvals";
 import AIDashboard from "./pages/AIDashboard";
 import Settings from "./pages/Settings";
+import Campaigns from "./pages/Campaigns";
+import CampaignDetail from "./pages/CampaignDetail";
+import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
 
 export const router = createBrowserRouter([
   {
@@ -34,6 +37,9 @@ export const router = createBrowserRouter([
       { path: "pipeline", element: <Pipeline /> },
       { path: "opportunities", element: <Opportunities /> },
       { path: "follow-ups", element: <FollowUps /> },
+      { path: "campaigns", element: <Campaigns /> },
+      { path: "campaigns/:id", element: <CampaignDetail /> },
+      { path: "campaigns/:campaignId/companies/:companyId", element: <CampaignCompanyDetail /> },
       { path: "revenue", element: <Revenue /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "candidates", element: <Candidates /> },

@@ -1,14 +1,20 @@
 import type { ReactNode } from "react";
 import { Sparkles } from "lucide-react";
-import type { AgentTaskDetail, InvokeSalesAgentInput, ProcessCompanyPipelineInput } from "@ai-staffing-os/shared";
+import type {
+  AgentTaskDetail,
+  CampaignCompanyTaskInput,
+  CampaignTaskInput,
+  InvokeSalesAgentInput,
+  ProcessCompanyPipelineInput,
+} from "@ai-staffing-os/shared";
 import { useAgentTask } from "@/lib/useAgentTask";
 import { Button } from "@/components/ui/button";
 
 interface AgentTaskActionProps {
   label: string;
   runningLabel?: string;
-  input: InvokeSalesAgentInput | ProcessCompanyPipelineInput;
-  /** F3: "/prospecting/tasks" para el pipeline del Prospecting Agent. */
+  input: InvokeSalesAgentInput | ProcessCompanyPipelineInput | CampaignTaskInput | CampaignCompanyTaskInput;
+  /** F3: "/prospecting/tasks" para el pipeline del Prospecting Agent. F4: "/campaigns/:id/tasks" o "/campaign-companies/:id/tasks". */
   endpoint?: string;
   renderResult: (output: unknown) => ReactNode;
   onSettled?: (task: AgentTaskDetail) => void;

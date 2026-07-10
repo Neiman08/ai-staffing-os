@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentTaskDetail, InvokeSalesAgentInput, ProcessCompanyPipelineInput } from "@ai-staffing-os/shared";
+import type {
+  AgentTaskDetail,
+  CampaignCompanyTaskInput,
+  CampaignTaskInput,
+  InvokeSalesAgentInput,
+  ProcessCompanyPipelineInput,
+} from "@ai-staffing-os/shared";
 import { apiFetch } from "./api";
+
+type AnyAgentTaskInput =
+  | InvokeSalesAgentInput
+  | ProcessCompanyPipelineInput
+  | CampaignTaskInput
+  | CampaignCompanyTaskInput;
 
 const POLLING_STATUSES = new Set(["QUEUED", "RUNNING"]);
 
@@ -27,7 +39,7 @@ export function useAgentTask(
   const notifiedForRef = useRef<string | null>(null);
 
   const invoke = useMutation({
-    mutationFn: (input: InvokeSalesAgentInput | ProcessCompanyPipelineInput) =>
+    mutationFn: (input: AnyAgentTaskInput) =>
       apiFetch<AgentTaskDetail>(endpoint, { method: "POST", body: JSON.stringify(input) }),
     onSuccess: (task) => {
       setTaskId(task.id);

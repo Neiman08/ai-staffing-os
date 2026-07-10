@@ -17,6 +17,7 @@ import {
   CheckSquare,
   Sparkles,
   Settings,
+  Megaphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +49,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: "/pipeline", label: "Pipeline", icon: Kanban },
       { to: "/opportunities", label: "Opportunities", icon: Handshake },
       { to: "/follow-ups", label: "Follow-ups", icon: ListChecks },
+      { to: "/campaigns", label: "Campaigns", icon: Megaphone },
     ],
   },
   {
