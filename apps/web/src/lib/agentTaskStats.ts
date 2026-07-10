@@ -99,6 +99,11 @@ export function totalTokens(tasks: AgentTaskListItem[]): number {
   return tasks.reduce((sum, t) => sum + (t.tokensUsed ?? 0), 0);
 }
 
+export function countCompletedInLastHour(tasks: AgentTaskListItem[]): number {
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  return tasks.filter((t) => t.completedAt && new Date(t.completedAt).getTime() >= oneHourAgo).length;
+}
+
 /**
  * Próxima corrida programada, derivada de al menos 2 tareas reales con
  * triggeredBy "SCHEDULE" (nunca un intervalo inventado) — el gap entre
