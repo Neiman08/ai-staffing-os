@@ -16,6 +16,9 @@ import { env } from "../../core/env";
 import { createSalesTools } from "./tools/sales-tools.impl";
 import { createMarketIntelligenceTools } from "./tools/market-intelligence-tools.impl";
 import { createProspectingTools, type RunChildTask } from "./tools/prospecting-tools.impl";
+import { createCampaignTools } from "./tools/campaign-tools.impl";
+import { createOutreachTools } from "./tools/outreach-tools.impl";
+import { createConversationTools } from "./tools/conversation-tools.impl";
 import { UsageAccumulator } from "./usage";
 import { getMonthlyBudgetStatus } from "./budget";
 
@@ -39,6 +42,14 @@ const TASK_TYPE_TO_TOOL_NAME: Record<string, string> = {
   create_follow_up: "createFollowUp", // F3
   analyze_industry: "analyzeIndustry", // F3
   process_company_pipeline: "processCompanyPipeline", // F3
+  create_campaign: "createCampaign", // F4
+  select_target_companies: "selectTargetCompanies", // F4
+  measure_campaign: "measureCampaign", // F4
+  optimize_campaign: "optimizeCampaign", // F4
+  plan_sequence: "planSequence", // F4
+  personalize_message: "personalizeMessage", // F4
+  suggest_next_step: "suggestNextStep", // F4
+  classify_conversation: "classifyConversation", // F4
 };
 
 class MissingApiKeyProvider implements LLMProvider {
@@ -114,6 +125,12 @@ function buildToolRegistry(
       };
     };
     tools = createProspectingTools({ taskId: common.taskId, agentInstanceId: common.agentInstanceId, runChildTask });
+  } else if (agentKey === "campaign") {
+    tools = createCampaignTools(common);
+  } else if (agentKey === "outreach") {
+    tools = createOutreachTools(common);
+  } else if (agentKey === "conversation") {
+    tools = createConversationTools(common);
   } else {
     throw new Error(`buildToolRegistry: no tool factory registered for agent key "${agentKey}"`);
   }

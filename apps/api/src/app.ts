@@ -20,6 +20,7 @@ import { revenueRouter } from "./modules/revenue/router";
 import { approvalsRouter } from "./modules/approvals/router";
 import { prospectingRouter } from "./modules/prospecting/router";
 import { aiDashboardRouter } from "./modules/ai-dashboard/router";
+import { campaignsRouter } from "./modules/campaigns/router";
 
 export function createApp() {
   const app = express();
@@ -54,6 +55,7 @@ export function createApp() {
   app.use("/api/v1", approvalsRouter);
   app.use("/api/v1", prospectingRouter);
   app.use("/api/v1", aiDashboardRouter);
+  app.use("/api/v1", campaignsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
