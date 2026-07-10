@@ -47,6 +47,8 @@ function toListItem(task: AgentTaskDetail): MissionListItem {
     },
     createdAt: task.createdAt,
     completedAt: task.completedAt,
+    progressUpdatedAt: (output as { progressUpdatedAt?: string | null }).progressUpdatedAt ?? null,
+    error: (output as { error?: string | null }).error ?? (task.status === "FAILED" ? task.errorMessage : null),
   };
 }
 

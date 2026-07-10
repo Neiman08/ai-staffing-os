@@ -22,6 +22,21 @@ import type { UsageAccumulator } from "../usage";
  */
 const OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter";
 
+// Bugfix de ciclo de vida (misión atascada en RUNNING): antes, fetch()
+// no tenía ningún timeout — una conexión que el servidor acepta pero
+// nunca responde colgaba la llamada, la tarea, y la misión entera para
+// siempre. Ahora cada intento individual tiene un límite duro de 30s, y
+// como mucho 3 reintentos (no 5 como antes) con backoff — así el peor
+// caso por patrón queda acotado (~30s × 4 intentos + backoff ≈ 3 min, no
+// infinito).
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RETRIES = 3;
+const BACKOFF_MS = [2000, 5000, 10000];
+
+function log(taskId: string, event: string, data?: Record<string, unknown>): void {
+  console.log(`[discovery] ${event}`, JSON.stringify({ taskId, ...data }));
+}
+
 // Solo los estados que ya aparecen en los datos del CRM (seed) — una
 // misión que pida un estado fuera de este mapa falla explícitamente en
 // vez de adivinar el nombre completo para el filtro de área de Overpass.
@@ -58,36 +73,58 @@ interface OverpassElement {
   tags?: Record<string, string>;
 }
 
+function isCancellation(missionSignal: AbortSignal | undefined): boolean {
+  return !!missionSignal?.aborted;
+}
+
 async function fetchOverpassPattern(
+  taskId: string,
   stateName: string,
   pattern: { key: string; value: string },
   limit: number,
-): Promise<{ elements: OverpassElement[] } | { error: string }> {
+  missionSignal: AbortSignal | undefined,
+): Promise<{ elements: OverpassElement[] } | { error: string; cancelled?: boolean }> {
   const query = `[out:json][timeout:25];area["name"="${stateName}"]["admin_level"="4"]->.searchArea;(node["${pattern.key}"="${pattern.value}"](area.searchArea);way["${pattern.key}"="${pattern.value}"](area.searchArea););out center ${limit} tags;`;
+  const patternLabel = `${pattern.key}=${pattern.value}`;
 
   // La instancia pública comparte cuota con el resto de internet —
   // 406/429/504 observados son fair-use throttling transitorio (medido:
   // ~20-50% de éxito según el momento, la misma query exacta vuelve a
-  // funcionar segundos después), no un error de sintaxis. Backoff más
-  // largo que un simple retry inmediato, varios intentos.
-  const BACKOFF_MS = [1500, 3000, 6000, 12000];
-  for (let attempt = 0; attempt <= BACKOFF_MS.length; attempt++) {
+  // funcionar segundos después), no un error de sintaxis.
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    if (isCancellation(missionSignal)) {
+      log(taskId, "provider request cancelled", { pattern: patternLabel, attempt });
+      return { error: "cancelled by user", cancelled: true };
+    }
+
+    log(taskId, "provider requested", { provider: "OpenStreetMap Overpass", pattern: patternLabel, attempt, maxAttempts: MAX_RETRIES });
+
+    // Bugfix: antes no había NINGÚN timeout — una conexión que el
+    // servidor acepta pero nunca responde colgaba esto para siempre.
+    // AbortSignal.any combina el timeout duro de esta llamada con la
+    // señal de cancelación de la misión (si la hay) — lo que dispare
+    // primero corta la llamada.
+    const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const signal = missionSignal ? AbortSignal.any([timeoutSignal, missionSignal]) : timeoutSignal;
+
     try {
       // "connection: close" fuerza una conexión TCP nueva en cada
       // intento — sin esto, fetch reutiliza keep-alive hacia el mismo
       // backend detrás del DNS round-robin de overpass-api.de, así que un
       // reintento que "vuelve a preguntarle al mismo server sobrecargado"
-      // nunca cambia de resultado (medido: curl en loop, que sí abre
-      // conexión nueva cada vez, tiene ~20-50% de éxito; fetch con la
-      // conexión reusada quedaba pegado al mismo 406).
+      // nunca cambia de resultado.
       const res = await fetch(OVERPASS_ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded", connection: "close" },
         body: `data=${encodeURIComponent(query)}`,
+        signal,
       });
+
+      log(taskId, "provider response", { pattern: patternLabel, attempt, status: res.status, ok: res.ok });
+
       if (!res.ok) {
-        if (attempt < BACKOFF_MS.length) {
-          await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
           continue;
         }
         return { error: `HTTP ${res.status}` };
@@ -95,11 +132,19 @@ async function fetchOverpassPattern(
       const json = (await res.json()) as { elements: OverpassElement[] };
       return { elements: json.elements ?? [] };
     } catch (err) {
-      if (attempt < BACKOFF_MS.length) {
-        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+      if (missionSignal?.aborted) {
+        log(taskId, "provider request cancelled mid-flight", { pattern: patternLabel, attempt });
+        return { error: "cancelled by user", cancelled: true };
+      }
+      const timedOut = err instanceof Error && err.name === "TimeoutError";
+      const errorLabel = timedOut ? `timeout after ${REQUEST_TIMEOUT_MS}ms` : err instanceof Error ? err.message : "unknown fetch error";
+      log(taskId, "provider response", { pattern: patternLabel, attempt, error: errorLabel });
+
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
         continue;
       }
-      return { error: err instanceof Error ? err.message : "unknown fetch error" };
+      return { error: errorLabel };
     }
   }
   return { error: "exhausted retries" };
@@ -201,6 +246,10 @@ export interface DiscoveryToolDeps {
   agentInstanceId: string;
   llmProvider: LLMProvider;
   usage: UsageAccumulator;
+  // bugfix de ciclo de vida: si la misión que disparó esta tarea se
+  // cancela mientras la llamada HTTP está en vuelo, esta señal la corta
+  // de verdad (ver cancellation.ts) en vez de dejarla terminar sola.
+  abortSignal?: AbortSignal;
 }
 
 export function createDiscoveryTools(deps: DiscoveryToolDeps): AgentTool[] {
@@ -210,6 +259,8 @@ export function createDiscoveryTools(deps: DiscoveryToolDeps): AgentTool[] {
       async execute(input: z.infer<typeof discoverCompaniesInputSchema>) {
         const ctx = getTenancyContext();
         if (!ctx) throw AppError.unauthorized();
+
+        log(deps.taskId, "discovery started", { industryNames: input.industryNames, state: input.state, limit: input.limit });
 
         const stateName = US_STATE_NAMES[input.state.toUpperCase()];
         if (!stateName) {
@@ -230,24 +281,34 @@ export function createDiscoveryTools(deps: DiscoveryToolDeps): AgentTool[] {
         let candidatesFound = 0;
         let duplicatesSkipped = 0;
         let insufficientDataSkipped = 0;
+        let cancelled = false;
 
-        for (const industryName of input.industryNames) {
+        outer: for (const industryName of input.industryNames) {
           const industry = industryByName.get(industryName);
           if (!industry) continue; // nunca se inventa una industria que no existe en el CRM
 
           const patterns = OVERPASS_PATTERNS[industryName] ?? [];
           for (const pattern of patterns) {
-            if (companiesCreated.length >= limit) break;
+            if (companiesCreated.length >= limit) break outer;
+            if (isCancellation(deps.abortSignal)) {
+              cancelled = true;
+              break outer;
+            }
 
             const remaining = limit - companiesCreated.length;
-            const result = await fetchOverpassPattern(stateName, pattern, remaining * 3);
+            const result = await fetchOverpassPattern(deps.taskId, stateName, pattern, remaining * 3, deps.abortSignal);
             if ("error" in result) {
               patternsFailed.push(`${industryName}:${pattern.key}=${pattern.value} (${result.error})`);
+              if (result.cancelled) {
+                cancelled = true;
+                break outer;
+              }
               continue;
             }
 
             const sourceUrl = `${OVERPASS_ENDPOINT}?data=${encodeURIComponent(`[${pattern.key}=${pattern.value}] area=${stateName}`)}`;
             sourcesUsed.add(`OpenStreetMap Overpass (${pattern.key}=${pattern.value}, ${stateName})`);
+            log(deps.taskId, "records found", { pattern: `${pattern.key}=${pattern.value}`, count: result.elements.length });
 
             for (const element of result.elements) {
               if (companiesCreated.length >= limit) break;
@@ -265,6 +326,7 @@ export function createDiscoveryTools(deps: DiscoveryToolDeps): AgentTool[] {
               });
               if (existing) {
                 duplicatesSkipped++;
+                log(deps.taskId, "duplicates discarded", { name, existingCompanyId: existing.id });
                 continue;
               }
 
@@ -303,9 +365,26 @@ export function createDiscoveryTools(deps: DiscoveryToolDeps): AgentTool[] {
                 after: { name, sourceUrl, confidenceScore },
               });
 
+              log(deps.taskId, "records persisted", { companyId: company.id, name, confidenceScore });
               companiesCreated.push({ companyId: company.id, name, fields, sourceUrl, confidenceScore });
             }
           }
+        }
+
+        log(deps.taskId, cancelled ? "discovery cancelled" : "discovery completed", {
+          companiesCreated: companiesCreated.length,
+          candidatesFound,
+          duplicatesSkipped,
+          insufficientDataSkipped,
+        });
+
+        // Cancelación cooperativa: si la misión se canceló mientras esta
+        // tarea corría, se lo hacemos saber al que la ejecuta lanzando en
+        // vez de devolver un resultado normal — task-executor.ts la marca
+        // FAILED con este mensaje, en vez de un DONE engañoso con datos
+        // parciales sin avisar que se cortó a mitad de camino.
+        if (cancelled) {
+          throw new AppError(499, "DISCOVERY_CANCELLED", "Descubrimiento cancelado por el usuario.");
         }
 
         return {

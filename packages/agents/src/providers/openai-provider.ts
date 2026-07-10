@@ -14,7 +14,12 @@ export class OpenAIProvider implements LLMProvider {
     if (!apiKey) {
       throw new Error("OpenAIProvider requires a non-empty API key");
     }
-    this.client = new OpenAI({ apiKey });
+    // Bugfix de ciclo de vida: el SDK por default espera hasta 10 minutos
+    // antes de tirar timeout — eso podía dejar una misión entera colgada
+    // en RUNNING por una sola llamada lenta. 30s, igual que el límite por
+    // request de discoverCompaniesTool, para que ningún paso del pipeline
+    // pueda colgarse indefinidamente.
+    this.client = new OpenAI({ apiKey, timeout: 30_000 });
   }
 
   async complete(request: LLMCompletionRequest): Promise<LLMCompletionResult> {

@@ -23,6 +23,7 @@ import { createCeoTools } from "./tools/ceo-tools.impl";
 import { createDiscoveryTools } from "./tools/discovery-tools.impl";
 import { UsageAccumulator } from "./usage";
 import { getMonthlyBudgetStatus } from "./budget";
+import { registerAbortController, clearAbortController, getAbortSignal } from "./cancellation";
 
 /**
  * F3: generalización de task-runner.ts (F2). F2 solo sabía ejecutar tools
@@ -137,7 +138,11 @@ function buildToolRegistry(
   } else if (agentKey === "ceo") {
     tools = createCeoTools(common);
   } else if (agentKey === "discovery") {
-    tools = createDiscoveryTools(common);
+    // bugfix de ciclo de vida: la señal de abort de esta misma tarea (si
+    // alguien la cancela mientras corre) — discoverCompaniesTool la usa
+    // para cortar la llamada HTTP en vuelo de verdad, no solo dejar de
+    // esperarla del lado de arriba.
+    tools = createDiscoveryTools({ ...common, abortSignal: getAbortSignal(common.taskId) });
   } else {
     throw new Error(`buildToolRegistry: no tool factory registered for agent key "${agentKey}"`);
   }
@@ -169,6 +174,14 @@ async function executeTaskById(taskId: string, agentInstanceId: string, agentKey
   }
 
   await scopedDb.agentTask.update({ where: { id: taskId }, data: { status: "RUNNING" } });
+
+  // bugfix de ciclo de vida: registra un AbortController para ESTA tarea
+  // antes de correrla — cualquier tool con una llamada de red real puede
+  // tomar su señal (ver cancellation.ts) para poder abortarla de verdad
+  // si alguien cancela la misión mientras está en vuelo. Se limpia
+  // siempre, incluso si la tarea falla o cuelga y algo más arriba corta
+  // la espera (nunca queda una entrada huérfana en el registro).
+  registerAbortController(taskId);
 
   const usage = new UsageAccumulator();
   const llmProvider = buildLLMProvider();
@@ -229,6 +242,8 @@ async function executeTaskById(taskId: string, agentInstanceId: string, agentKey
       costUsdThisMonth: newBudget.spentUsd,
       budgetExceeded: newBudget.exceeded,
     });
+  } finally {
+    clearAbortController(taskId);
   }
 }
 

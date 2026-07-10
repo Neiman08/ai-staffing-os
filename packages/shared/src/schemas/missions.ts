@@ -39,15 +39,19 @@ export const objectiveProgressSchema = z.object({
 export type ObjectiveProgress = z.infer<typeof objectiveProgressSchema>;
 
 // "RUNNING"/"DONE"/"FAILED" son el AgentTask.status real (enum ya
-// existente); los sub-estados de PAUSED_*/CANCELLED/COMPLETED viven
-// dentro de output.missionState (Json), no en una columna nueva — ver
-// la decisión explícita en el addendum de no ensanchar AgentTaskStatus.
+// existente); los sub-estados de PAUSED_*/CANCELLED/COMPLETED/FAILED
+// viven dentro de output.missionState (Json), no en una columna nueva —
+// ver la decisión explícita en el addendum de no ensanchar
+// AgentTaskStatus. FAILED (bugfix de ciclo de vida): una misión que se
+// cae por una excepción real, un timeout global, o el watchdog de
+// inactividad, transiciona acá — nunca se queda en RUNNING para siempre.
 export const missionStateSchema = z.enum([
   "RUNNING",
   "PAUSED_BY_USER",
   "PAUSED_BUDGET",
   "CANCELLED",
   "COMPLETED",
+  "FAILED",
 ]);
 export type MissionState = z.infer<typeof missionStateSchema>;
 
@@ -56,8 +60,13 @@ export const launchMissionInputSchema = z.object({
 });
 export type LaunchMissionInput = z.infer<typeof launchMissionInputSchema>;
 
+// "recover" (bugfix de ciclo de vida): herramienta administrativa para
+// una misión atascada en RUNNING sin actividad — fuerza la transición a
+// FAILED sin depender de ninguna llamada externa (ni siquiera al LLM del
+// Executive Report), justamente porque el objetivo es recuperar un caso
+// donde algo externo ya no responde.
 export const missionActionInputSchema = z.object({
-  action: z.enum(["pause", "resume", "cancel", "close_now"]),
+  action: z.enum(["pause", "resume", "cancel", "close_now", "recover"]),
 });
 export type MissionActionInput = z.infer<typeof missionActionInputSchema>;
 
@@ -80,6 +89,14 @@ export const missionListItemSchema = z.object({
   objectiveProgress: objectiveProgressSchema,
   createdAt: z.string(),
   completedAt: z.string().nullable(),
+  // bugfix de ciclo de vida: heartbeat — se actualiza en cada paso real
+  // del pipeline; el watchdog del scheduler compara esto contra "ahora"
+  // para distinguir una misión activa de una atascada sin inventar un
+  // plazo fijo basado en el día calendario.
+  progressUpdatedAt: z.string().nullable(),
+  // bugfix de ciclo de vida: mensaje de error real cuando missionState
+  // es FAILED — nunca null en ese caso, siempre explica qué pasó.
+  error: z.string().nullable(),
 });
 export type MissionListItem = z.infer<typeof missionListItemSchema>;
 

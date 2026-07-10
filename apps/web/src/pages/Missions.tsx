@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { Textarea } from "@/components/ui/textarea";
 import { formatStatusLabel } from "@/lib/status";
+import { timeAgo } from "@/lib/agentTaskStats";
 import { Sparkles } from "lucide-react";
 import { CompanyOriginBadge } from "@/components/shared/CompanyOriginBadge";
 
@@ -20,6 +21,7 @@ const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   PAUSED_BUDGET: "warning",
   CANCELLED: "neutral",
   COMPLETED: "success",
+  FAILED: "danger",
 };
 
 function LaunchMissionForm() {
@@ -96,7 +98,7 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
   const queryClient = useQueryClient();
 
   const actionMutation = useMutation({
-    mutationFn: (action: "pause" | "resume" | "cancel" | "close_now") =>
+    mutationFn: (action: "pause" | "resume" | "cancel" | "close_now" | "recover") =>
       apiFetch(`/missions/${mission.id}`, { method: "PATCH", body: JSON.stringify({ action }) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["missions"] });
@@ -104,7 +106,9 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
     onError: (err) => toast({ title: "No se pudo actualizar la misión", description: String(err), variant: "error" }),
   });
 
-  if (mission.missionState === "COMPLETED" || mission.missionState === "CANCELLED") return null;
+  const isTerminal =
+    mission.missionState === "COMPLETED" || mission.missionState === "CANCELLED" || mission.missionState === "FAILED";
+  if (isTerminal) return null;
 
   return (
     <div className="flex items-center gap-2">
@@ -124,6 +128,16 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
       <Button size="sm" onClick={() => actionMutation.mutate("close_now")}>
         Cerrar ahora
       </Button>
+      {mission.missionState === "RUNNING" && (
+        <Button
+          variant="outline"
+          size="sm"
+          title="Herramienta administrativa: fuerza el cierre de una misión atascada sin actividad, sin depender de ninguna llamada externa"
+          onClick={() => actionMutation.mutate("recover")}
+        >
+          Recuperar
+        </Button>
+      )}
     </div>
   );
 }
@@ -149,6 +163,14 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               <p className="text-sm text-amber-600 dark:text-amber-400">{detail.unrecognizedTerms.join(", ")}</p>
             </div>
           )}
+          {detail.error && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-red-600 dark:text-red-400">
+                Error
+              </p>
+              <p className="text-sm">{detail.error}</p>
+            </div>
+          )}
           {detail.report && (
             <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3">
               <p className="mb-1 text-xs font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
@@ -156,6 +178,9 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               </p>
               <p className="text-sm">{detail.report}</p>
             </div>
+          )}
+          {detail.missionState === "RUNNING" && detail.progressUpdatedAt && (
+            <p className="text-xs text-muted-foreground">Última actividad: {timeAgo(detail.progressUpdatedAt)}</p>
           )}
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">

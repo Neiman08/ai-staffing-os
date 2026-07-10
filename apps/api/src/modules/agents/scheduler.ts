@@ -4,7 +4,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { createAndRunTaskSync } from "./task-executor";
 import { getMonthlyBudgetStatus } from "./budget";
 import { getStaleProcessedCompanyIds, getUnprocessedCompanyIds } from "./memory";
-import { closeMission } from "./mission-orchestrator";
+import { closeMission, recoverStuckMission, getMissionSettings } from "./mission-orchestrator";
 
 /**
  * F3 §6: scheduler in-process, sin Redis/BullMQ. Un tick liviano corre
@@ -219,30 +219,58 @@ export async function runCampaignSequenceSweep(tenantId: string): Promise<Campai
 
 export interface MissionCloseSweepResult {
   closed: number;
+  recovered: number;
 }
 
 /**
- * F4 addendum: cierra automáticamente cualquier Daily Revenue Mission que
- * siga RUNNING desde un día calendario anterior — genera su Executive
- * Report con lo que se alcanzó a hacer, sin esperar a que un humano pida
- * el cierre manual.
+ * F4 addendum + bugfix de ciclo de vida (misión atascada en RUNNING para
+ * siempre): dos chequeos independientes en cada tick.
+ *
+ * 1. Cierra (Executive Report real) cualquier Daily Revenue Mission que
+ *    siga RUNNING desde un día calendario anterior — sin esperar a que
+ *    un humano pida el cierre manual.
+ * 2. Watchdog same-day: una misión RUNNING de HOY cuyo heartbeat
+ *    (progressUpdatedAt) no se movió en más de missionStaleMinutes se
+ *    recupera como FAILED — antes esto no se detectaba nunca en el
+ *    mismo día calendario, solo al cruzar la medianoche, por eso una
+ *    misión podía quedar visiblemente atascada horas enteras aunque el
+ *    pipeline ya hubiera terminado (o colgado) hacía rato.
  */
 export async function runMissionCloseSweep(tenantId: string): Promise<MissionCloseSweepResult> {
   const operatorUserId = await getOperatorUserId(tenantId);
-  if (!operatorUserId) return { closed: 0 };
+  if (!operatorUserId) return { closed: 0, recovered: 0 };
 
   return runWithTenancyContext({ tenantId, userId: operatorUserId, permissions: [] }, async () => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const stale = await scopedDb.agentTask.findMany({
+    const staleFromYesterday = await scopedDb.agentTask.findMany({
       where: { type: "daily_revenue_mission", status: "RUNNING", createdAt: { lt: todayStart } },
     });
-
-    for (const mission of stale) {
+    for (const mission of staleFromYesterday) {
       await closeMission(mission.id);
     }
-    return { closed: stale.length };
+
+    const { staleMinutes } = await getMissionSettings(tenantId);
+    const staleThreshold = new Date(Date.now() - staleMinutes * 60_000);
+
+    const runningToday = await scopedDb.agentTask.findMany({
+      where: { type: "daily_revenue_mission", status: "RUNNING", createdAt: { gte: todayStart } },
+    });
+    const stuckToday = runningToday.filter((m) => {
+      const output = m.output as { missionState?: string; progressUpdatedAt?: string } | null;
+      if (output?.missionState !== "RUNNING") return false; // PAUSED_*/CANCELLED/COMPLETED/FAILED no son "atascadas"
+      const lastProgress = output.progressUpdatedAt ? new Date(output.progressUpdatedAt) : m.createdAt;
+      return lastProgress < staleThreshold;
+    });
+    for (const mission of stuckToday) {
+      await recoverStuckMission(
+        mission.id,
+        `Watchdog: sin actividad por más de ${staleMinutes} minutos — recuperada automáticamente.`,
+      );
+    }
+
+    return { closed: staleFromYesterday.length, recovered: stuckToday.length };
   });
 }
 
@@ -261,7 +289,7 @@ export async function tickAllTenants(): Promise<void> {
 
     try {
       const closeResult = await runMissionCloseSweep(tenant.id);
-      if (closeResult.closed > 0) {
+      if (closeResult.closed > 0 || closeResult.recovered > 0) {
         console.log(`[scheduler] mission close sweep for tenant ${tenant.id}:`, closeResult);
       }
     } catch (err) {
