@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { agentTaskListItemSchema } from "./agents";
-import { companyOriginSchema } from "./crm";
+import { companyOriginSchema, companyVerificationStatusSchema } from "./crm";
 
 // ============================================================
 // F4: Daily Revenue Mission — ver F4_AUTONOMOUS_OUTREACH_PLAN.md,
@@ -85,12 +85,20 @@ export type MissionListItem = z.infer<typeof missionListItemSchema>;
 
 // F4.5: transparencia — empresa seleccionada por la misión, con su
 // procedencia y fuente, para que nunca haya duda de dónde salió cada una.
+// F4.5A agrega website/phone/email/confidence/verification — mismos datos
+// que Company ya tiene, mostrados acá para no obligar a abrir cada
+// registro para ver qué encontró el Discovery Agent.
 export const missionCompanySchema = z.object({
   companyId: z.string(),
   companyName: z.string(),
   industryName: z.string(),
   origin: companyOriginSchema,
   sourceUrl: z.string().nullable(),
+  website: z.string().nullable(),
+  phone: z.string().nullable(),
+  email: z.string().nullable(),
+  confidenceScore: z.number().nullable(),
+  verificationStatus: companyVerificationStatusSchema,
 });
 export type MissionCompany = z.infer<typeof missionCompanySchema>;
 

@@ -167,14 +167,27 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
                   <Link
                     key={c.companyId}
                     to={`/companies/${c.companyId}`}
-                    className="flex items-center justify-between rounded-md border border-border p-2 text-xs hover:border-primary/40"
+                    className="block rounded-md border border-border p-2 text-xs hover:border-primary/40"
                   >
-                    <span className="min-w-0 truncate" title={c.companyName}>
-                      {c.companyName} <span className="text-muted-foreground">· {c.industryName}</span>
-                    </span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <CompanyOriginBadge origin={c.origin} title={c.sourceUrl ?? undefined} />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate" title={c.companyName}>
+                        {c.companyName} <span className="text-muted-foreground">· {c.industryName}</span>
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {c.confidenceScore != null && (
+                          <Badge variant="neutral">{Math.round(c.confidenceScore * 100)}%</Badge>
+                        )}
+                        <CompanyOriginBadge origin={c.origin} title={c.sourceUrl ?? undefined} />
+                      </div>
                     </div>
+                    {(c.website || c.phone || c.email || c.sourceUrl) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                        {c.website && <span>🌐 {c.website}</span>}
+                        {c.phone && <span>☎ {c.phone}</span>}
+                        {c.email && <span>✉ {c.email}</span>}
+                        <span>{formatStatusLabel(c.verificationStatus)}</span>
+                      </div>
+                    )}
                   </Link>
                 ))
               ) : (

@@ -19,6 +19,7 @@ import {
   Settings,
   Megaphone,
   Rocket,
+  Radar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +67,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     items: [
       { to: "/missions", label: "Daily Mission", icon: Rocket },
+      { to: "/discovery", label: "External Discovery", icon: Radar },
       { to: "/agents", label: "AI Agents", icon: Bot },
       { to: "/approvals", label: "Approvals", icon: CheckSquare },
       { to: "/ai-dashboard", label: "AI Dashboard", icon: Sparkles },

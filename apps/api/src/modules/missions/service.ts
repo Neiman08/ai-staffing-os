@@ -109,6 +109,11 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
       industryName: cc.company.industry.name,
       origin: cc.company.origin,
       sourceUrl: cc.company.sourceUrl,
+      website: cc.company.website,
+      phone: cc.company.phone,
+      email: cc.company.email,
+      confidenceScore: cc.company.confidenceScore,
+      verificationStatus: cc.company.verificationStatus,
     })),
   };
 }
