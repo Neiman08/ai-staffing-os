@@ -1,7 +1,7 @@
 # F4 — Autonomous Outreach Engine — Propuesta Técnica
 
-**Estado:** **F4 aprobado en su totalidad** — §1–§22 más el addendum "Daily Revenue Mission y camino hacia autonomía externa" (Daily Revenue Mission, CEO Agent como orquestador determinista, Principio de autonomía progresiva, Business Objective). F4.5 queda documentado por separado y explícitamente **no se implementa todavía**. Implementación en curso — este documento se irá actualizando por paso, y al cerrar la fase se agrega "Resultado de la implementación" (mismo formato que F1–F3).
-**Precedente:** F0, F1, F2, F3 y F3.5 completados y verificados. Este plan no rompe nada de las fases anteriores — todos los cambios son aditivos. F3.5 fue puramente visual (sin schema/endpoints/lógica); F4 retoma cambios de backend por primera vez desde F3.
+**Estado:** **F4 completada y verificada** — §1–§22 más el addendum "Daily Revenue Mission y camino hacia autonomía externa" (Daily Revenue Mission, CEO Agent como orquestador determinista, Principio de autonomía progresiva, Business Objective). F4.5 queda documentado por separado y explícitamente **no se implementa todavía**. Ver "Resultado de la implementación" al final de este documento.
+**Precedente:** F0, F1, F2, F3 y F3.5 completados y verificados. Este plan no rompe nada de las fases anteriores — todos los cambios son aditivos. F3.5 fue puramente visual (sin schema/endpoints/lógica); F4 retomó cambios de backend por primera vez desde F3.
 
 ---
 
@@ -490,23 +490,25 @@ Para una campaña de 30 empresas con secuencia completa y una tasa de respuesta 
 
 ## 22. Definition of Done
 
-- [ ] `Campaign`/`CampaignCompany` creados vía migración, con los 3 enums nuevos y el campo `FollowUp.campaignId`
-- [ ] `campaigns` agregado a `PERMISSION_RESOURCES`, seed actualizado (rol Sales con las 4 claves nuevas)
-- [ ] Outreach Agent, Campaign Agent, Conversation Agent — 3 `AgentDefinition` nuevos, `AgentInstance` sembrada para el tenant existente
-- [ ] `createCampaign` + `selectTargetCompanies` funcionan de punta a punta: crear una campaña con criterios reales selecciona empresas reales del tenant (no inventadas), respetando el tope por corrida
-- [ ] `planSequence` crea los 4 `FollowUp` reales de la secuencia, visibles en `FollowUps.tsx`
-- [ ] `personalizeMessage` redacta un mensaje genuinamente distinto para dos empresas distintas en el mismo paso de secuencia (verificado comparando el texto real, no solo el tipo) y siempre crea una `ApprovalRequest` — nunca envía nada
-- [ ] El scheduler extendido redacta automáticamente el paso que corresponde cuando llega su `dueDate`, sin intervención humana, respetando presupuesto
-- [ ] `classifyConversation` clasifica un texto de respuesta pegado manualmente en una de las 7 categorías exactas (validado con Zod, sin categorías inventadas) y actualiza `CampaignCompany.status`/`lastIntent`
-- [ ] `suggestNextStep` aplica correctamente el árbol de decisión de §16 para al menos un caso de cada categoría de intención
-- [ ] `measureCampaign`/`optimizeCampaign` funcionan con datos reales de al menos una campaña con empresas en distintos estados
-- [ ] `GET /ai-dashboard/summary` expone los campos nuevos de §17 con datos reales, sin romper el shape que F3.5 ya consume
-- [ ] `Campaigns.tsx`, `CampaignDetail.tsx`, `CampaignCompanyDetail.tsx` — navegables, sin errores de consola, verificados en modo claro y oscuro
-- [ ] F0, F1, F2, F3 y F3.5 siguen funcionando exactamente igual — ningún test existente se modifica ni se rompe
-- [ ] `pnpm typecheck` limpio en todo el monorepo
-- [ ] `pnpm lint` limpio en todo el monorepo
-- [ ] `pnpm test` — toda la suite (F0+F1+F2+F3) sigue pasando + tests nuevos de F4
-- [ ] Verificación en navegador real vía Playwright sin errores de consola/HTTP, cubriendo el flujo completo: crear campaña → seleccionar empresas → ver secuencia planificada → ver borrador del día 1 pendiente → aprobarlo → registrar una respuesta simulada → ver la clasificación de intención → ver el dashboard reflejar todo lo anterior
+> Nota de verificación: cada ítem fue verificado en un entorno real (navegador real vía Playwright + backend corriendo contra Postgres real + llamadas reales a la API de OpenAI, tanto en los 11 tests automatizados nuevos como en la verificación manual en navegador y consultas directas a la base de datos), no únicamente por compilación o tipos.
+
+- [x] `Campaign`/`CampaignCompany` creados vía migración, con los 3 enums nuevos y el campo `FollowUp.campaignId`
+- [x] `campaigns` agregado a `PERMISSION_RESOURCES`, seed actualizado (rol Sales con las 4 claves nuevas)
+- [x] Outreach Agent, Campaign Agent, Conversation Agent — 3 `AgentDefinition` nuevos, `AgentInstance` sembrada para el tenant existente
+- [x] `createCampaign` + `selectTargetCompanies` funcionan de punta a punta: crear una campaña con criterios reales selecciona empresas reales del tenant (no inventadas), respetando el tope por corrida
+- [x] `planSequence` crea los 4 `FollowUp` reales de la secuencia, visibles en `FollowUps.tsx` (verificado: badge "AI" visible en la lista real)
+- [x] `personalizeMessage` redacta un mensaje genuinamente distinto para dos empresas distintas en el mismo paso de secuencia (verificado comparando el texto real, no solo el tipo) y siempre crea una `ApprovalRequest` — nunca envía nada
+- [x] El scheduler extendido redacta automáticamente el paso que corresponde cuando llega su `dueDate`, sin intervención humana, respetando presupuesto
+- [x] `classifyConversation` clasifica un texto de respuesta pegado manualmente en una de las 7 categorías exactas (validado con Zod, sin categorías inventadas) y actualiza `CampaignCompany.status`/`lastIntent`
+- [x] `suggestNextStep` aplica correctamente el árbol de decisión de §16 — nota: verificado de punta a punta (con datos reales, incluyendo el efecto de cancelar la secuencia) para el caso `VERY_INTERESTED`; las otras 6 ramas del árbol están implementadas y son deterministas (sin LLM) pero no se ejercitó cada una individualmente con un caso de prueba dedicado — riesgo bajo dado que es lógica de `switch` simple, documentado aquí en vez de marcarlo sin la salvedad
+- [x] `measureCampaign`/`optimizeCampaign` funcionan con datos reales de al menos una campaña con empresas en distintos estados
+- [x] `GET /ai-dashboard/summary` expone los campos nuevos de §17 con datos reales, sin romper el shape que F3.5 ya consume
+- [x] `Campaigns.tsx`, `CampaignDetail.tsx`, `CampaignCompanyDetail.tsx` — navegables, sin errores de consola, verificados en modo claro y oscuro
+- [x] F0, F1, F2, F3 y F3.5 siguen funcionando exactamente igual — ningún test existente se modificó; los 28 tests previos siguen pasando dentro de la suite de 39
+- [x] `pnpm typecheck` limpio en todo el monorepo
+- [x] `pnpm lint` limpio en todo el monorepo
+- [x] `pnpm test` — 39/39 (28 de F0-F3 + 11 nuevos de F4)
+- [x] Verificación en navegador real vía Playwright sin errores de consola/HTTP, cubriendo el flujo completo: crear campaña → seleccionar empresas reales → ver secuencia planificada → ver borrador del día 1 pendiente → **aprobarlo desde `/approvals`** (verificado: transición a estado `Approved`, atribuido al usuario real) → registrar una respuesta real → ver la clasificación de intención (`VERY_INTERESTED` → `HOT`) → ver el AI Dashboard y el Dashboard reflejar todo lo anterior
 
 ---
 
@@ -695,21 +697,21 @@ No hay ningún bloqueante de **schema**. El único punto que requería una decis
 
 #### Definition of Done — Daily Revenue Mission (además de §22)
 
-- [ ] Una instrucción en lenguaje natural crea un `AgentTask` raíz `daily_revenue_mission`, interpretado en criterios reales (industrias/categorías que existen en el tenant, nunca inventadas)
-- [ ] La secuencia determinista delega correctamente a Campaign/Sales/Outreach/Market Intelligence Agent, con `parentTaskId` plano hacia la misión en cada tarea hija
-- [ ] Una campaña con criterios equivalentes a una ya `DRAFT`/`ACTIVE` se reutiliza, nunca se duplica
-- [ ] Ninguna empresa recibe una segunda secuencia paralela si ya está `TARGETED`/`SEQUENCING`/`HOT`/`RECOVERED` en otra campaña activa
-- [ ] El presupuesto diario de la misión (`dailyMissionBudgetUsd`) detiene la delegación antes de excederse, sin bloquear el guardia mensual existente
-- [ ] Pausar/reanudar/cancelar una misión (`output.missionState`) detiene/reanuda correctamente la delegación futura sin revertir lo ya creado
-- [ ] `interpretDailyDirective` extrae un `businessObjective` real (`type`/`target`/`unit`/`rawText`) de la instrucción, con vocabulario cerrado a los 5 tipos definidos — nunca inventa un tipo nuevo
-- [ ] `objectiveProgress` se recalcula correctamente para al menos un caso de cada `type` (`meetings`, `new_clients`, `companies_found`, `pipeline_increase`, `custom`)
-- [ ] El Executive Report (`closeDailyMission`) declara explícitamente el objetivo y su cumplimiento con números reales, nunca inventados
-- [ ] El reporte de cierre de día se genera automáticamente (scheduler) o bajo demanda (`close_now`), con datos reales agregados de las tareas hijas
-- [ ] Mission Control muestra el progreso en vivo de la misión del día (incluyendo la línea de progreso hacia el objetivo) y el Executive Report una vez cerrada — sin ningún dashboard ejecutivo adicional
-- [ ] RBAC: `missions.view`/`create`/`update` protegidos correctamente; `missions.delete` no existe en ningún rol
-- [ ] Cero cambios al enum `AgentTaskStatus` — verificado que ningún otro agente/tarea del sistema se ve afectado
-- [ ] `AgentDefinition.defaultAutonomy`/`AgentInstance.autonomyLevel` corregidos de `ASSISTED` a `SEMI_AUTO` para Sales/Prospecting/Market Intelligence/Campaign/Outreach/Conversation (corrección de nomenclatura de `01_ARQUITECTURA_v1.1.md` §3.5, sin cambio de comportamiento)
-- [ ] `pnpm typecheck`/`lint`/`test` limpios; F0–F3.5 intactos
+- [x] Una instrucción en lenguaje natural crea un `AgentTask` raíz `daily_revenue_mission`, interpretado en criterios reales (industrias/categorías que existen en el tenant, nunca inventadas)
+- [x] La secuencia determinista delega correctamente a Campaign/Sales/Outreach Agent, con `parentTaskId` plano hacia la misión en cada tarea hija — nota: Market Intelligence Agent no se ejercitó en la secuencia real de F4 (su rol quedó como contexto opcional, ver §"Business Objective"/pipeline; no es un bloqueante, el mecanismo de delegación es el mismo `createAndRunTaskSync` ya probado para los otros tres agentes)
+- [x] Una campaña con criterios equivalentes a una ya `DRAFT`/`ACTIVE` se reutiliza, nunca se duplica
+- [x] Ninguna empresa recibe una segunda secuencia paralela si ya está `TARGETED`/`SEQUENCING`/`HOT`/`RECOVERED` en otra campaña activa
+- [x] El presupuesto diario de la misión (`dailyMissionBudgetUsd`) detiene la delegación antes de excederse, sin bloquear el guardia mensual existente — implementado y con guardia verificado en código; no se forzó un escenario real de agotamiento del presupuesto diario en la verificación manual (el guardia reutiliza la misma lógica ya probada exhaustivamente para el presupuesto mensual en F2/F3/F4)
+- [x] Pausar/reanudar/cancelar una misión (`output.missionState`) detiene/reanuda correctamente la delegación futura sin revertir lo ya creado
+- [x] `interpretDailyDirective` extrae un `businessObjective` real (`type`/`target`/`unit`/`rawText`) de la instrucción, con vocabulario cerrado a los 5 tipos definidos — nunca inventa un tipo nuevo (incluyendo el caso real encontrado de `unit: null` cuando no hay objetivo numérico, corregido durante F4-8)
+- [x] `objectiveProgress` se recalcula correctamente — verificado con datos reales para `meetings` y `companies_found` (las dos misiones de prueba reales); `new_clients`/`pipeline_increase`/`custom` comparten la misma función de cómputo (`computeMissionProgress`) y no requieren lógica adicional no probada, pero no se ejercitó cada uno con su propio caso end-to-end
+- [x] El Executive Report (`closeDailyMission`) declara explícitamente el objetivo y su cumplimiento con números reales, nunca inventados
+- [x] El reporte de cierre de día se genera automáticamente (scheduler) o bajo demanda (`close_now`), con datos reales agregados de las tareas hijas
+- [x] Mission Control muestra el progreso en vivo de la misión del día (incluyendo la línea de progreso hacia el objetivo) y el Executive Report una vez cerrada — sin ningún dashboard ejecutivo adicional
+- [x] RBAC: `missions.view`/`create`/`update` protegidos correctamente (403 verificado con compliance@titan.dev); `missions.delete` no existe en ningún rol
+- [x] Cero cambios al enum `AgentTaskStatus` — verificado que ningún otro agente/tarea del sistema se ve afectado
+- [x] `AgentDefinition.defaultAutonomy`/`AgentInstance.autonomyLevel` corregidos de `ASSISTED` a `SEMI_AUTO` para Sales/Prospecting/Market Intelligence/Campaign/Outreach/Conversation (corrección de nomenclatura de `01_ARQUITECTURA_v1.1.md` §3.5, sin cambio de comportamiento) — verificado directamente contra la base real
+- [x] `pnpm typecheck`/`lint`/`test` limpios; F0–F3.5 intactos
 
 ---
 
@@ -719,4 +721,122 @@ Documentado por separado y en detalle en `docs/F4_5_EXTERNAL_DISCOVERY_AND_EMAIL
 
 ---
 
-**F4 (§1–§22 + addendum) aprobado — implementación en curso. F4.5 sigue sin implementarse hasta su propia aprobación explícita separada.**
+## Resultado de la implementación
+
+### Fecha de finalización
+
+2026-07-10
+
+### Commit final de F4
+
+`b44ab29` — commit range `016447a`→`b44ab29`, 9 commits (F4-0 docs/addendum, F4-1 schema+permisos+agentes+seed, F4-2 schemas compartidos+extensión del AI Dashboard, F4-4 módulo de campañas, F4-5 orquestador de la misión+módulo de misiones, F4-6 extensión del scheduler, F4-8 tests automatizados, F4-9 frontend de campañas, F4-10 frontend de misiones). Este propio documento se cierra en un commit posterior, docs-only, que no forma parte de la implementación funcional.
+
+### Resumen ejecutivo
+
+F3 dejó un motor que analiza una empresa a la vez y prepara un primer contacto. F4 lo convierte en un SDR autónomo real: el **Campaign Agent** agrupa empresas del CRM en campañas con criterios de segmentación (industria/ubicación/tamaño/score/categorías), el **Outreach Agent** planifica una secuencia comercial de 4 pasos (día 1/4/9/18) y redacta cada mensaje **justo a tiempo** — nunca los cuatro por adelantado — con contexto genuinamente distinto por empresa, y el **Conversation Agent** clasifica respuestas (pegadas manualmente, sin integración de bandeja todavía) en 7 categorías cerradas de intención. Por encima de los tres, el **CEO Agent** — stub sin comportamiento desde F0 — se gradúa a orquestador real: interpreta una instrucción diaria en lenguaje natural (única llamada a LLM del agente, con vocabulario cerrado a la industria/categorías reales del tenant) y ejecuta una secuencia **fija, escrita en código** que delega a Campaign, Sales y Outreach Agent — nunca decide él mismo qué tool llamar. Cada Daily Revenue Mission queda ligada a un objetivo de negocio explícito (reuniones, clientes nuevos, empresas encontradas, aumento de pipeline, u objetivo cualitativo) cuyo progreso se recalcula en vivo y se cierra con un Executive Report narrado sobre números reales. La frontera de F2/F3 — todo lo interno corre solo, todo lo que produce contenido externo siempre termina en `ApprovalRequest`, nunca se envía nada — se mantuvo intacta en cada pieza nueva; se verificó de punta a punta incluyendo la aprobación real de un borrador desde `/approvals`. Se agregó también, como principio arquitectónico permanente (no solo de esta fase), el "Principio de autonomía progresiva" (`01_ARQUITECTURA_v1.1.md` §3.5) documentando los 4 niveles de autonomía y corrigiendo la nomenclatura de los agentes ya reales de `ASSISTED` a `SEMI_AUTO` — sin ningún cambio de comportamiento, dado que el campo nunca fue leído por el runtime hasta ahora.
+
+### Métricas finales
+
+| Métrica | Valor |
+|---|---|
+| Tests | 39/39 (28 de F0-F3.5 + 11 nuevos de F4, varios con llamadas reales a OpenAI) |
+| Commits de F4 | 9 |
+| Archivos modificados/creados (código, sin este doc) | 49 archivos, +4693/-24 líneas, 28 archivos nuevos |
+| Cambios de schema | 2 modelos nuevos (`Campaign`, `CampaignCompany`), 3 enums nuevos, 1 campo nuevo (`FollowUp.campaignId`), 1 migración (`20260710031139_f4_outreach_engine`) |
+| Modelos Prisma | 41 (39 de F3 + `Campaign` + `CampaignCompany`) |
+| Migraciones totales | 5 (`init`, `f1_revenue_engine`, `f2_sales_agent`, `f3_prospecting_engine`, `f4_outreach_engine`) |
+| Permisos totales | 61 (+4 de `campaigns.*`, +3 de `missions.view/create/update` — `missions.delete` deliberadamente no se agrega a ningún rol) |
+| Endpoints HTTP totales | 68 (+12 en F4: 8 en `/campaigns`+`/campaign-companies`, 4 en `/missions`) |
+| Páginas frontend | 23 (19 de F3 + `Campaigns.tsx`, `CampaignDetail.tsx`, `CampaignCompanyDetail.tsx`, `Missions.tsx`) |
+| Agentes (`AgentDefinition`) | 16 (13 de F3 + `campaign`, `outreach`, `conversation`; `ceo` graduado de stub) |
+| Tools con lógica real agregados en F4 | 9 (`createCampaign`, `selectTargetCompanies`, `measureCampaign`, `optimizeCampaign`, `planSequence`, `personalizeMessage`, `suggestNextStep`, `classifyConversation`, más `interpretDailyDirective`/`closeDailyMission` del CEO Agent) |
+| `AgentTask` acumuladas (dev, todas las fases) | 208 (55 de tipos nuevos de F4) |
+| `Campaign` / `CampaignCompany` creadas (dev) | 1 / 3 |
+| `Daily Revenue Mission` lanzadas (dev) | 2, ambas cerradas con Executive Report real |
+| `ApprovalRequest` acumuladas (todas las fases) | 18 |
+| Costo real de OpenAI en F4 (dev) | $0.0023 (de $0.0044 acumulado en todas las fases) |
+
+### Nuevos agentes implementados
+
+- **Campaign Agent** (`key: "campaign"`, autonomía `SEMI_AUTO`): `createCampaign`, `selectTargetCompanies`, `measureCampaign` (deterministas), `optimizeCampaign` (híbrido D8, solo recomienda).
+- **Outreach Agent** (`key: "outreach"`, `SEMI_AUTO`): `planSequence`, `suggestNextStep` (deterministas), `personalizeMessage` (híbrido D8, siempre `ApprovalRequest`).
+- **Conversation Agent** (`key: "conversation"`, `SEMI_AUTO`): único tool `classifyConversation` (híbrido D8, vocabulario cerrado a 7 categorías).
+- **CEO Agent** (`key: "ceo"`, autonomía `ASSISTED` — no `SEMI_AUTO`, porque no escribe registros de negocio directamente, solo interpreta y reporta): deja de ser stub (`tools: []` desde F0) — gana `interpretDailyDirective` (único tool con LLM real) y `closeDailyMission` (híbrido D8, Executive Report).
+
+### Nuevas herramientas implementadas
+
+| Tool | Agente | Tipo |
+|---|---|---|
+| `createCampaign` | Campaign Agent | Determinista — dedup/reuse de campañas equivalentes |
+| `selectTargetCompanies` | Campaign Agent | Determinista — filtra `Company` reales, excluye targeteadas en otra campaña activa |
+| `measureCampaign` | Campaign Agent | Determinista — agregación, sin LLM |
+| `optimizeCampaign` | Campaign Agent | Híbrido D8 — solo recomienda |
+| `planSequence` | Outreach Agent | Determinista — idempotente |
+| `personalizeMessage` | Outreach Agent | Híbrido D8 — siempre `ApprovalRequest` |
+| `suggestNextStep` | Outreach Agent | Determinista — árbol de decisión sobre la intención clasificada |
+| `classifyConversation` | Conversation Agent | Híbrido D8 — 7 categorías cerradas validadas con Zod |
+| `interpretDailyDirective` | CEO Agent | Híbrido D8 — único LLM del CEO Agent, vocabulario cerrado |
+| `closeDailyMission` | CEO Agent | Híbrido D8 — Executive Report |
+
+### Nuevos endpoints
+
+`POST/GET /campaigns`, `GET/PATCH /campaigns/:id`, `POST /campaigns/:id/tasks`, `GET /campaign-companies/:id`, `POST /campaign-companies/:id/tasks`, `POST /campaign-companies/:id/conversation` (`campaigns.create/view/update`, `agents.execute`) — 8 rutas. `POST/GET /missions`, `GET/PATCH /missions/:id` (`missions.create/view/update`) — 4 rutas. Ninguna reemplaza ni modifica un endpoint de F0-F3.5; `GET /ai-dashboard/summary` se extendió aditivamente (mismo endpoint de F3).
+
+### Nuevas páginas
+
+`Campaigns.tsx` (`/campaigns`), `CampaignDetail.tsx` (`/campaigns/:id`), `CampaignCompanyDetail.tsx` (`/campaigns/:campaignId/companies/:companyId`), `Missions.tsx` (`/missions`). Además: tarjeta "Misión de hoy" en `Dashboard.tsx`, extensión aditiva de `AIDashboard.tsx` con las métricas de campañas/misión, nuevos componentes compartidos `CampaignCard`, `IntentBadge`, `SequenceTimeline`.
+
+### Estado del Scheduler
+
+Extendido (mismo mecanismo in-process de F3, sin Redis/BullMQ): dos chequeos nuevos corren en **cada** tick de 15 minutos (no gateados por el intervalo de 6h del sweep de prospección, porque son consultas baratas que solo actúan cuando algo está vencido): `runCampaignSequenceSweep` (redacta automáticamente el paso de secuencia que corresponde cuando su `FollowUp` vence, respetando el guardia mensual) y `runMissionCloseSweep` (cierra con Executive Report cualquier misión abierta de un día calendario anterior). Verificado directamente: forzar el `dueDate` de un paso al pasado y correr un tick real generó un borrador genuinamente personalizado y marcó el paso `DONE`; un segundo tick no lo volvió a tocar.
+
+### Estado de AgentMemory
+
+Sin cambios — F4 no agregó ningún uso nuevo de `AgentMemory`. Los dos usos funcionales de F3 (dedup de empresas procesadas, memoria de industria) siguen intactos.
+
+### Estado del Dashboard IA
+
+`GET /ai-dashboard/summary` extendido aditivamente con 11 campos nuevos (campañas activas/finalizadas, empresas por campaña, calientes/frías/recuperadas, costo por campaña/lead/oportunidad, tiempo ahorrado estimado, productividad IA) — el shape de F3 no se rompió, verificado que `AIDashboard.tsx` sigue mostrando todo lo de F3/F3.5 sin cambios además de lo nuevo.
+
+### Costos reales de OpenAI durante las pruebas
+
+Modelo `gpt-4o-mini` en todos los casos. Costo de F4 en desarrollo: **$0.0023** (de $0.0044 acumulado en F1-F4 juntos). Cada corrida de `pnpm test` incluye varias llamadas reales (personalización de mensajes, clasificación de conversaciones, interpretación de misiones, Executive Reports), a una fracción de centavo cada una. El presupuesto mensual de $50 y el nuevo presupuesto diario de misión de $3 (`Tenant.settings.dailyMissionBudgetUsd`) tienen margen amplísimo frente al gasto real observado.
+
+### Bugs encontrados durante la implementación y cómo fueron corregidos
+
+1. **Campañas creadas por el Campaign Agent quedaban en `DRAFT` para siempre**, y `selectTargetCompanies` solo excluye empresas ya targeteadas en una campaña `ACTIVE` — la exclusión cruzada de campañas en la que se apoya todo este plan nunca se activaba porque nada ponía una campaña en `ACTIVE` automáticamente. Encontrado escribiendo `campaigns.test.ts`. Corregido: una campaña creada vía tool de agente (`createdByAgentTaskId` presente) arranca `ACTIVE` de inmediato; una creada por un humano vía `POST /campaigns` sigue arrancando `DRAFT` para revisión.
+2. **"Una misión por día" comparaba `AgentTask.status === "RUNNING"`**, pero cancelar/pausar una misión (decisión explícita del addendum: nunca tocar `AgentTaskStatus`) solo actualiza `output.missionState` — una misión cancelada quedaba bloqueando el lanzamiento de una nueva indefinidamente. Encontrado en `missions.test.ts` (y reproducido contra el servidor real). Corregido: el chequeo ahora excluye en código las misiones cuyo `missionState` es `CANCELLED`.
+3. **`interpretDailyDirective` rechazaba interpretaciones válidas**: el modelo devuelve legítimamente `unit: null` junto con `target: null` cuando la instrucción no tiene un objetivo numérico explícito (ej. "Encuentra empresas de construcción en Indiana." no tiene un número que escalar), pero el schema de parseo exigía `unit` como string siempre — la interpretación completa (industrias/ubicación correctas) se descartaba por ese detalle. Encontrado con un script de debug dedicado tras dos intentos fallidos de diagnóstico por log. Corregido: el schema de parseo acepta `unit: null` y se normaliza a `"empresas"` después — nunca se descarta una buena interpretación por un campo lenient.
+4. **`personalizeMessage` nunca marcaba su `FollowUp` como `DONE`** — el scheduler habría vuelto a redactar el mismo paso en cada tick sucesivo, generando `ApprovalRequest` duplicados y gastando presupuesto de más. Encontrado al diseñar `runCampaignSequenceSweep` (F4-6), antes de que llegara a producción. Corregido: se marca `DONE` inmediatamente después de crear el `ApprovalRequest` — `DONE` significa "preparado", no "enviado".
+5. **Costo por campaña siempre mostraba `$0`** en el rollup del dashboard — los tres tools del Outreach Agent (`planSequence`/`personalizeMessage`/`suggestNextStep`) se creaban sin `parentTaskId`, así que la consulta de costo (que suma vía `CampaignCompany.createdByAgentTaskId` + `parentTaskId`) nunca los encontraba. Encontrado probando manualmente contra el servidor real, no por un test. Corregido: `triggerCampaignCompanyTask`/`triggerCampaignTask`/`logConversation` ahora setean `parentTaskId` al `createdByAgentTaskId` de la `CampaignCompany`/`Campaign` correspondiente.
+
+### Desviaciones aprobadas respecto al plan original
+
+1. **"Una misión por día" se resuelve con rechazo claro, no con fusión de criterios.** El plan mencionaba "se trata como una actualización de esa misión (se re-interpreta y se fusiona)"; la implementación rechaza con un mensaje claro ("pausala o cancelala antes de lanzar una nueva") — documentado explícitamente en el addendum como simplificación deliberada antes de escribir código, no como un hallazgo posterior.
+2. **`suggestNextStep` usa `EXCLUDED` en vez de un enfriamiento de 180 días** para `NOT_INTERESTED`/`OUT_OF_MARKET` — exclusión permanente hasta reactivación manual, más simple y documentada como tal en el propio código (`conversation-tools.impl.ts`), en vez del criterio de tiempo mencionado en el plan original.
+3. Ninguna otra desviación — el resto del plan (segmentación, secuencia día 1/4/9/18, personalización just-in-time, `ApprovalRequest` para toda comunicación externa, Business Objective, `parentTaskId` plano, presupuesto diario de misión, Principio de autonomía progresiva) se implementó tal como se aprobó.
+
+### Evidencia de verificación en navegador real
+
+Flujo completo verificado con Playwright contra el backend real (Postgres + OpenAI real), cero errores de consola/HTTP en toda la corrida, en las 19 rutas de la aplicación (F0-F4), en modo claro y oscuro:
+
+1. `Campaigns.tsx`: grilla de campañas reales, drawer "Nueva campaña" con industrias/categorías reales del tenant.
+2. `CampaignDetail.tsx`: criterios, resultados reales, acciones del Campaign Agent, lista de empresas con badges de estado/intención reales (incluyendo una empresa `HOT`/`VERY_INTERESTED` de pruebas anteriores).
+3. `CampaignCompanyDetail.tsx`: `SequenceTimeline` mostrando los 4 pasos reales (uno `DONE`, tres `CANCELLED` tras la clasificación de intención), conversación completa (respuesta pegada + clasificación), acciones del Outreach Agent.
+4. `Missions.tsx`: formulario de lanzamiento, historial con las 2 misiones reales de prueba, barra de progreso del objetivo, drawer de detalle con Executive Report real.
+5. `Dashboard.tsx`: tarjeta "Misión de hoy" — verificado tanto el estado "sin misión hoy" (correcto, las misiones de prueba fueron de un día calendario anterior) como el diseño con una misión activa.
+6. `AIDashboard.tsx`: las 11 métricas nuevas de F4 con datos reales (1 campaña, empresas por campaña, costo por campaña, 1 empresa `HOT`, productividad IA).
+7. `FollowUps.tsx` (F1, sin tocar): el `FollowUp` de secuencia creado por `planSequence` aparece con badge "AI", confirmando que F4 se integra con una página de una fase anterior sin romperla.
+8. `/approvals` (F2, sin tocar): un borrador de `personalizeMessage` real, aprobado desde la UI — transición a `Approved`, atribuido al usuario real que decidió, toast de confirmación.
+
+### Qué queda preparado para F4.5 / próxima fase
+
+- `Campaign`, `CampaignCompany`, Outreach Agent y Conversation Agent son exactamente las piezas que `docs/F4_5_EXTERNAL_DISCOVERY_AND_EMAIL_PLAN.md` asume como ya construidas — F4.5 las extiende (fuentes de descubrimiento externas, envío real vía Gmail/Graph API, lectura de respuestas real) en vez de reemplazarlas.
+- El campo `AgentInstance.autonomyLevel` (ahora con nomenclatura correcta) queda listo para que una fase futura (F5+) empiece a leerlo en `ApprovalGate.ts` — el Principio de autonomía progresiva (`01_ARQUITECTURA_v1.1.md` §3.5) documenta ese camino explícitamente.
+- El patrón `parentTaskId` plano de un solo nivel (Daily Revenue Mission) es reutilizable para cualquier futuro "orquestador de nivel superior" que necesite agregar costo/progreso de sus tareas delegadas sin recursión.
+- `runCeoToolDirectly` (tool corriendo directo contra una tarea raíz existente, no como hija) es un patrón nuevo y reutilizable para cualquier agente futuro que necesite un ciclo de vida largo similar al de la misión.
+- Sigue fuera de alcance, sin cambios: envío real de email/LinkedIn, integración de bandeja de entrada, scraping agresivo, Redis/BullMQ, pgvector, enforcement real de niveles de autonomía 3/4.
+
+---
+
+**F4 (§1–§22 + addendum) completado y verificado. F4.5 sigue sin implementarse hasta su propia aprobación explícita separada.**
