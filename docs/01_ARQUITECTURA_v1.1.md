@@ -481,6 +481,32 @@ Cada agente tiene un conjunto cerrado de tools tipadas (function calling de Open
 | Gastar dinero (ads, herramientas) | **SIEMPRE humano** |
 | Firmar/modificar contratos | **SIEMPRE humano** |
 
+### 3.5 Principio de autonomía progresiva (agregado en F4, permanente)
+
+Esta sección formaliza — y en un punto corrige la nomenclatura de — la matriz de §3.4. Es un principio **permanente**, aplicable a todo agente presente y futuro, no una decisión de una sola fase.
+
+**Los cuatro niveles:**
+
+| Nivel | Nombre | Qué puede hacer | Valor de `AutonomyLevel` |
+|---|---|---|---|
+| 1 | **Asistido** | Analiza y propone. Ninguna escritura ocurre sin que un humano dispare esa acción puntual, ni siquiera un registro interno. | `ASSISTED` |
+| 2 | **Semiautónomo** | Ejecuta automáticamente acciones internas (crear un lead, calificar una empresa, planificar una secuencia). Toda acción externa exige `ApprovalRequest`. | `SEMI_AUTO` |
+| 3 | **Autónomo supervisado** | Puede ejecutar automáticamente acciones que antes exigían aprobación individual, **si una política explícita ya las pre-aprobó** para ese tipo de acción/tenant. Sigue respetando presupuesto, frecuencia, cumplimiento y auditoría. | `AUTO_WITH_APPROVAL` |
+| 4 | **Autónomo completo** | Puede trabajar horas sin intervención humana y debe cerrar con un reporte ejecutivo. Sigue respetando siempre las políticas configuradas — nivel 4 no significa "sin aprobación jamás", significa "sin que un humano supervise cada paso intermedio". | `FULL_AUTO` |
+
+(`MANUAL`, quinto valor ya existente en el enum desde F0, queda como **Nivel 0** no nombrado en el pedido original: el agente ni siquiera analiza por su cuenta — cada invocación, incluida la de solo lectura, la dispara un humano explícitamente. Reservado para un agente recién creado sin historial todavía, antes de subir a Nivel 1.)
+
+**Corrección de nomenclatura necesaria (hallazgo, no un cambio de comportamiento):** todo agente real construido hasta F4 (Sales, Prospecting, Market Intelligence, y los nuevos de F4: Campaign, Outreach, Conversation) **se comporta hoy, en la práctica, como Nivel 2 (Semiautónomo)** — ejecuta acciones internas automáticamente y solo lo externo pasa por `ApprovalRequest` — aunque su columna `AgentInstance.autonomyLevel`/`AgentDefinition.defaultAutonomy` diga `ASSISTED` (Nivel 1) por una imprecisión de nomenclatura heredada desde F0. Esto **no es un problema de seguridad**: el mecanismo que de verdad decide qué requiere aprobación es la matriz de §3.4, implementada en código como `ApprovalGate.ts` (`requiresApproval(toolName)`), no el valor declarado de autonomía — ese valor ha sido, hasta ahora, puramente descriptivo/informativo, sin ningún efecto en runtime. F4 corrige el dato (`ASSISTED` → `SEMI_AUTO`) para los agentes existentes y nuevos, sin ningún cambio de comportamiento — es una corrección de precisión, no una migración de política.
+
+**El CEO Agent es el dueño de la política, no cada agente individual.** La decisión de qué nivel tiene permitido cada agente **no se codifica dentro de la definición de ese agente** (`packages/agents/src/definitions/*.agent.ts`) — vive como una política configurable que el CEO Agent (o un humano con el permiso adecuado) puede leer y ajustar. El campo que la sostiene ya existe desde F0 y no necesita ningún cambio de schema: `AgentInstance.autonomyLevel` (el nivel vigente) + `AgentInstance.config` (Json, ya libre de forma — puede alojar límites asociados a una promoción de nivel, como tope de costo/frecuencia, sin agregar columnas).
+
+**Camino de implementación progresiva, F4 → F8 (no se construye todo de una vez):**
+- **F4:** se documenta el principio, se corrige la nomenclatura (`SEMI_AUTO` real para los agentes existentes/nuevos), y **no se construye ningún mecanismo nuevo de enforcement** — `ApprovalGate.ts` sigue siendo la tabla estática de §3.4, sin leer todavía `autonomyLevel` en runtime. La Daily Revenue Mission (ver `F4_AUTONOMOUS_OUTREACH_PLAN.md`) es el primer flujo que **se comporta** como Nivel 4 (horas sin intervención, reporte ejecutivo de cierre) sin que ningún agente individual cambie de nivel declarado — la autonomía de nivel 4 aplica a la *misión como orquestación*, no a un agente que de repente deja de necesitar aprobaciones.
+- **F5–F7 (candidatos naturales, a definir en su momento):** `ApprovalGate.ts` empieza a leer `AgentInstance.autonomyLevel` real antes de aplicar la tabla estática de §3.4 — un agente en Nivel 3 para un tipo de acción específico (ej. "reenviar el seguimiento del día 4 de una secuencia ya aprobada una vez para esa campaña") deja de generar una `ApprovalRequest` nueva cada vez, siempre que la política de ese nivel lo cubra explícitamente.
+- **F8 (o cuando el historial de precisión lo justifique — mismo criterio que ya declaraba el riesgo #11 original de este documento):** un agente puede promoverse a Nivel 4 para un conjunto acotado de acciones, con presupuesto/frecuencia/cumplimiento como límites duros, nunca removibles por el propio agente.
+
+Ningún nivel, en ningún punto de este camino, remueve la frontera ya establecida desde F2: **fijar tarifas, firmar contratos, aprobar payroll, rechazar candidatos y gastar dinero siguen "SIEMPRE humano" sin excepción** (última fila de §3.4) — la autonomía progresiva sube el techo de lo que se auto-ejecuta dentro de lo que la matriz ya permite, nunca reescribe la matriz misma.
+
 ---
 
 ## 4. Roles y permisos
@@ -686,7 +712,7 @@ WebSocket namespaces: `/tenant/{id}` con eventos `agent.task.update`, `approval.
 
 ### Operativos / de producto
 10. **Scope creep** — este documento existe para eso: nada fuera de la fase activa entra sin actualizar el roadmap.
-11. **Confianza del usuario en agentes:** si un agente falla feo al inicio, el usuario apaga la IA. Mitigación: lanzar agentes en modo ASSISTED por defecto y subir autonomía con historial de precisión.
+11. **Confianza del usuario en agentes:** si un agente falla feo al inicio, el usuario apaga la IA. Mitigación: lanzar agentes en modo ASSISTED por defecto y subir autonomía con historial de precisión — este es, literalmente, el "Principio de autonomía progresiva" formalizado en §3.5 (agregado en F4).
 12. **Competencia** (Bullhorn, Avionté, Tempworks + copilots): el diferenciador es la orquestación de agentes con aprobaciones, no "un chatbot más" — proteger ese foco.
 13. **Cold start de datos de pricing:** sin historial de colocaciones, el Pricing Agent no tiene datos internos. Mitigación: benchmarks públicos de BLS OES (por ocupación y área metro) + carga manual de tarifas conocidas del mercado; el peso del historial interno crece automáticamente con cada colocación. El agente debe declarar la confianza de cada recomendación según la calidad de datos disponible.
 
