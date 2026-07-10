@@ -5,33 +5,30 @@ import {
   type AgentTool,
   type DiscoveredCompany,
   type DiscoveredField,
-  type FieldStatus,
   type LLMProvider,
 } from "@ai-staffing-os/agents";
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { AppError } from "../../../core/errors";
+import { env } from "../../../core/env";
 import type { UsageAccumulator } from "../usage";
+import { getDataProviderBudgetStatus } from "../data-provider-budget";
+import { searchGooglePlaces } from "./discovery-providers/google-places";
+import { searchOverpass } from "./discovery-providers/overpass";
+import { emptyResult, type ProviderSearchResult } from "./discovery-providers/types";
+
+// Re-exportados para no romper discovery.test.ts ni nada que ya importe
+// estos nombres desde acá — la lógica real vive en discovery-providers/.
+export { extractFieldsFromOsmTags as extractFields } from "./discovery-providers/overpass";
 
 /**
- * F4.5A: Discovery Agent — implementación real contra OpenStreetMap
- * Overpass API (ver docs/F4_5_EXTERNAL_DISCOVERY_AND_EMAIL_PLAN.md,
- * addendum del piloto, para por qué esta fuente y no Apollo/Google Places).
- * Gratis, sin API key, sin cuenta de facturación — evita el bloqueante de
- * "necesito una credencial paga" para demostrar el flujo end-to-end.
+ * F4.5: Discovery Agent — orquesta proveedores de descubrimiento externo.
+ * A partir de F4.5, Google Places (comercial) es el proveedor PRIMARIO;
+ * Overpass (OpenStreetMap, gratis) queda como respaldo — solo se consulta
+ * si Google Places no está configurada, se quedó sin presupuesto, o no
+ * encontró nada para esa industria. Ver
+ * docs/F4_5_EXTERNAL_DISCOVERY_AND_EMAIL_PLAN.md.
  */
-const OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter";
-
-// Bugfix de ciclo de vida (misión atascada en RUNNING): antes, fetch()
-// no tenía ningún timeout — una conexión que el servidor acepta pero
-// nunca responde colgaba la llamada, la tarea, y la misión entera para
-// siempre. Ahora cada intento individual tiene un límite duro de 30s, y
-// como mucho 3 reintentos (no 5 como antes) con backoff — así el peor
-// caso por patrón queda acotado (~30s × 4 intentos + backoff ≈ 3 min, no
-// infinito).
-const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_RETRIES = 3;
-const BACKOFF_MS = [2000, 5000, 10000];
 
 function log(taskId: string, event: string, data?: Record<string, unknown>): void {
   console.log(`[discovery] ${event}`, JSON.stringify({ taskId, ...data }));
@@ -39,7 +36,10 @@ function log(taskId: string, event: string, data?: Record<string, unknown>): voi
 
 // Solo los estados que ya aparecen en los datos del CRM (seed) — una
 // misión que pida un estado fuera de este mapa falla explícitamente en
-// vez de adivinar el nombre completo para el filtro de área de Overpass.
+// vez de adivinar el nombre completo para el filtro de área de Overpass
+// (Google Places funcionaría con solo el código de estado, pero se
+// mantiene el mismo gate para los dos proveedores — un solo lugar que
+// mantener, mismo alcance declarado en el piloto).
 const US_STATE_NAMES: Record<string, string> = {
   IL: "Illinois",
   IN: "Indiana",
@@ -51,165 +51,7 @@ const US_STATE_NAMES: Record<string, string> = {
   MO: "Missouri",
 };
 
-// F4.5A §"Alcance prioritario": Manufacturing, Warehouse/Logistics,
-// Construction — cada uno con más de un patrón de tag porque OSM no tiene
-// una única convención por industria; se prueban en orden y se degrada
-// por patrón (nunca se inventa un resultado si uno falla).
-const OVERPASS_PATTERNS: Record<string, Array<{ key: string; value: string }>> = {
-  Manufacturing: [{ key: "office", value: "company" }],
-  "Warehouse/Logistics": [
-    { key: "industrial", value: "warehouse" },
-    { key: "building", value: "warehouse" },
-  ],
-  Construction: [
-    { key: "craft", value: "builder" },
-    { key: "office", value: "construction_company" },
-  ],
-};
-
-interface OverpassElement {
-  type: string;
-  id: number;
-  tags?: Record<string, string>;
-}
-
-function isCancellation(missionSignal: AbortSignal | undefined): boolean {
-  return !!missionSignal?.aborted;
-}
-
-async function fetchOverpassPattern(
-  taskId: string,
-  stateName: string,
-  pattern: { key: string; value: string },
-  limit: number,
-  missionSignal: AbortSignal | undefined,
-): Promise<{ elements: OverpassElement[] } | { error: string; cancelled?: boolean }> {
-  const query = `[out:json][timeout:25];area["name"="${stateName}"]["admin_level"="4"]->.searchArea;(node["${pattern.key}"="${pattern.value}"](area.searchArea);way["${pattern.key}"="${pattern.value}"](area.searchArea););out center ${limit} tags;`;
-  const patternLabel = `${pattern.key}=${pattern.value}`;
-
-  // La instancia pública comparte cuota con el resto de internet —
-  // 406/429/504 observados son fair-use throttling transitorio (medido:
-  // ~20-50% de éxito según el momento, la misma query exacta vuelve a
-  // funcionar segundos después), no un error de sintaxis.
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    if (isCancellation(missionSignal)) {
-      log(taskId, "provider request cancelled", { pattern: patternLabel, attempt });
-      return { error: "cancelled by user", cancelled: true };
-    }
-
-    log(taskId, "provider requested", { provider: "OpenStreetMap Overpass", pattern: patternLabel, attempt, maxAttempts: MAX_RETRIES });
-
-    // Bugfix: antes no había NINGÚN timeout — una conexión que el
-    // servidor acepta pero nunca responde colgaba esto para siempre.
-    // AbortSignal.any combina el timeout duro de esta llamada con la
-    // señal de cancelación de la misión (si la hay) — lo que dispare
-    // primero corta la llamada.
-    const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-    const signal = missionSignal ? AbortSignal.any([timeoutSignal, missionSignal]) : timeoutSignal;
-
-    try {
-      // "connection: close" fuerza una conexión TCP nueva en cada
-      // intento — sin esto, fetch reutiliza keep-alive hacia el mismo
-      // backend detrás del DNS round-robin de overpass-api.de, así que un
-      // reintento que "vuelve a preguntarle al mismo server sobrecargado"
-      // nunca cambia de resultado.
-      const res = await fetch(OVERPASS_ENDPOINT, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", connection: "close" },
-        body: `data=${encodeURIComponent(query)}`,
-        signal,
-      });
-
-      log(taskId, "provider response", { pattern: patternLabel, attempt, status: res.status, ok: res.ok });
-
-      if (!res.ok) {
-        if (attempt < MAX_RETRIES) {
-          await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
-          continue;
-        }
-        return { error: `HTTP ${res.status}` };
-      }
-      const json = (await res.json()) as { elements: OverpassElement[] };
-      return { elements: json.elements ?? [] };
-    } catch (err) {
-      if (missionSignal?.aborted) {
-        log(taskId, "provider request cancelled mid-flight", { pattern: patternLabel, attempt });
-        return { error: "cancelled by user", cancelled: true };
-      }
-      const timedOut = err instanceof Error && err.name === "TimeoutError";
-      const errorLabel = timedOut ? `timeout after ${REQUEST_TIMEOUT_MS}ms` : err instanceof Error ? err.message : "unknown fetch error";
-      log(taskId, "provider response", { pattern: patternLabel, attempt, error: errorLabel });
-
-      if (attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
-        continue;
-      }
-      return { error: errorLabel };
-    }
-  }
-  return { error: "exhausted retries" };
-}
-
-function isValidUrl(value: string): boolean {
-  try {
-    new URL(value.startsWith("http") ? value : `https://${value}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function field(status: FieldStatus, value: string | number | null): DiscoveredField {
-  return { status, value };
-}
-
-/**
- * Extrae campos de un elemento OSM crudo — cada campo queda CONFIRMED (si
- * el tag existe y pasa validación de formato), o NOT_FOUND. Nunca
- * INFERRED acá: OSM no da lugar a inferencia, solo lectura literal de
- * tags o ausencia. hiringSignals y contactos con nombre siempre son
- * NOT_FOUND — OSM no modela esos datos (ver addendum del plan).
- */
-export function extractFields(
-  tags: Record<string, string>,
-  fallbackState: string,
-): { name: string | null; fields: Record<string, DiscoveredField> } {
-  const name = tags.name ?? tags.operator ?? null;
-
-  const websiteRaw = tags.website ?? tags["contact:website"] ?? null;
-  const website = websiteRaw && isValidUrl(websiteRaw) ? websiteRaw : null;
-
-  const phoneRaw = tags.phone ?? tags["contact:phone"] ?? null;
-
-  const emailRaw = tags.email ?? tags["contact:email"] ?? null;
-  const email = emailRaw && EMAIL_RE.test(emailRaw) ? emailRaw : null;
-
-  const city = tags["addr:city"] ?? null;
-  const state = tags["addr:state"] ?? fallbackState;
-  const street = tags["addr:housenumber"] && tags["addr:street"] ? `${tags["addr:housenumber"]} ${tags["addr:street"]}` : (tags["addr:street"] ?? null);
-  const postcode = tags["addr:postcode"] ?? null;
-  const hasFullAddress = !!(street && city);
-
-  return {
-    name,
-    fields: {
-      name: name ? field("CONFIRMED", name) : field("NOT_FOUND", null),
-      website: website ? field("CONFIRMED", website) : field("NOT_FOUND", null),
-      phone: phoneRaw ? field("CONFIRMED", phoneRaw) : field("NOT_FOUND", null),
-      email: email ? field("CONFIRMED", email) : field("NOT_FOUND", null),
-      city: city ? field("CONFIRMED", city) : field("NOT_FOUND", null),
-      state: state ? field("CONFIRMED", state) : field("NOT_FOUND", null),
-      address: hasFullAddress ? field("CONFIRMED", `${street}, ${city}, ${state}${postcode ? ` ${postcode}` : ""}`) : field("NOT_FOUND", null),
-      hiringSignals: field("NOT_FOUND", null),
-      visiblePositions: field("NOT_FOUND", null),
-      contactName: field("NOT_FOUND", null),
-    },
-  };
-}
-
-/** Score determinista (nunca lo decide el LLM) — ver addendum del plan. */
+/** Score determinista (nunca lo decide el LLM) — igual para cualquier proveedor. */
 export function computeConfidenceScore(fields: Record<string, DiscoveredField>): number {
   let score = 0.5; // confirmado que existe, con nombre
   if (fields.website?.status === "CONFIRMED") score += 0.15;
@@ -286,88 +128,117 @@ export function createDiscoveryTools(deps: DiscoveryToolDeps): AgentTool[] {
         outer: for (const industryName of input.industryNames) {
           const industry = industryByName.get(industryName);
           if (!industry) continue; // nunca se inventa una industria que no existe en el CRM
+          if (companiesCreated.length >= limit) break outer;
 
-          const patterns = OVERPASS_PATTERNS[industryName] ?? [];
-          for (const pattern of patterns) {
-            if (companiesCreated.length >= limit) break outer;
-            if (isCancellation(deps.abortSignal)) {
-              cancelled = true;
-              break outer;
-            }
+          const remaining = limit - companiesCreated.length;
+          let result: ProviderSearchResult = emptyResult();
+          let origin: "API_PROVIDER" | "EXTERNAL_DISCOVERY" = "EXTERNAL_DISCOVERY";
 
-            const remaining = limit - companiesCreated.length;
-            const result = await fetchOverpassPattern(deps.taskId, stateName, pattern, remaining * 3, deps.abortSignal);
-            if ("error" in result) {
-              patternsFailed.push(`${industryName}:${pattern.key}=${pattern.value} (${result.error})`);
-              if (result.cancelled) {
+          // 1. Google Places primero — solo si está configurada la key y
+          // no se pasó el presupuesto mensual del proveedor de datos.
+          if (env.GOOGLE_PLACES_API_KEY) {
+            const budgetStatus = await getDataProviderBudgetStatus(ctx.tenantId);
+            if (budgetStatus.exceeded) {
+              log(deps.taskId, "data provider budget exceeded, falling back to Overpass", { ...budgetStatus });
+              patternsFailed.push(`${industryName}: presupuesto de proveedor de datos excedido ($${budgetStatus.spentUsd.toFixed(2)}/$${budgetStatus.budgetUsd.toFixed(2)}), usando Overpass`);
+            } else {
+              const placesResult = await searchGooglePlaces(
+                { taskId: deps.taskId, industryName, stateCode: input.state.toUpperCase(), stateName, city: input.city, limit: remaining, abortSignal: deps.abortSignal },
+                env.GOOGLE_PLACES_API_KEY,
+              );
+              if (placesResult.costUsd > 0) deps.usage.recordExternalCost(placesResult.costUsd);
+              if (placesResult.cancelled) {
                 cancelled = true;
                 break outer;
               }
+              patternsFailed.push(...placesResult.patternsFailed);
+              if (placesResult.candidates.length > 0) {
+                result = placesResult;
+                origin = "API_PROVIDER";
+              }
+            }
+          }
+
+          // 2. Overpass como respaldo — solo si Google Places no estaba
+          // configurada, se quedó sin presupuesto, o no encontró nada.
+          if (result.candidates.length === 0) {
+            const overpassResult = await searchOverpass({
+              taskId: deps.taskId,
+              industryName,
+              stateCode: input.state.toUpperCase(),
+              stateName,
+              city: input.city,
+              limit: remaining,
+              abortSignal: deps.abortSignal,
+            });
+            if (overpassResult.cancelled) {
+              cancelled = true;
+              break outer;
+            }
+            patternsFailed.push(...overpassResult.patternsFailed);
+            if (overpassResult.candidates.length > 0) {
+              result = overpassResult;
+              origin = "EXTERNAL_DISCOVERY";
+            }
+          }
+
+          for (const s of result.sourcesUsed) sourcesUsed.add(s);
+
+          for (const candidate of result.candidates) {
+            if (companiesCreated.length >= limit) break;
+            candidatesFound++;
+
+            if (!candidate.name) {
+              insufficientDataSkipped++;
               continue;
             }
 
-            const sourceUrl = `${OVERPASS_ENDPOINT}?data=${encodeURIComponent(`[${pattern.key}=${pattern.value}] area=${stateName}`)}`;
-            sourcesUsed.add(`OpenStreetMap Overpass (${pattern.key}=${pattern.value}, ${stateName})`);
-            log(deps.taskId, "records found", { pattern: `${pattern.key}=${pattern.value}`, count: result.elements.length });
-
-            for (const element of result.elements) {
-              if (companiesCreated.length >= limit) break;
-              candidatesFound++;
-
-              const tags = element.tags ?? {};
-              const { name, fields } = extractFields(tags, input.state.toUpperCase());
-              if (!name) {
-                insufficientDataSkipped++;
-                continue;
-              }
-
-              const existing = await scopedDb.company.findFirst({
-                where: { name: { equals: name, mode: "insensitive" }, industryId: industry.id },
-              });
-              if (existing) {
-                duplicatesSkipped++;
-                log(deps.taskId, "duplicates discarded", { name, existingCompanyId: existing.id });
-                continue;
-              }
-
-              const confidenceScore = computeConfidenceScore(fields);
-              const website = fields.website?.status === "CONFIRMED" ? (fields.website.value as string) : null;
-              const phone = fields.phone?.status === "CONFIRMED" ? (fields.phone.value as string) : null;
-              const email = fields.email?.status === "CONFIRMED" ? (fields.email.value as string) : null;
-              const city = fields.city?.status === "CONFIRMED" ? (fields.city.value as string) : null;
-
-              const company = await scopedDb.company.create({
-                data: {
-                  tenantId: ctx.tenantId,
-                  name,
-                  industryId: industry.id,
-                  status: "LEAD",
-                  website,
-                  phone,
-                  email,
-                  city,
-                  state: input.state.toUpperCase(),
-                  origin: "EXTERNAL_DISCOVERY",
-                  sourceUrl,
-                  discoveredAt: new Date(),
-                  discoveredByAgentTaskId: deps.taskId,
-                  verificationStatus: "CONFIRMED",
-                  confidenceScore,
-                  lastVerifiedAt: new Date(),
-                },
-              });
-
-              await auditAgentAction({
-                agentInstanceId: deps.agentInstanceId,
-                action: "company.discovered_by_agent",
-                entityType: "company",
-                entityId: company.id,
-                after: { name, sourceUrl, confidenceScore },
-              });
-
-              log(deps.taskId, "records persisted", { companyId: company.id, name, confidenceScore });
-              companiesCreated.push({ companyId: company.id, name, fields, sourceUrl, confidenceScore });
+            const existing = await scopedDb.company.findFirst({
+              where: { name: { equals: candidate.name, mode: "insensitive" }, industryId: industry.id },
+            });
+            if (existing) {
+              duplicatesSkipped++;
+              log(deps.taskId, "duplicates discarded", { name: candidate.name, existingCompanyId: existing.id });
+              continue;
             }
+
+            const confidenceScore = computeConfidenceScore(candidate.fields);
+            const website = candidate.fields.website?.status === "CONFIRMED" ? (candidate.fields.website.value as string) : null;
+            const phone = candidate.fields.phone?.status === "CONFIRMED" ? (candidate.fields.phone.value as string) : null;
+            const email = candidate.fields.email?.status === "CONFIRMED" ? (candidate.fields.email.value as string) : null;
+            const city = candidate.fields.city?.status === "CONFIRMED" ? (candidate.fields.city.value as string) : null;
+
+            const company = await scopedDb.company.create({
+              data: {
+                tenantId: ctx.tenantId,
+                name: candidate.name,
+                industryId: industry.id,
+                status: "LEAD",
+                website,
+                phone,
+                email,
+                city,
+                state: input.state.toUpperCase(),
+                origin,
+                sourceUrl: candidate.sourceUrl,
+                discoveredAt: new Date(),
+                discoveredByAgentTaskId: deps.taskId,
+                verificationStatus: "CONFIRMED",
+                confidenceScore,
+                lastVerifiedAt: new Date(),
+              },
+            });
+
+            await auditAgentAction({
+              agentInstanceId: deps.agentInstanceId,
+              action: "company.discovered_by_agent",
+              entityType: "company",
+              entityId: company.id,
+              after: { name: candidate.name, sourceUrl: candidate.sourceUrl, confidenceScore, origin },
+            });
+
+            log(deps.taskId, "records persisted", { companyId: company.id, name: candidate.name, confidenceScore, origin });
+            companiesCreated.push({ companyId: company.id, name: candidate.name, fields: candidate.fields, sourceUrl: candidate.sourceUrl, confidenceScore });
           }
         }
 

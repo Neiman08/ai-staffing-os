@@ -16,4 +16,15 @@ export class UsageAccumulator {
         ? estimateCostUsd(model, result.promptTokens, result.completionTokens)
         : estimateCostUsdBlended(model, result.tokensUsed);
   }
+
+  /**
+   * F4.5: costo real de un proveedor de datos (Google Places), no de un
+   * LLM — no suma tokens, solo dinero. Se persiste en el mismo
+   * AgentTask.costUsd (una tarea puede gastar plata sin gastar tokens);
+   * getDataProviderBudgetStatus la lee filtrando por type=discover_companies
+   * para no mezclarla con el presupuesto de IA.
+   */
+  recordExternalCost(amountUsd: number): void {
+    this.costUsd += amountUsd;
+  }
 }

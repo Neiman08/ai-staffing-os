@@ -8,6 +8,10 @@ const envSchema = z.object({
   // tests that never invoke the Sales Agent) don't break. Enforced instead
   // at the point of actual use (task-runner refuses to call OpenAI without it).
   OPENAI_API_KEY: z.string().optional(),
+  // F4.5: proveedor comercial primario del Discovery Agent — opcional acá
+  // por el mismo motivo que OPENAI_API_KEY. Sin configurar, discoverCompaniesTool
+  // usa únicamente Overpass (gratis) como fuente.
+  GOOGLE_PLACES_API_KEY: z.string().optional(),
 });
 
 function loadEnv() {

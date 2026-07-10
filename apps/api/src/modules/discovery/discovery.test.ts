@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { createAndRunTaskSync } from "../agents/task-executor";
 import { extractFields, computeConfidenceScore } from "../agents/tools/discovery-tools.impl";
+import { extractFieldsFromGooglePlace } from "../agents/tools/discovery-providers/google-places";
 
 const createdCompanyIds: string[] = [];
 
@@ -105,16 +106,61 @@ test("computeConfidenceScore: base 0.5 solo con nombre, sube con cada campo conf
 });
 
 // ============================================================
-// Integración real: una llamada real y acotada a Overpass API. La fuente
-// pública compartida puede estar temporalmente degradada (rate limiting
-// documentado en el addendum del plan) — la propiedad que se prueba es
-// que el AgentTask SIEMPRE termina DONE con una forma de salida honesta
-// (nunca FAILED por una fuente caída, nunca inventa resultados), y que
-// CUALQUIER empresa creada (si la fuente respondió) tiene procedencia
-// completa y ningún Contact inventado.
+// Unidad: mapeo de un Place crudo de Google (sin red) — mismo principio
+// "nunca inventar" que Overpass, pero con el shape distinto de la API.
 // ============================================================
 
-test("discoverCompanies (real Overpass call): siempre termina DONE, nunca inventa datos, provenance completa si crea algo", async () => {
+test("extractFieldsFromGooglePlace: place completo queda CONFIRMED, nunca inventa un valor", () => {
+  const { name, fields } = extractFieldsFromGooglePlace(
+    {
+      id: "place-1",
+      displayName: { text: "Acme Manufacturing" },
+      formattedAddress: "100 Main St, Chicago, IL 60601, USA",
+      websiteUri: "https://acme-mfg.example.com",
+      internationalPhoneNumber: "+1 555-0100",
+      googleMapsUri: "https://maps.google.com/?cid=123",
+      addressComponents: [
+        { longText: "Chicago", shortText: "Chicago", types: ["locality"] },
+        { longText: "Illinois", shortText: "IL", types: ["administrative_area_level_1"] },
+      ],
+    },
+    "IL",
+  );
+  assert.equal(name, "Acme Manufacturing");
+  assert.deepEqual(fields.name, { status: "CONFIRMED", value: "Acme Manufacturing" });
+  assert.deepEqual(fields.website, { status: "CONFIRMED", value: "https://acme-mfg.example.com" });
+  assert.equal(fields.phone!.status, "CONFIRMED");
+  assert.equal(fields.address!.status, "CONFIRMED");
+  assert.deepEqual(fields.city, { status: "CONFIRMED", value: "Chicago" });
+  // Google Places nunca da esto — siempre NOT_FOUND, nunca inferido.
+  assert.deepEqual(fields.email, { status: "NOT_FOUND", value: null });
+  assert.deepEqual(fields.hiringSignals, { status: "NOT_FOUND", value: null });
+  assert.deepEqual(fields.contactName, { status: "NOT_FOUND", value: null });
+  assert.deepEqual(fields.visiblePositions, { status: "NOT_FOUND", value: null });
+});
+
+test("extractFieldsFromGooglePlace: sin displayName, name es null (no se crea Company sin nombre real)", () => {
+  const { name } = extractFieldsFromGooglePlace({ id: "place-2", websiteUri: "https://example.com" }, "IL");
+  assert.equal(name, null);
+});
+
+test("extractFieldsFromGooglePlace: websiteUri inválido queda NOT_FOUND, nunca se inventa un valor de reemplazo", () => {
+  const { fields } = extractFieldsFromGooglePlace({ id: "place-3", displayName: { text: "X" }, websiteUri: "not a url" }, "IL");
+  assert.deepEqual(fields.website, { status: "NOT_FOUND", value: null });
+});
+
+// ============================================================
+// Integración real: una llamada real y acotada al proveedor de
+// descubrimiento configurado. A partir de F4.5, Google Places es
+// primario (si GOOGLE_PLACES_API_KEY está configurada) y Overpass queda
+// de respaldo — el test no asume cuál de los dos respondió, solo que el
+// AgentTask SIEMPRE termina DONE con una forma de salida honesta (nunca
+// FAILED por una fuente caída, nunca inventa resultados), y que
+// CUALQUIER empresa creada tiene procedencia completa y ningún Contact
+// inventado.
+// ============================================================
+
+test("discoverCompanies (llamada real al proveedor configurado): siempre termina DONE, nunca inventa datos, provenance completa si crea algo", async () => {
   const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
   const task = await createAndRunTaskSync(salesUser.tenantId, salesUser.id, {
     agentKey: "discovery",
@@ -139,14 +185,15 @@ test("discoverCompanies (real Overpass call): siempre termina DONE, nunca invent
   for (const created of output.companiesCreated) {
     createdCompanyIds.push(created.companyId);
     const company = await prisma.company.findUniqueOrThrow({ where: { id: created.companyId } });
-    assert.equal(company.origin, "EXTERNAL_DISCOVERY");
+    // Google Places -> API_PROVIDER, Overpass (respaldo) -> EXTERNAL_DISCOVERY.
+    assert.ok(["API_PROVIDER", "EXTERNAL_DISCOVERY"].includes(company.origin));
     assert.equal(company.verificationStatus, "CONFIRMED");
     assert.ok(company.sourceUrl, "toda empresa descubierta debe guardar su fuente exacta");
     assert.ok(company.confidenceScore != null && company.confidenceScore >= 0.5 && company.confidenceScore <= 1);
     assert.equal(company.discoveredByAgentTaskId, task.id);
 
-    // Nunca un Contact inventado — OSM no da nombres de personas, este
-    // piloto jamás debe crear uno a partir de esta fuente.
+    // Nunca un Contact inventado — ni Google Places ni Overpass dan
+    // nombres de personas, este piloto jamás debe crear uno de acá.
     const contacts = await prisma.contact.count({ where: { companyId: created.companyId } });
     assert.equal(contacts, 0);
 
