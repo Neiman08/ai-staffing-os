@@ -96,18 +96,18 @@ export default function Dashboard() {
 
         {aiSummary && (
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-            <StatCard icon={Bot} label="Analizadas hoy" value={String(aiSummary.companiesAnalyzedToday)} accent="primary" />
-            <StatCard icon={Users} label="Leads IA hoy" value={String(aiSummary.leadsCreatedByAiToday)} accent="primary" />
+            <StatCard icon={Bot} label="Analizadas" value={String(aiSummary.companiesAnalyzedToday)} hint="Hoy" accent="primary" />
+            <StatCard icon={Users} label="Leads IA" value={String(aiSummary.leadsCreatedByAiToday)} hint="Hoy" accent="primary" />
             <StatCard
               icon={Trophy}
               label="ROI IA (est.)"
               value={aiSummary.roiEstimate.ratio != null ? `${aiSummary.roiEstimate.ratio.toFixed(1)}x` : "—"}
               accent="emerald"
             />
-            <StatCard icon={Mail} label="Correos listos" value={String(aiSummary.pendingApprovals)} accent="amber" />
+            <StatCard icon={Mail} label="Correos IA" value={String(aiSummary.pendingApprovals)} hint="Listos" accent="amber" />
             <StatCard
               icon={DollarSign}
-              label="Costo IA este mes"
+              label="Costo IA (mes)"
               value={`$${aiSummary.costUsdThisMonth.toFixed(4)}`}
               hint={`de $${aiSummary.budgetUsd.toFixed(2)}`}
               accent="primary"
