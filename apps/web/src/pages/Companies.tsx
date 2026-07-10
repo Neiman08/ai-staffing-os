@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  CompanyDetail,
   CompanyListItem,
   CreateCompanyInput,
   ImportCompaniesResult,
@@ -13,21 +14,51 @@ import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Pagination } from "@/components/shared/Pagination";
-import { LoadingTable } from "@/components/shared/LoadingTable";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { normalizeImportRow, parseSpreadsheetFile } from "@/lib/importCompanies";
-import { Plus, Upload } from "lucide-react";
+import { timeAgo } from "@/lib/agentTaskStats";
+import { Bot, Briefcase, Calendar, Plus, Sparkles, Upload } from "lucide-react";
 
 const COMPANY_SIZES = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"];
+
+const LOGO_PALETTE = [
+  "bg-primary/15 text-primary",
+  "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  "bg-pink-500/15 text-pink-600 dark:text-pink-400",
+];
+
+function logoTone(name: string): string {
+  const sum = [...name].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return LOGO_PALETTE[sum % LOGO_PALETTE.length]!;
+}
+
+function hiringProbability(score: number | null): { label: string; variant: NonNullable<BadgeProps["variant"]> } {
+  if (score == null) return { label: "Sin score", variant: "neutral" };
+  if (score >= 70) return { label: "Alta", variant: "success" };
+  if (score >= 40) return { label: "Media", variant: "warning" };
+  return { label: "Baja", variant: "danger" };
+}
+
+function priorityLevel(company: CompanyListItem): { label: string; variant: NonNullable<BadgeProps["variant"]> } {
+  if (company.nextFollowUp && new Date(company.nextFollowUp.dueDate) < new Date()) {
+    return { label: "Urgente", variant: "danger" };
+  }
+  if (company.openOpportunityCount > 0) {
+    return { label: "Prioridad media", variant: "warning" };
+  }
+  return { label: "Prioridad baja", variant: "neutral" };
+}
 
 function NewCompanyForm({ onCreated }: { onCreated: () => void }) {
   const { toast } = useToast();
@@ -223,6 +254,113 @@ function ImportCompaniesDrawer({ open, onClose }: { open: boolean; onClose: () =
   );
 }
 
+function CompanyCard({
+  company,
+  detail,
+  onClick,
+}: {
+  company: CompanyListItem;
+  detail: CompanyDetail | undefined;
+  onClick: () => void;
+}) {
+  const probability = hiringProbability(company.commercialScore);
+  const priority = priorityLevel(company);
+  const isAiTouched =
+    !!detail &&
+    (detail.opportunities.some((o) => o.createdByAgentTaskId) ||
+      detail.upcomingFollowUps.some((f) => f.createdByAgentTaskId));
+
+  return (
+    <Card className="card-hover flex cursor-pointer flex-col gap-3 p-4" onClick={onClick}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-base font-semibold ${logoTone(company.name)}`}
+          >
+            {company.name.charAt(0).toUpperCase()}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate font-medium" title={company.name}>
+              {company.name}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">{company.industryName}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>
+          {isAiTouched && (
+            <Badge variant="primary" title="Con actividad del Prospecting Agent">
+              <Bot className="mr-0.5 h-3 w-3" />
+              AI
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 px-3 py-2">
+        <div>
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Score IA</p>
+          <p className="text-2xl font-semibold tabular-nums tracking-tight">
+            {company.commercialScore != null ? company.commercialScore : "—"}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <Badge variant={probability.variant}>Contratación: {probability.label}</Badge>
+          <Badge variant={priority.variant}>{priority.label}</Badge>
+        </div>
+      </div>
+
+      <div className="space-y-1.5 text-xs text-muted-foreground">
+        <p className="flex items-center gap-1.5">
+          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+          <span className="line-clamp-2">
+            {detail
+              ? (detail.commercialScoreReason ?? "Sin señales registradas todavía.")
+              : "Cargando señales…"}
+          </span>
+        </p>
+        <p className="flex items-center gap-1.5">
+          <Calendar className="h-3.5 w-3.5 shrink-0" />
+          {company.nextFollowUp
+            ? `Próxima acción: ${formatStatusLabel(company.nextFollowUp.type)} · ${new Date(company.nextFollowUp.dueDate).toLocaleDateString()}`
+            : "Sin próxima acción sugerida"}
+        </p>
+        <p className="flex items-center gap-1.5">
+          <Briefcase className="h-3.5 w-3.5 shrink-0" />
+          {company.openOpportunityCount} oportunidad(es) abierta(s)
+        </p>
+      </div>
+
+      <div className="mt-auto flex items-center justify-between border-t border-border pt-2 text-xs text-muted-foreground">
+        <span>{company.city && company.state ? `${company.city}, ${company.state}` : "Ubicación —"}</span>
+        <span>{company.lastActivityAt ? `Actividad ${timeAgo(company.lastActivityAt)}` : "Sin actividad"}</span>
+      </div>
+    </Card>
+  );
+}
+
+function CompanyCardGrid({ companies, onOpen }: { companies: CompanyListItem[]; onOpen: (id: string) => void }) {
+  const detailQueries = useQueries({
+    queries: companies.map((c) => ({
+      queryKey: ["company", c.id],
+      queryFn: () => apiFetch<CompanyDetail>(`/companies/${c.id}`),
+    })),
+  });
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {companies.map((company, i) => (
+        <CompanyCard
+          key={company.id}
+          company={company}
+          detail={detailQueries[i]?.data}
+          onClick={() => onOpen(company.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function Companies() {
   const navigate = useNavigate();
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
@@ -254,59 +392,20 @@ export default function Companies() {
           </div>
         }
       />
-      <Card>
-        {isLoading ? (
-          <LoadingTable />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Nombre</TableHead>
-                <TableHead>Industria</TableHead>
-                <TableHead>Ubicación</TableHead>
-                <TableHead>Tamaño</TableHead>
-                <TableHead>Score</TableHead>
-                <TableHead>Oportunidades abiertas</TableHead>
-                <TableHead>Próxima acción</TableHead>
-                <TableHead>Último contacto</TableHead>
-                <TableHead>Estado</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data?.items.map((company) => (
-                <TableRow
-                  key={company.id}
-                  className="cursor-pointer"
-                  onClick={() => navigate(`/companies/${company.id}`)}
-                >
-                  <TableCell className="font-medium">{company.name}</TableCell>
-                  <TableCell className="text-muted-foreground">{company.industryName}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.city && company.state ? `${company.city}, ${company.state}` : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.estimatedSize ? formatStatusLabel(company.estimatedSize) : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.commercialScore != null ? company.commercialScore : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{company.openOpportunityCount}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.nextFollowUp
-                      ? `${formatStatusLabel(company.nextFollowUp.type)} · ${new Date(company.nextFollowUp.dueDate).toLocaleDateString()}`
-                      : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {company.lastActivityAt ? new Date(company.lastActivityAt).toLocaleDateString() : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={statusVariant(company.status)}>{formatStatusLabel(company.status)}</Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+
+      {isLoading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-52" />
+          ))}
+        </div>
+      ) : data?.items.length ? (
+        <CompanyCardGrid companies={data.items} onOpen={(id) => navigate(`/companies/${id}`)} />
+      ) : (
+        <Card className="p-6 text-center text-sm text-muted-foreground">Sin empresas todavía.</Card>
+      )}
+
+      <Card className="mt-4">
         <Pagination
           hasPrevious={cursorStack.length > 1}
           hasNext={!!data?.nextCursor}
