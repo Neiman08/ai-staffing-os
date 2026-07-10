@@ -85,6 +85,14 @@ enum ContactDecisionRole {
   PLANT_MANAGER
   RECRUITER
   OTHER
+  // F4.6: cargos prioritarios del Contact Intelligence Agent — el título
+  // real siempre vive en Contact.title (texto libre, literal de la
+  // fuente); este enum solo categoriza para filtrar en la UI.
+  TALENT_ACQUISITION
+  WAREHOUSE_MANAGER
+  GENERAL_MANAGER
+  PURCHASING_MANAGER
+  DIRECTOR_OF_OPERATIONS
 }
 
 enum FollowUpType {
@@ -462,20 +470,38 @@ model Company {
   @@index([tenantId, origin])
 }
 
+// F4.6: mismo espíritu que CompanyVerificationStatus — UNVERIFIED es el
+// default honesto para contactos previos al Contact Intelligence Agent;
+// CONFIRMED/INFERRED solo cuando una fuente externa real respaldó el
+// dato. Enum separado (no se reutiliza CompanyVerificationStatus) para
+// no confundir a quien lea el schema sobre a qué modelo aplica.
+enum ContactVerificationStatus {
+  UNVERIFIED
+  CONFIRMED
+  INFERRED
+}
+
 model Contact {
-  id           String               @id @default(cuid())
-  tenantId     String
-  companyId    String
-  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  firstName    String
-  lastName     String
-  email        String?
-  phone        String?
-  title        String?
-  linkedinUrl  String? // F1
-  decisionRole ContactDecisionRole? // F1: distinto de `title` (texto libre) — rol categorizado para targeting comercial
-  isPrimary    Boolean              @default(false)
-  createdAt    DateTime             @default(now())
+  id                      String                    @id @default(cuid())
+  tenantId                String
+  companyId               String
+  company                 Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  firstName               String
+  lastName                String
+  email                   String?
+  phone                   String?
+  title                   String?
+  linkedinUrl             String? // F1
+  decisionRole            ContactDecisionRole? // F1: distinto de `title` (texto libre) — rol categorizado para targeting comercial
+  isPrimary               Boolean                   @default(false)
+  // F4.6: transparencia de procedencia — mismo principio que Company
+  // desde F4.5 ("nunca inventar", "no disponible" si falta el dato).
+  source                  String? // nombre del proveedor real (ej. "People Data Labs") o null si es manual/import
+  confidenceScore         Float?
+  discoveredAt            DateTime?
+  discoveredByAgentTaskId String?
+  verificationStatus      ContactVerificationStatus @default(UNVERIFIED)
+  createdAt               DateTime                  @default(now())
 
   @@index([tenantId])
   @@index([companyId])

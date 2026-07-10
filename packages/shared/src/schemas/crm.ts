@@ -11,6 +11,10 @@ export const companyOriginSchema = z.enum([
   "API_PROVIDER",
 ]);
 export const companyVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED"]);
+// F4.6: mismo shape que companyVerificationStatusSchema, enum propio
+// (Contact es una entidad distinta con su propio ciclo de vida de
+// procedencia) — ver ContactVerificationStatus en el schema de Prisma.
+export const contactVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED"]);
 export const contactDecisionRoleSchema = z.enum([
   "OWNER",
   "HR",
@@ -19,6 +23,12 @@ export const contactDecisionRoleSchema = z.enum([
   "PLANT_MANAGER",
   "RECRUITER",
   "OTHER",
+  // F4.6: cargos prioritarios del Contact Intelligence Agent.
+  "TALENT_ACQUISITION",
+  "WAREHOUSE_MANAGER",
+  "GENERAL_MANAGER",
+  "PURCHASING_MANAGER",
+  "DIRECTOR_OF_OPERATIONS",
 ]);
 
 export const nextFollowUpSchema = z
@@ -61,6 +71,12 @@ export const contactSummarySchema = z.object({
   linkedinUrl: z.string().nullable(),
   decisionRole: contactDecisionRoleSchema.nullable(),
   isPrimary: z.boolean(),
+  // F4.6: transparencia de procedencia — mismo principio "nunca
+  // inventar" que Company desde F4.5.
+  source: z.string().nullable(),
+  confidenceScore: z.number().nullable(),
+  discoveredAt: z.string().nullable(),
+  verificationStatus: contactVerificationStatusSchema,
 });
 export type ContactSummary = z.infer<typeof contactSummarySchema>;
 
@@ -148,5 +164,24 @@ export type UpdateContactInput = z.infer<typeof updateContactInputSchema>;
 export const contactListItemSchema = contactSummarySchema.extend({
   companyId: z.string(),
   companyName: z.string(),
+  // F4.6: denormalizados de Company para poder filtrar la página
+  // Contacts por industria/estado sin un join en el cliente.
+  industryName: z.string(),
+  companyState: z.string().nullable(),
 });
 export type ContactListItem = z.infer<typeof contactListItemSchema>;
+
+// F4.6: filtros de la página Contacts — todos opcionales, se combinan
+// con AND. confidenceMin es un piso (>=), no un rango.
+export const contactQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
+  industryName: z.string().optional(),
+  companyState: z.string().optional(),
+  decisionRole: contactDecisionRoleSchema.optional(),
+  verificationStatus: contactVerificationStatusSchema.optional(),
+  minConfidence: z.coerce.number().min(0).max(1).optional(),
+  companyId: z.string().optional(),
+  companyName: z.string().optional(), // búsqueda parcial, insensible a mayúsculas
+});
+export type ContactQuery = z.infer<typeof contactQuerySchema>;

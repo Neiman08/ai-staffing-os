@@ -221,6 +221,71 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
             </div>
           </div>
           <div>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Contact Intelligence</p>
+            <div className="grid grid-cols-4 gap-2 rounded-md border border-border p-2 text-center text-xs sm:grid-cols-7">
+              <div>
+                <p className="text-base font-semibold tabular-nums">{detail.contactStats.companiesDiscovered}</p>
+                <p className="text-muted-foreground">Empresas</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold tabular-nums">{detail.contactStats.contactsFound}</p>
+                <p className="text-muted-foreground">Contactos</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold tabular-nums">{detail.contactStats.contactsVerified}</p>
+                <p className="text-muted-foreground">Verificados</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold tabular-nums">{detail.contactStats.emailsFound}</p>
+                <p className="text-muted-foreground">Emails</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold tabular-nums">{detail.contactStats.linkedinFound}</p>
+                <p className="text-muted-foreground">LinkedIn</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold tabular-nums">${detail.contactStats.costUsd.toFixed(4)}</p>
+                <p className="text-muted-foreground">Costo</p>
+              </div>
+              <div>
+                <p className="text-base font-semibold tabular-nums">
+                  {detail.contactStats.durationMs != null ? `${Math.round(detail.contactStats.durationMs / 1000)}s` : "—"}
+                </p>
+                <p className="text-muted-foreground">Tiempo</p>
+              </div>
+            </div>
+            <div className="mt-2 space-y-1.5">
+              {detail.contacts.length ? (
+                detail.contacts.map((c) => (
+                  <div key={c.contactId} className="rounded-md border border-border p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate font-medium" title={`${c.firstName} ${c.lastName}`}>
+                        {c.firstName} {c.lastName} <span className="text-muted-foreground font-normal">· {c.companyName}</span>
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {c.confidenceScore != null && <Badge variant="neutral">{Math.round(c.confidenceScore * 100)}%</Badge>}
+                        <Badge variant={c.verificationStatus === "CONFIRMED" ? "success" : "neutral"}>{formatStatusLabel(c.verificationStatus)}</Badge>
+                      </div>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                      {c.title && <span>{c.title}</span>}
+                      {c.email && <span>✉ {c.email}</span>}
+                      {c.phone && <span>☎ {c.phone}</span>}
+                      {c.linkedinUrl && (
+                        <a href={c.linkedinUrl} target="_blank" rel="noreferrer" className="text-primary underline">
+                          LinkedIn
+                        </a>
+                      )}
+                      {c.source && <span>Fuente: {c.source}</span>}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-xs text-muted-foreground">Sin contactos encontrados todavía.</p>
+              )}
+            </div>
+          </div>
+          <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
               Tareas delegadas ({detail.childTasks.length})
             </p>

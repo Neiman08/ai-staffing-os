@@ -3,6 +3,7 @@ import type {
   CompanyListItem,
   ContactInput,
   ContactListItem,
+  ContactQuery,
   CreateCompanyInput,
   Paginated,
   PaginationQuery,
@@ -166,6 +167,10 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
       linkedinUrl: c.linkedinUrl,
       decisionRole: c.decisionRole,
       isPrimary: c.isPrimary,
+      source: c.source,
+      confidenceScore: c.confidenceScore,
+      discoveredAt: c.discoveredAt?.toISOString() ?? null,
+      verificationStatus: c.verificationStatus,
     })),
     opportunities: company.opportunities.map((o) => ({
       id: o.id,
@@ -266,14 +271,25 @@ export async function updateCompany(id: string, input: UpdateCompanyInput) {
   return company;
 }
 
-export async function listContacts(query: PaginationQuery): Promise<Paginated<ContactListItem>> {
+export async function listContacts(query: ContactQuery): Promise<Paginated<ContactListItem>> {
   const rows = await scopedDb.contact.findMany({
-    ...buildCursorArgs(query),
+    ...buildCursorArgs({ cursor: query.cursor, limit: query.limit ?? 20 }),
+    where: {
+      companyId: query.companyId,
+      decisionRole: query.decisionRole,
+      verificationStatus: query.verificationStatus,
+      confidenceScore: query.minConfidence != null ? { gte: query.minConfidence } : undefined,
+      company: {
+        state: query.companyState,
+        industry: query.industryName ? { name: query.industryName } : undefined,
+        name: query.companyName ? { contains: query.companyName, mode: "insensitive" } : undefined,
+      },
+    },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    include: { company: true },
+    include: { company: { include: { industry: true } } },
   });
 
-  const { items, nextCursor } = toCursorPage(rows, query.limit);
+  const { items, nextCursor } = toCursorPage(rows, query.limit ?? 20);
 
   return {
     items: items.map((c) => ({
@@ -286,8 +302,14 @@ export async function listContacts(query: PaginationQuery): Promise<Paginated<Co
       linkedinUrl: c.linkedinUrl,
       decisionRole: c.decisionRole,
       isPrimary: c.isPrimary,
+      source: c.source,
+      confidenceScore: c.confidenceScore,
+      discoveredAt: c.discoveredAt?.toISOString() ?? null,
+      verificationStatus: c.verificationStatus,
       companyId: c.companyId,
       companyName: c.company.name,
+      industryName: c.company.industry.name,
+      companyState: c.company.state,
     })),
     nextCursor,
   };

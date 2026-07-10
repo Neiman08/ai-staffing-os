@@ -1442,6 +1442,8 @@ const AGENT_DEFINITIONS = [
   { key: "conversation", name: "Conversation Agent", description: "Classifies manually-logged replies into an intent category and recommends the next step." },
   // F4.5A: External Discovery Pilot
   { key: "discovery", name: "Discovery Agent", description: "Finds real companies in public external sources, deduplicates against the CRM, and creates them with full provenance." },
+  // F4.6: Contact Intelligence Agent
+  { key: "contact_intelligence", name: "Contact Intelligence Agent", description: "Finds real decision-maker contacts for newly discovered companies — never sends anything, only enriches the CRM." },
 ];
 
 const AGENT_PROMPTS: Record<string, string> = {
@@ -1484,6 +1486,7 @@ async function seedAgents(tenantId: string) {
     "outreach",
     "conversation",
     "discovery",
+    "contact_intelligence",
   ]);
 
   for (const key of [
@@ -1499,6 +1502,7 @@ async function seedAgents(tenantId: string) {
     "conversation",
     "ceo",
     "discovery",
+    "contact_intelligence",
   ]) {
     const definitionId = definitionMap.get(key)!;
     const autonomyLevel = SEMI_AUTO_AGENT_KEYS.has(key) ? "SEMI_AUTO" : "ASSISTED";

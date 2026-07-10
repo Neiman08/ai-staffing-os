@@ -12,6 +12,10 @@ const envSchema = z.object({
   // por el mismo motivo que OPENAI_API_KEY. Sin configurar, discoverCompaniesTool
   // usa únicamente Overpass (gratis) como fuente.
   GOOGLE_PLACES_API_KEY: z.string().optional(),
+  // F4.6: proveedor primario del Contact Intelligence Agent — mismo
+  // patrón, opcional acá. Sin configurar, findContactsTool no encuentra
+  // nada (nunca inventa un contacto para compensar).
+  PEOPLEDATALABS_API_KEY: z.string().optional(),
 });
 
 function loadEnv() {

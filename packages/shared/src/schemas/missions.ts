@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { agentTaskListItemSchema } from "./agents";
-import { companyOriginSchema, companyVerificationStatusSchema } from "./crm";
+import { companyOriginSchema, companyVerificationStatusSchema, contactVerificationStatusSchema } from "./crm";
 
 // ============================================================
 // F4: Daily Revenue Mission — ver F4_AUTONOMOUS_OUTREACH_PLAN.md,
@@ -119,10 +119,46 @@ export const missionCompanySchema = z.object({
 });
 export type MissionCompany = z.infer<typeof missionCompanySchema>;
 
+// F4.6: contacto encontrado por el Contact Intelligence Agent para una
+// empresa que ESTA misión descubrió — mismo principio de transparencia.
+export const missionContactSchema = z.object({
+  contactId: z.string(),
+  companyId: z.string(),
+  companyName: z.string(),
+  firstName: z.string(),
+  lastName: z.string(),
+  title: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  linkedinUrl: z.string().nullable(),
+  source: z.string().nullable(),
+  confidenceScore: z.number().nullable(),
+  verificationStatus: contactVerificationStatusSchema,
+  discoveredAt: z.string().nullable(),
+});
+export type MissionContact = z.infer<typeof missionContactSchema>;
+
+// F4.6: cadena de métricas de Mission Detail — "Empresas descubiertas →
+// Contactos encontrados → Contactos verificados → Emails encontrados →
+// LinkedIn encontrados → Costo → Tiempo", todo real, agregado de las
+// tareas find_contacts que esta misión delegó.
+export const missionContactStatsSchema = z.object({
+  companiesDiscovered: z.number(),
+  contactsFound: z.number(),
+  contactsVerified: z.number(),
+  emailsFound: z.number(),
+  linkedinFound: z.number(),
+  costUsd: z.number(),
+  durationMs: z.number().nullable(), // null si no hubo ninguna tarea find_contacts todavía
+});
+export type MissionContactStats = z.infer<typeof missionContactStatsSchema>;
+
 export const missionDetailSchema = missionListItemSchema.extend({
   unrecognizedTerms: z.array(z.string()),
   report: z.string().nullable(), // Executive Report — null mientras RUNNING/PAUSED_*
   childTasks: z.array(agentTaskListItemSchema),
   selectedCompanies: z.array(missionCompanySchema),
+  contacts: z.array(missionContactSchema),
+  contactStats: missionContactStatsSchema,
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;

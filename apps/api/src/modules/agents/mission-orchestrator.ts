@@ -273,7 +273,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     if (interpreted.useExternalDiscovery && interpreted.state && industry) {
       if ((await checkForStop()) === "stop") return;
       log(missionTaskId, "discovery delegated", { industry: industry.name, state: interpreted.state });
-      await createAndRunTaskSync(tenantId, operatorUserId, {
+      const discoverTask = await createAndRunTaskSync(tenantId, operatorUserId, {
         agentKey: "discovery",
         type: "discover_companies",
         input: {
@@ -290,6 +290,30 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       // simplemente no encuentra empresas nuevas — resultado real, no se
       // inventa nada para compensar.
       await syncMissionOutput(missionTaskId, "RUNNING");
+
+      // F4.6: Contact Intelligence corre acá — después de Discovery,
+      // antes de Outreach (que en este piloto ni siquiera llega a correr,
+      // ver más abajo) — solo sobre las Company que ESTA tarea acaba de
+      // crear, nunca sobre empresas ya existentes en el CRM (esas ya
+      // pasaron por su propio ciclo de prospección en F2/F3).
+      const newCompanyIds = (
+        (discoverTask.output as { companiesCreated?: Array<{ companyId: string }> } | null)?.companiesCreated ?? []
+      ).map((c) => c.companyId);
+      for (const newCompanyId of newCompanyIds) {
+        if ((await checkForStop()) === "stop") return;
+        log(missionTaskId, "contact intelligence delegated", { companyId: newCompanyId });
+        await createAndRunTaskSync(tenantId, operatorUserId, {
+          agentKey: "contact_intelligence",
+          type: "find_contacts",
+          input: { companyId: newCompanyId },
+          triggeredBy: "AGENT",
+          parentTaskId: missionTaskId,
+        });
+        // Un find_contacts FAILED (proveedor caído/sin configurar) no
+        // aborta la misión — la Company queda sin contactos, resultado
+        // real, no se inventa nada para compensar.
+        await syncMissionOutput(missionTaskId, "RUNNING");
+      }
     }
 
     if ((await checkForStop()) === "stop") return;

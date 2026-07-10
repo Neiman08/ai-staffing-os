@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   contactInputSchema,
+  contactQuerySchema,
   createCompanyInputSchema,
   paginationQuerySchema,
   updateCompanyInputSchema,
@@ -48,7 +49,7 @@ crmRouter.patch("/companies/:id", requirePermission("companies.update"), async (
 
 crmRouter.get("/contacts", requirePermission("contacts.view"), async (req, res, next) => {
   try {
-    const query = paginationQuerySchema.parse(req.query);
+    const query = contactQuerySchema.parse(req.query);
     res.json(await crmService.listContacts(query));
   } catch (err) {
     next(err);

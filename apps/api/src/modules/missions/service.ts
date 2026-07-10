@@ -100,6 +100,29 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
       })
     : [];
 
+  // F4.6: cadena de métricas de Contact Intelligence — agregada de las
+  // tareas find_contacts reales que esta misión delegó, nunca estimada.
+  const discoverTasks = childTasks.filter((t) => t.type === "discover_companies" && t.output);
+  const companiesDiscovered = discoverTasks.reduce(
+    (sum, t) => sum + ((t.output as { companiesCreated?: unknown[] } | null)?.companiesCreated?.length ?? 0),
+    0,
+  );
+
+  const findContactsTasks = childTasks.filter((t) => t.type === "find_contacts");
+  const findContactsTaskIds = findContactsTasks.map((t) => t.id);
+  const costUsdFromContacts = findContactsTasks.reduce((sum, t) => sum + Number(t.costUsd ?? 0), 0);
+  const durationMs = findContactsTasks.some((t) => t.completedAt)
+    ? findContactsTasks.reduce((sum, t) => (t.completedAt ? sum + (t.completedAt.getTime() - t.createdAt.getTime()) : sum), 0)
+    : null;
+
+  const missionContacts = findContactsTaskIds.length
+    ? await scopedDb.contact.findMany({
+        where: { discoveredByAgentTaskId: { in: findContactsTaskIds } },
+        include: { company: true },
+        orderBy: { discoveredAt: "asc" },
+      })
+    : [];
+
   return {
     ...listItem,
     unrecognizedTerms: input.unrecognizedTerms ?? [],
@@ -117,6 +140,30 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
       confidenceScore: cc.company.confidenceScore,
       verificationStatus: cc.company.verificationStatus,
     })),
+    contacts: missionContacts.map((c) => ({
+      contactId: c.id,
+      companyId: c.companyId,
+      companyName: c.company.name,
+      firstName: c.firstName,
+      lastName: c.lastName,
+      title: c.title,
+      email: c.email,
+      phone: c.phone,
+      linkedinUrl: c.linkedinUrl,
+      source: c.source,
+      confidenceScore: c.confidenceScore,
+      verificationStatus: c.verificationStatus,
+      discoveredAt: c.discoveredAt?.toISOString() ?? null,
+    })),
+    contactStats: {
+      companiesDiscovered,
+      contactsFound: missionContacts.length,
+      contactsVerified: missionContacts.filter((c) => c.verificationStatus === "CONFIRMED").length,
+      emailsFound: missionContacts.filter((c) => !!c.email).length,
+      linkedinFound: missionContacts.filter((c) => !!c.linkedinUrl).length,
+      costUsd: costUsdFromContacts,
+      durationMs,
+    },
   };
 }
 
