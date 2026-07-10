@@ -160,7 +160,7 @@ Responde ÚNICAMENTE con un JSON de la forma {
   "city": "<ciudad>" o null,
   "categoryNames": ["<SOLO de la lista de categorías de arriba>"],
   "desiredVolume": <número de empresas deseado> o null,
-  "businessObjective": { "type": "meetings"|"new_clients"|"companies_found"|"pipeline_increase"|"custom", "target": <número> o null, "unit": "<palabra corta, ej. reuniones>", "rawText": "<frase literal de la instrucción que describe el objetivo>" },
+  "businessObjective": { "type": "meetings"|"new_clients"|"companies_found"|"pipeline_increase"|"custom", "target": <número> o null, "unit": "<palabra corta, SIEMPRE un string aunque target sea null — ej. 'reuniones', 'clientes', 'empresas', 'USD'>", "rawText": "<frase literal de la instrucción que describe el objetivo — si no hay un objetivo explícito, usa la instrucción completa>" },
   "unrecognizedTerms": ["<términos que el usuario mencionó que NO coinciden con ninguna industria/categoría de arriba>"]
 }`;
 
@@ -173,6 +173,11 @@ Responde ÚNICAMENTE con un JSON de la forma {
         });
         deps.usage.record(completion);
 
+        // El schema de parseo es deliberadamente más permisivo que
+        // businessObjectiveSchema en "unit" — el LLM a veces devuelve
+        // null ahí cuando no hay un objetivo numérico explícito (target
+        // también null). Se normaliza después, nunca se descarta la
+        // interpretación completa por ese detalle.
         const parsed = tryParseJson(
           completion.content,
           z.object({
@@ -181,7 +186,7 @@ Responde ÚNICAMENTE con un JSON de la forma {
             city: z.string().nullable(),
             categoryNames: z.array(z.string()),
             desiredVolume: z.number().nullable(),
-            businessObjective: businessObjectiveSchema,
+            businessObjective: businessObjectiveSchema.extend({ unit: z.string().nullable() }),
             unrecognizedTerms: z.array(z.string()),
           }),
         );
@@ -207,7 +212,7 @@ Responde ÚNICAMENTE con un JSON de la forma {
           city: parsed.city,
           categoryNames: validCategoryNames,
           desiredVolume: parsed.desiredVolume,
-          businessObjective: parsed.businessObjective,
+          businessObjective: { ...parsed.businessObjective, unit: parsed.businessObjective.unit ?? "empresas" },
           unrecognizedTerms: [...parsed.unrecognizedTerms, ...droppedTerms],
         };
       },

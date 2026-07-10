@@ -211,9 +211,17 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const existingActive = await scopedDb.agentTask.findFirst({
+  // AgentTask.status se queda en RUNNING para una misión cancelada (no
+  // se ensancha AgentTaskStatus, ver el addendum) — "cancelada" vive en
+  // output.missionState. Por eso el chequeo de "una misión por día" se
+  // resuelve en código, no en el where de Prisma: una misión CANCELLED
+  // no debe bloquear una nueva.
+  const runningToday = await scopedDb.agentTask.findMany({
     where: { type: "daily_revenue_mission", status: "RUNNING", createdAt: { gte: todayStart } },
   });
+  const existingActive = runningToday.find(
+    (t) => ((t.output as { missionState?: string } | null)?.missionState ?? "RUNNING") !== "CANCELLED",
+  );
   if (existingActive) {
     // Simplificación deliberada respecto al plan original ("se fusiona
     // con la misión existente"): rechazar con un mensaje claro es más

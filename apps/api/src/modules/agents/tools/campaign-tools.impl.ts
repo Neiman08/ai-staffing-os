@@ -97,6 +97,13 @@ export async function createOrReuseCampaign(
     data: {
       tenantId: ctx.tenantId,
       name: input.name,
+      // Una campaña creada por el Campaign Agent (ej. desde la Daily
+      // Revenue Mission) arranca ACTIVE de inmediato — esa es la razón
+      // de ser de la autonomía. Una creada por un humano vía POST
+      // /campaigns arranca DRAFT (default del schema) para que la
+      // revise antes de activarla — createdByAgentTaskId es null en
+      // ese caso.
+      status: createdByAgentTaskId ? "ACTIVE" : undefined,
       industryId: input.industryId,
       state: input.state,
       city: input.city,
