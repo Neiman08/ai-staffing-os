@@ -4,6 +4,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { createAndRunTaskSync } from "./task-executor";
 import { getMonthlyBudgetStatus } from "./budget";
 import { getStaleProcessedCompanyIds, getUnprocessedCompanyIds } from "./memory";
+import { closeMission } from "./mission-orchestrator";
 
 /**
  * F3 §6: scheduler in-process, sin Redis/BullMQ. Un tick liviano corre
@@ -19,6 +20,7 @@ const DEFAULT_SWEEP_INTERVAL_HOURS = 6; // aprobado
 const MAX_COMPANIES_PER_SWEEP = 15; // aprobado
 const STALE_SCORE_DAYS = 14;
 const INACTIVITY_DAYS = 21;
+const MAX_SEQUENCE_STEPS_PER_TICK = 30; // F4 §14
 
 const operatorCache = new Map<string, string>(); // tenantId -> userId
 
@@ -157,10 +159,115 @@ export async function runProspectingSweep(tenantId: string): Promise<SweepResult
   });
 }
 
+export interface CampaignSequenceSweepResult {
+  messagesPersonalized: number;
+  budgetExceededMidSweep: boolean;
+}
+
+/**
+ * F4 §14: revisa, en CADA tick (no gateado por el intervalo de 6h de
+ * arriba — es una consulta barata, solo actúa cuando algo realmente está
+ * vencido), los FollowUp de secuencia de campaña con dueDate <= hoy y
+ * status PENDING. Un FollowUp cuya CampaignCompany ya recibió una
+ * intención clasificada nunca llega hasta acá — suggestNextStep ya
+ * canceló el resto de su secuencia (outreach-tools.impl.ts), así que
+ * esta consulta por sí sola respeta esa decisión sin necesitar chequear
+ * lastIntent de nuevo.
+ */
+export async function runCampaignSequenceSweep(tenantId: string): Promise<CampaignSequenceSweepResult> {
+  const operatorUserId = await getOperatorUserId(tenantId);
+  if (!operatorUserId) return { messagesPersonalized: 0, budgetExceededMidSweep: false };
+
+  return runWithTenancyContext({ tenantId, userId: operatorUserId, permissions: [] }, async () => {
+    const result: CampaignSequenceSweepResult = { messagesPersonalized: 0, budgetExceededMidSweep: false };
+
+    const dueFollowUps = await scopedDb.followUp.findMany({
+      where: { campaignId: { not: null }, status: "PENDING", dueDate: { lte: new Date() } },
+      take: MAX_SEQUENCE_STEPS_PER_TICK,
+    });
+
+    for (const followUp of dueFollowUps) {
+      if ((await getMonthlyBudgetStatus(tenantId)).exceeded) {
+        result.budgetExceededMidSweep = true;
+        break;
+      }
+
+      const cc = await scopedDb.campaignCompany.findFirst({
+        where: { campaignId: followUp.campaignId!, companyId: followUp.entityId },
+      });
+      if (!cc) continue;
+
+      const sequence = await scopedDb.followUp.findMany({
+        where: { campaignId: followUp.campaignId!, entityType: "company", entityId: followUp.entityId },
+        orderBy: { dueDate: "asc" },
+      });
+      const step = sequence.findIndex((f) => f.id === followUp.id);
+      if (step === -1) continue;
+
+      await createAndRunTaskSync(tenantId, operatorUserId, {
+        agentKey: "outreach",
+        type: "personalize_message",
+        input: { campaignCompanyId: cc.id, step },
+        triggeredBy: "SCHEDULE",
+      });
+      result.messagesPersonalized += 1;
+    }
+
+    return result;
+  });
+}
+
+export interface MissionCloseSweepResult {
+  closed: number;
+}
+
+/**
+ * F4 addendum: cierra automáticamente cualquier Daily Revenue Mission que
+ * siga RUNNING desde un día calendario anterior — genera su Executive
+ * Report con lo que se alcanzó a hacer, sin esperar a que un humano pida
+ * el cierre manual.
+ */
+export async function runMissionCloseSweep(tenantId: string): Promise<MissionCloseSweepResult> {
+  const operatorUserId = await getOperatorUserId(tenantId);
+  if (!operatorUserId) return { closed: 0 };
+
+  return runWithTenancyContext({ tenantId, userId: operatorUserId, permissions: [] }, async () => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const stale = await scopedDb.agentTask.findMany({
+      where: { type: "daily_revenue_mission", status: "RUNNING", createdAt: { lt: todayStart } },
+    });
+
+    for (const mission of stale) {
+      await closeMission(mission.id);
+    }
+    return { closed: stale.length };
+  });
+}
+
 export async function tickAllTenants(): Promise<void> {
   const tenants = await prisma.tenant.findMany({ where: { isActive: true } });
 
   for (const tenant of tenants) {
+    try {
+      const sequenceResult = await runCampaignSequenceSweep(tenant.id);
+      if (sequenceResult.messagesPersonalized > 0) {
+        console.log(`[scheduler] campaign sequence sweep for tenant ${tenant.id}:`, sequenceResult);
+      }
+    } catch (err) {
+      console.error(`[scheduler] campaign sequence sweep failed for tenant ${tenant.id}:`, err);
+    }
+
+    try {
+      const closeResult = await runMissionCloseSweep(tenant.id);
+      if (closeResult.closed > 0) {
+        console.log(`[scheduler] mission close sweep for tenant ${tenant.id}:`, closeResult);
+      }
+    } catch (err) {
+      console.error(`[scheduler] mission close sweep failed for tenant ${tenant.id}:`, err);
+    }
+
     const settings = (tenant.settings ?? {}) as TenantSweepSettings;
     if (!isSweepDue(settings)) continue;
 

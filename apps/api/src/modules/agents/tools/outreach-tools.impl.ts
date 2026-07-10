@@ -200,6 +200,11 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
             riskLevel: "MEDIUM",
           },
         });
+        // Marca el paso como "preparado" (DONE) — no como "enviado", eso
+        // sigue dependiendo de la aprobación humana. Evita que el
+        // scheduler (F4 §14) vuelva a redactar el mismo paso en la
+        // próxima corrida solo porque el FollowUp sigue con dueDate <= hoy.
+        await scopedDb.followUp.update({ where: { id: step.id }, data: { status: "DONE", completedAt: new Date() } });
         await auditAgentAction({
           agentInstanceId: deps.agentInstanceId,
           action: "outreach.message_personalized_by_agent",
