@@ -368,12 +368,18 @@ export default function Companies() {
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Datos demo/real: por defecto solo se ven datos reales en esta vista
+  // comercial (excludeDemo=true) — un humano puede destildar para ver
+  // también las empresas de demo (origin=DEMO_SEED), nunca al revés.
+  const [excludeDemo, setExcludeDemo] = useState(true);
   const cursor = cursorStack[cursorStack.length - 1];
 
   const { data, isLoading } = useQuery({
-    queryKey: ["companies", cursor],
+    queryKey: ["companies", cursor, excludeDemo],
     queryFn: () =>
-      apiFetch<Paginated<CompanyListItem>>(`/companies?limit=20${cursor ? `&cursor=${cursor}` : ""}`),
+      apiFetch<Paginated<CompanyListItem>>(
+        `/companies?limit=20${cursor ? `&cursor=${cursor}` : ""}${excludeDemo ? "&excludeDemo=true" : ""}`,
+      ),
   });
 
   return (
@@ -383,6 +389,18 @@ export default function Companies() {
         description="Clientes y prospectos de la agencia"
         action={
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-border"
+                checked={excludeDemo}
+                onChange={(e) => {
+                  setExcludeDemo(e.target.checked);
+                  setCursorStack([undefined]);
+                }}
+              />
+              Solo datos reales
+            </label>
             <Button variant="outline" onClick={() => setImportOpen(true)}>
               <Upload className="h-4 w-4" />
               Importar empresas

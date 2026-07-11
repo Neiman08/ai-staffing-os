@@ -76,14 +76,22 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  // Marca comercial real (GET /branding, ver apps/web/src/lib/branding.ts)
+  // — undefined mientras carga. Nunca se hardcodea un nombre acá; el
+  // placeholder "…" es deliberado (evita mostrar una marca vieja/incorrecta
+  // por un instante mientras se resuelve la real).
+  brandName?: string;
+}
+
+export function Sidebar({ brandName }: SidebarProps) {
   return (
     <aside className="hidden w-60 shrink-0 border-r border-border bg-card/40 md:flex md:flex-col">
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
-          A
+          {brandName?.[0] ?? "…"}
         </div>
-        <span className="text-sm font-semibold">AI Staffing OS</span>
+        <span className="text-sm font-semibold">{brandName ?? "…"}</span>
       </div>
       <nav className="flex-1 space-y-4 overflow-y-auto p-2">
         {NAV_SECTIONS.map((section, i) => (

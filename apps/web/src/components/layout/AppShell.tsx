@@ -1,11 +1,15 @@
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+import { useBranding, useDocumentTitleFromBranding } from "@/lib/branding";
 
 export function AppShell() {
+  const { data: branding } = useBranding();
+  useDocumentTitleFromBranding(branding?.brandName);
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
-      <Sidebar />
+      <Sidebar brandName={branding?.brandName} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
         <main className="flex-1 overflow-y-auto p-6">

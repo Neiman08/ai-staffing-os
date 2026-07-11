@@ -25,6 +25,27 @@ const envSchema = z.object({
   // todavía no decidida). Sin configurar, el User-Agent se envía sin
   // cláusula de contacto en vez de inventar una.
   WEBSITE_INTELLIGENCE_CONTACT_EMAIL: z.string().optional(),
+
+  // Branding — decisión real del PO (marca DreiStaff / dominio
+  // dreistaff.com, entidad legal Data More LLC). Estos 4 SÍ tienen
+  // default real porque ya están decididos; siguen siendo overridable
+  // por env (nunca hardcodeados en código/UI fuera de esto) y por
+  // Tenant.settings (ver core/branding.ts) para el caso multi-tenant/
+  // white-label. Nunca se referencia "DreiStaff"/"dreistaff.com" en
+  // ningún otro archivo del repo — todo pasa por acá.
+  BUSINESS_LEGAL_NAME: z.string().default("Data More LLC"),
+  BUSINESS_BRAND_NAME: z.string().default("DreiStaff"),
+  BUSINESS_DOMAIN: z.string().default("dreistaff.com"),
+  APP_DOMAIN: z.string().default("app.dreistaff.com"),
+  OUTREACH_FROM_NAME: z.string().default("DreiStaff"),
+  // Deliberadamente SIN default y opcionales — el PO fue explícito: "no
+  // inventes todavía correo de envío definitivo, dirección postal,
+  // Reply-To". Quedan null hasta que el PO los configure a mano; ningún
+  // código de F4.7 puede enviar un email real mientras falten (ver
+  // docs/F4_7_EMAIL_INTELLIGENCE_PLAN.md, Bloqueantes).
+  OUTREACH_FROM_EMAIL: z.string().optional(),
+  OUTREACH_REPLY_TO: z.string().optional(),
+  BUSINESS_POSTAL_ADDRESS: z.string().optional(),
 });
 
 function loadEnv() {

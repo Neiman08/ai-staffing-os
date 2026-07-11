@@ -1,9 +1,9 @@
 import { Router } from "express";
 import {
+  companyQuerySchema,
   contactInputSchema,
   contactQuerySchema,
   createCompanyInputSchema,
-  paginationQuerySchema,
   updateCompanyInputSchema,
   updateContactInputSchema,
 } from "@ai-staffing-os/shared";
@@ -14,7 +14,7 @@ export const crmRouter = Router();
 
 crmRouter.get("/companies", requirePermission("companies.view"), async (req, res, next) => {
   try {
-    const query = paginationQuerySchema.parse(req.query);
+    const query = companyQuerySchema.parse(req.query);
     res.json(await crmService.listCompanies(query));
   } catch (err) {
     next(err);

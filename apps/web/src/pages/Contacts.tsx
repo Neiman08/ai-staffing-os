@@ -70,6 +70,8 @@ export default function Contacts() {
   const navigate = useNavigate();
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
   const [filters, setFilters] = useState<ContactFilters>(EMPTY_FILTERS);
+  // Datos demo/real: por defecto solo datos reales en esta vista comercial.
+  const [excludeDemo, setExcludeDemo] = useState(true);
   const cursor = cursorStack[cursorStack.length - 1];
 
   const { data: industries } = useQuery({
@@ -87,9 +89,10 @@ export default function Contacts() {
   if (filters.emailVerificationStatus) queryParams.set("emailVerificationStatus", filters.emailVerificationStatus);
   if (filters.minConfidence) queryParams.set("minConfidence", filters.minConfidence);
   if (filters.companyName) queryParams.set("companyName", filters.companyName);
+  if (excludeDemo) queryParams.set("excludeDemo", "true");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["contacts", cursor, filters],
+    queryKey: ["contacts", cursor, filters, excludeDemo],
     queryFn: () => apiFetch<Paginated<ContactListItem>>(`/contacts?${queryParams.toString()}`),
   });
 
@@ -100,7 +103,24 @@ export default function Contacts() {
 
   return (
     <div>
-      <PageHeader title="Contacts" description="Contactos de todas las empresas, reales o encontrados por el Contact Intelligence Agent" />
+      <PageHeader
+        title="Contacts"
+        description="Contactos de todas las empresas, reales o encontrados por el Contact Intelligence Agent"
+        action={
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border"
+              checked={excludeDemo}
+              onChange={(e) => {
+                setExcludeDemo(e.target.checked);
+                setCursorStack([undefined]);
+              }}
+            />
+            Solo datos reales
+          </label>
+        }
+      />
 
       <Card className="mb-4">
         <CardContent className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-7">
@@ -223,6 +243,11 @@ export default function Contacts() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {contact.companyName} <span className="text-xs">· {contact.industryName}</span>
+                    {contact.companyOrigin === "DEMO_SEED" && (
+                      <Badge variant="neutral" className="ml-2">
+                        Demo
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {contact.email ?? "No disponible"}

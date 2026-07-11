@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./common";
 
 export const companySizeSchema = z.enum(["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"]);
 // F4.5: procedencia de una Company — nunca debe haber duda entre demo,
@@ -64,6 +65,15 @@ export const companyListItemSchema = z.object({
   confidenceScore: z.number().nullable(),
 });
 export type CompanyListItem = z.infer<typeof companyListItemSchema>;
+
+// Datos demo/real: excludeDemo oculta origin=DEMO_SEED — datos reales
+// visibles por defecto en vistas comerciales (el frontend decide el
+// default, acá solo se define el filtro en sí). Deriva de
+// companyOriginSchema ya existente, sin campo/modelo nuevo.
+export const companyQuerySchema = paginationQuerySchema.extend({
+  excludeDemo: z.coerce.boolean().optional(),
+});
+export type CompanyQuery = z.infer<typeof companyQuerySchema>;
 
 export const contactSummarySchema = z.object({
   id: z.string(),
@@ -180,6 +190,10 @@ export const contactListItemSchema = contactSummarySchema.extend({
   // Contacts por industria/estado sin un join en el cliente.
   industryName: z.string(),
   companyState: z.string().nullable(),
+  // Datos demo/real: denormalizado de Company.origin para el badge/filtro
+  // "Solo datos reales" — mismo campo que ya usa Companies, sin duplicar
+  // el enum.
+  companyOrigin: companyOriginSchema,
 });
 export type ContactListItem = z.infer<typeof contactListItemSchema>;
 
@@ -196,5 +210,6 @@ export const contactQuerySchema = z.object({
   minConfidence: z.coerce.number().min(0).max(1).optional(),
   companyId: z.string().optional(),
   companyName: z.string().optional(), // búsqueda parcial, insensible a mayúsculas
+  excludeDemo: z.coerce.boolean().optional(), // datos reales por defecto en vistas comerciales
 });
 export type ContactQuery = z.infer<typeof contactQuerySchema>;

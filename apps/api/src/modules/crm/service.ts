@@ -1,12 +1,12 @@
 import type {
   CompanyDetail,
   CompanyListItem,
+  CompanyQuery,
   ContactInput,
   ContactListItem,
   ContactQuery,
   CreateCompanyInput,
   Paginated,
-  PaginationQuery,
   UpdateCompanyInput,
   UpdateContactInput,
 } from "@ai-staffing-os/shared";
@@ -54,9 +54,10 @@ async function attachCompanyComputedFields(companyIds: string[]) {
   return { nextFollowUps, lastActivities, openOpportunityCounts };
 }
 
-export async function listCompanies(query: PaginationQuery): Promise<Paginated<CompanyListItem>> {
+export async function listCompanies(query: CompanyQuery): Promise<Paginated<CompanyListItem>> {
   const rows = await scopedDb.company.findMany({
     ...buildCursorArgs(query),
+    where: query.excludeDemo ? { origin: { not: "DEMO_SEED" } } : undefined,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
       industry: true,
@@ -290,6 +291,7 @@ export async function listContacts(query: ContactQuery): Promise<Paginated<Conta
         state: query.companyState,
         industry: query.industryName ? { name: query.industryName } : undefined,
         name: query.companyName ? { contains: query.companyName, mode: "insensitive" } : undefined,
+        origin: query.excludeDemo ? { not: "DEMO_SEED" } : undefined,
       },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -323,6 +325,7 @@ export async function listContacts(query: ContactQuery): Promise<Paginated<Conta
       companyName: c.company.name,
       industryName: c.company.industry.name,
       companyState: c.company.state,
+      companyOrigin: c.company.origin,
     })),
     nextCursor,
   };

@@ -23,6 +23,7 @@ import { aiDashboardRouter } from "./modules/ai-dashboard/router";
 import { campaignsRouter } from "./modules/campaigns/router";
 import { missionsRouter } from "./modules/missions/router";
 import { discoveryRouter } from "./modules/discovery/router";
+import { brandingRouter } from "./modules/branding/router";
 
 export function createApp() {
   const app = express();
@@ -60,6 +61,7 @@ export function createApp() {
   app.use("/api/v1", campaignsRouter);
   app.use("/api/v1", missionsRouter);
   app.use("/api/v1", discoveryRouter);
+  app.use("/api/v1", brandingRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
