@@ -29,6 +29,9 @@ const DECISION_ROLES = [
   "OTHER",
 ];
 const VERIFICATION_STATUSES = ["UNVERIFIED", "CONFIRMED", "INFERRED"];
+// F4.7: entregabilidad del email — distinto de VERIFICATION_STATUSES
+// (que es la procedencia del contacto como registro completo).
+const EMAIL_VERIFICATION_STATUSES = ["NOT_VERIFIED", "VERIFIED", "RISKY", "INVALID", "UNKNOWN"];
 const CONFIDENCE_FLOORS = [
   { label: "Cualquiera", value: "" },
   { label: "≥ 50%", value: "0.5" },
@@ -36,11 +39,19 @@ const CONFIDENCE_FLOORS = [
   { label: "≥ 90%", value: "0.9" },
 ];
 
+function emailVerificationBadgeVariant(status: string): "success" | "warning" | "danger" | "neutral" {
+  if (status === "VERIFIED") return "success";
+  if (status === "RISKY" || status === "UNKNOWN") return "warning";
+  if (status === "INVALID") return "danger";
+  return "neutral";
+}
+
 interface ContactFilters {
   industryName: string;
   companyState: string;
   decisionRole: string;
   verificationStatus: string;
+  emailVerificationStatus: string;
   minConfidence: string;
   companyName: string;
 }
@@ -50,6 +61,7 @@ const EMPTY_FILTERS: ContactFilters = {
   companyState: "",
   decisionRole: "",
   verificationStatus: "",
+  emailVerificationStatus: "",
   minConfidence: "",
   companyName: "",
 };
@@ -72,6 +84,7 @@ export default function Contacts() {
   if (filters.companyState) queryParams.set("companyState", filters.companyState);
   if (filters.decisionRole) queryParams.set("decisionRole", filters.decisionRole);
   if (filters.verificationStatus) queryParams.set("verificationStatus", filters.verificationStatus);
+  if (filters.emailVerificationStatus) queryParams.set("emailVerificationStatus", filters.emailVerificationStatus);
   if (filters.minConfidence) queryParams.set("minConfidence", filters.minConfidence);
   if (filters.companyName) queryParams.set("companyName", filters.companyName);
 
@@ -90,7 +103,7 @@ export default function Contacts() {
       <PageHeader title="Contacts" description="Contactos de todas las empresas, reales o encontrados por el Contact Intelligence Agent" />
 
       <Card className="mb-4">
-        <CardContent className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
+        <CardContent className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-7">
           <div>
             <Label>Industria</Label>
             <Select value={filters.industryName} onChange={(e) => updateFilter("industryName", e.target.value)}>
@@ -143,6 +156,20 @@ export default function Contacts() {
             </Select>
           </div>
           <div>
+            <Label>Email verificado</Label>
+            <Select
+              value={filters.emailVerificationStatus}
+              onChange={(e) => updateFilter("emailVerificationStatus", e.target.value)}
+            >
+              <option value="">Todos</option>
+              {EMAIL_VERIFICATION_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {formatStatusLabel(s)}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
             <Label>Empresa</Label>
             <Input
               placeholder="Buscar empresa…"
@@ -164,6 +191,7 @@ export default function Contacts() {
                 <TableHead>Cargo</TableHead>
                 <TableHead>Empresa</TableHead>
                 <TableHead>Email</TableHead>
+                <TableHead>Email verificado</TableHead>
                 <TableHead>Teléfono</TableHead>
                 <TableHead>LinkedIn</TableHead>
                 <TableHead>Confidence</TableHead>
@@ -196,7 +224,20 @@ export default function Contacts() {
                   <TableCell className="text-muted-foreground">
                     {contact.companyName} <span className="text-xs">· {contact.industryName}</span>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{contact.email ?? "No disponible"}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {contact.email ?? "No disponible"}
+                    {contact.emailSource && <div className="text-xs">{contact.emailSource}</div>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={emailVerificationBadgeVariant(contact.emailVerificationStatus)}>
+                      {formatStatusLabel(contact.emailVerificationStatus)}
+                    </Badge>
+                    {contact.doNotContact && (
+                      <Badge variant="danger" className="ml-1">
+                        No contactar
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{contact.phone ?? "No disponible"}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {contact.linkedinUrl ? (
@@ -229,7 +270,7 @@ export default function Contacts() {
               ))}
               {data?.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={11} className="text-center text-sm text-muted-foreground">
                     Sin contactos que coincidan con estos filtros.
                   </TableCell>
                 </TableRow>

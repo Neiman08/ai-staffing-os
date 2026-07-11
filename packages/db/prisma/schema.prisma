@@ -481,6 +481,18 @@ enum ContactVerificationStatus {
   INFERRED
 }
 
+// F4.7: estado de ENTREGABILIDAD del email, distinto de
+// ContactVerificationStatus (que describe la procedencia del contacto
+// como registro completo). Vocabulario cerrado — solo VERIFIED puede
+// habilitar outreach real, ver docs/F4_7_EMAIL_INTELLIGENCE_PLAN.md §3.
+enum EmailVerificationStatus {
+  NOT_VERIFIED
+  VERIFIED
+  RISKY
+  INVALID
+  UNKNOWN
+}
+
 model Contact {
   id                      String                    @id @default(cuid())
   tenantId                String
@@ -501,10 +513,27 @@ model Contact {
   discoveredAt            DateTime?
   discoveredByAgentTaskId String?
   verificationStatus      ContactVerificationStatus @default(UNVERIFIED)
+  // F4.7: procedencia y verificación del EMAIL específicamente — un
+  // Contact puede venir de un proveedor (source) pero tener el email
+  // encontrado/verificado después, por una fuente distinta (Website
+  // Intelligence o Hunter). Ver docs/F4_7_EMAIL_INTELLIGENCE_PLAN.md §4.
+  emailSource               String? // "Website (about/team page)" | "Hunter.io" | null
+  emailSourceUrl            String? // URL exacta de la página, o referencia del proveedor
+  emailDiscoveryProvider    String?
+  emailVerificationProvider String?
+  emailVerificationStatus   EmailVerificationStatus  @default(NOT_VERIFIED)
+  emailConfidenceScore      Float? // 0–1, del proveedor de verificación — distinto de confidenceScore (descubrimiento del contacto)
+  emailDiscoveredAt         DateTime?
+  emailVerifiedAt           DateTime?
+  // F4.7: control de envío — por dirección/persona, no por Company.
+  doNotContact              Boolean                  @default(false)
+  bouncedAt                 DateTime?
+  unsubscribedAt            DateTime?
   createdAt               DateTime                  @default(now())
 
   @@index([tenantId])
   @@index([companyId])
+  @@index([tenantId, emailVerificationStatus])
 }
 
 model Lead {

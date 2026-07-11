@@ -313,6 +313,22 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
         // aborta la misión — la Company queda sin contactos, resultado
         // real, no se inventa nada para compensar.
         await syncMissionOutput(missionTaskId, "RUNNING");
+
+        // F4.7: Email Intelligence corre justo después — mismo agente
+        // (Contact Intelligence, ampliado), mismo punto del pipeline
+        // (después de Discovery/find_contacts, antes de Sales Review).
+        // Sin contactId: procesa todos los Contact de esta Company sin
+        // email VERIFIED todavía (incluye los recién creados arriba).
+        if ((await checkForStop()) === "stop") return;
+        log(missionTaskId, "email intelligence delegated", { companyId: newCompanyId });
+        await createAndRunTaskSync(tenantId, operatorUserId, {
+          agentKey: "contact_intelligence",
+          type: "find_email",
+          input: { companyId: newCompanyId },
+          triggeredBy: "AGENT",
+          parentTaskId: missionTaskId,
+        });
+        await syncMissionOutput(missionTaskId, "RUNNING");
       }
     }
 

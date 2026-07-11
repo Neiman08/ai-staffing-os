@@ -16,6 +16,15 @@ const envSchema = z.object({
   // patrón, opcional acá. Sin configurar, findContactsTool no encuentra
   // nada (nunca inventa un contacto para compensar).
   PEOPLEDATALABS_API_KEY: z.string().optional(),
+  // F4.7: mismo vendor para email discovery Y verification (Hunter.io) —
+  // opcional acá, mismo motivo. Sin configurar, findEmailTool solo usa
+  // Website Intelligence (gratis, sin proveedor).
+  HUNTER_API_KEY: z.string().optional(),
+  // F4.7 §1.2: contacto real del bot en el User-Agent de Website
+  // Intelligence — opcional a propósito (nunca hardcodea una marca
+  // todavía no decidida). Sin configurar, el User-Agent se envía sin
+  // cláusula de contacto en vez de inventar una.
+  WEBSITE_INTELLIGENCE_CONTACT_EMAIL: z.string().optional(),
 });
 
 function loadEnv() {

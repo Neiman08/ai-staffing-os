@@ -57,3 +57,47 @@ export const findContactsTool: AgentTool<FindContactsInput, FindContactsOutput> 
   inputSchema: findContactsInputSchema,
   execute: notImplemented(),
 };
+
+/**
+ * F4.7: ampliación del Contact Intelligence Agent — busca y VERIFICA
+ * emails reales para los Contact de una Company (Website Intelligence
+ * primero, gratis; Hunter.io como respaldo pago). Nunca envía nada, solo
+ * enriquece Contact.email/emailVerificationStatus. Ver
+ * docs/F4_7_EMAIL_INTELLIGENCE_PLAN.md §5.
+ */
+export const findEmailInputSchema = z.object({
+  companyId: z.string(),
+  contactId: z.string().optional(), // si se omite, procesa todos los Contact sin email VERIFIED de esa Company
+});
+export type FindEmailInput = z.infer<typeof findEmailInputSchema>;
+
+export const emailUpdatedContactSchema = z.object({
+  contactId: z.string(),
+  firstName: z.string(),
+  lastName: z.string(),
+  email: z.string().nullable(),
+  emailSource: z.string().nullable(),
+  emailVerificationStatus: z.enum(["NOT_VERIFIED", "VERIFIED", "RISKY", "INVALID", "UNKNOWN"]),
+  emailConfidenceScore: z.number().nullable(),
+});
+export type EmailUpdatedContact = z.infer<typeof emailUpdatedContactSchema>;
+
+export const findEmailOutputSchema = z.object({
+  contactsProcessed: z.number(),
+  emailsFound: z.number(),
+  emailsVerified: z.number(), // status distinto de NOT_VERIFIED/UNKNOWN, es decir, el proveedor devolvió una clasificación real
+  contactsUpdated: z.array(emailUpdatedContactSchema),
+  companyEmailUpdated: z.boolean(), // Company.email se completó con un email genérico encontrado en el sitio
+  websitePagesVisited: z.number(),
+  sourcesUsed: z.array(z.string()),
+  patternsFailed: z.array(z.string()),
+});
+export type FindEmailOutput = z.infer<typeof findEmailOutputSchema>;
+
+export const findEmailTool: AgentTool<FindEmailInput, FindEmailOutput> = {
+  name: "findEmail",
+  description:
+    "Busca y verifica emails reales para los Contact de una Company — website oficial primero (gratis), Hunter.io como respaldo. Nunca inventa un email ni por patrón ni por inferencia, nunca envía nada, solo enriquece el CRM. Solo un email VERIFIED queda disponible para outreach futuro.",
+  inputSchema: findEmailInputSchema,
+  execute: notImplemented(),
+};

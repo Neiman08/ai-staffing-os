@@ -1,19 +1,20 @@
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 
 /**
- * F4.5/F4.6: presupuesto de proveedores de DATOS (Google Places, People
- * Data Labs), separado del presupuesto de IA (budget.ts, aiMonthlyBudgetUsd)
- * — mismo motivo que documenta docs/F4_5_EXTERNAL_DISCOVERY_AND_EMAIL_PLAN.md
- * §2: "no mezclar ambos guardias". Se suma solo el costUsd de AgentTask
- * cuyo type es discover_companies o find_contacts (los únicos
- * consumidores de proveedores pagos hoy), no el costUsd de toda la
- * cuenta — así un mes con mucho gasto de LLM no dispara falsamente este
- * guardia, y viceversa. Un solo presupuesto para los dos: ambos son
- * "gasto de enriquecimiento de datos", no vale la pena un guardia por
- * proveedor individual todavía.
+ * F4.5/F4.6/F4.7: presupuesto de proveedores de DATOS (Google Places,
+ * People Data Labs, Hunter.io), separado del presupuesto de IA
+ * (budget.ts, aiMonthlyBudgetUsd) — mismo motivo que documenta
+ * docs/F4_5_EXTERNAL_DISCOVERY_AND_EMAIL_PLAN.md §2: "no mezclar ambos
+ * guardias". Se suma solo el costUsd de AgentTask cuyo type es
+ * discover_companies/find_contacts/find_email (los únicos consumidores
+ * de proveedores pagos hoy), no el costUsd de toda la cuenta — así un
+ * mes con mucho gasto de LLM no dispara falsamente este guardia, y
+ * viceversa. Un solo presupuesto para todos: son "gasto de
+ * enriquecimiento de datos", no vale la pena un guardia por proveedor
+ * individual todavía (ver docs/F4_7_EMAIL_INTELLIGENCE_PLAN.md §11).
  */
 const DEFAULT_DATA_PROVIDER_BUDGET_USD = 10;
-const DATA_PROVIDER_TASK_TYPES = ["discover_companies", "find_contacts"] as const;
+const DATA_PROVIDER_TASK_TYPES = ["discover_companies", "find_contacts", "find_email"] as const;
 
 export interface DataProviderBudgetStatus {
   spentUsd: number;

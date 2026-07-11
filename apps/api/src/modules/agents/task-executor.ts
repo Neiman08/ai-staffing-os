@@ -56,6 +56,7 @@ const TASK_TYPE_TO_TOOL_NAME: Record<string, string> = {
   classify_conversation: "classifyConversation", // F4
   discover_companies: "discoverCompanies", // F4.5A
   find_contacts: "findContacts", // F4.6
+  find_email: "findEmail", // F4.7
 };
 
 class MissingApiKeyProvider implements LLMProvider {

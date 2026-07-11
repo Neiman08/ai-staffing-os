@@ -4,6 +4,8 @@ import { prisma } from "@ai-staffing-os/db";
 import { createAndRunTaskSync } from "./task-executor";
 import { computeContactConfidenceScore, mapTitleToDecisionRole } from "./tools/contact-intelligence-tools.impl";
 import { extractFieldsFromPdlPerson } from "./tools/contact-providers/people-data-labs";
+import { extractFromPage, findTargetLinks } from "./tools/website-intelligence/extract";
+import { mapStatusToVerificationStatus } from "./tools/email-verification-providers/hunter";
 
 const createdContactIds: string[] = [];
 
@@ -131,5 +133,126 @@ test("findContacts (llamada real al proveedor configurado o ausencia honesta): s
       assert.ok(["CONFIRMED", "INFERRED", "NOT_FOUND"].includes(f.status), `campo ${key} tiene un status fuera del vocabulario cerrado`);
       if (f.status === "NOT_FOUND") assert.equal(f.value, null);
     }
+  }
+});
+
+// ============================================================
+// F4.7: Website Intelligence — extracción pura de HTML (sin red). Mismo
+// principio "nunca inventar": un email/tarjeta de persona solo cuenta si
+// está literal en el HTML, nunca por inferencia.
+// ============================================================
+
+test("extractFromPage: mailto: real con nombre+cargo en el mismo bloque arma una tarjeta de persona", () => {
+  const html = `
+    <html><body>
+      <div class="team-card">
+        <h3>Jane Doe</h3>
+        <p>HR Manager</p>
+        <a href="mailto:jane.doe@acme-mfg.example.com">Email Jane</a>
+      </div>
+    </body></html>`;
+  const result = extractFromPage(html, "https://acme-mfg.example.com/team");
+  assert.equal(result.namedPeople.length, 1);
+  assert.deepEqual(result.namedPeople[0], {
+    firstName: "Jane",
+    lastName: "Doe",
+    title: "HR Manager",
+    email: "jane.doe@acme-mfg.example.com",
+    sourceUrl: "https://acme-mfg.example.com/team",
+  });
+  assert.equal(result.genericEmails.length, 1);
+});
+
+test("extractFromPage: mailto: sin nombre/cargo cerca queda como email genérico, nunca se inventa una persona", () => {
+  const html = `<html><body><footer>Contactanos: <a href="mailto:info@acme-mfg.example.com">info@acme-mfg.example.com</a></footer></body></html>`;
+  const result = extractFromPage(html, "https://acme-mfg.example.com/contact");
+  assert.equal(result.namedPeople.length, 0);
+  assert.deepEqual(result.genericEmails, [{ email: "info@acme-mfg.example.com", sourceUrl: "https://acme-mfg.example.com/contact" }]);
+});
+
+test("extractFromPage: emails placeholder/de ejemplo se descartan, nunca se reportan como reales", () => {
+  const html = `<html><body>Contact: you@example.com or support@yourdomain.com</body></html>`;
+  const result = extractFromPage(html, "https://acme-mfg.example.com/");
+  assert.equal(result.genericEmails.length, 0);
+});
+
+test("extractFromPage: detecta formulario de contacto sin interactuar con él", () => {
+  const html = `<html><body><form action="/submit"><input name="email" /></form></body></html>`;
+  const result = extractFromPage(html, "https://acme-mfg.example.com/contact");
+  assert.equal(result.hasContactForm, true);
+});
+
+test("findTargetLinks: solo links del MISMO dominio que matchean rutas objetivo (contact/about/team/careers/...)", () => {
+  const html = `
+    <html><body>
+      <a href="/about-us">About</a>
+      <a href="/careers">Careers</a>
+      <a href="https://otrodominio.example.com/team">Team externo</a>
+      <a href="/products">Products</a>
+    </body></html>`;
+  const links = findTargetLinks(html, "https://acme-mfg.example.com/");
+  assert.ok(links.some((l) => l.includes("/about-us")));
+  assert.ok(links.some((l) => l.includes("/careers")));
+  assert.ok(!links.some((l) => l.includes("otrodominio")), "nunca debe seguir un link a un dominio externo");
+  assert.ok(!links.some((l) => l.includes("/products")), "no matchea ninguna ruta objetivo, no debe incluirse");
+});
+
+// ============================================================
+// F4.7: mapeo del estado real de Hunter.io Email Verifier — confirmado
+// contra una llamada real que el campo vigente es `status`, no `result`
+// (marcado deprecated por la propia API).
+// ============================================================
+
+test("mapStatusToVerificationStatus: clasifica el vocabulario real de Hunter, UNKNOWN si no matchea nada conocido", () => {
+  assert.equal(mapStatusToVerificationStatus("valid"), "VERIFIED");
+  assert.equal(mapStatusToVerificationStatus("invalid"), "INVALID");
+  assert.equal(mapStatusToVerificationStatus("disposable"), "INVALID");
+  assert.equal(mapStatusToVerificationStatus("accept_all"), "RISKY");
+  assert.equal(mapStatusToVerificationStatus("webmail"), "RISKY");
+  assert.equal(mapStatusToVerificationStatus("unknown"), "UNKNOWN");
+  assert.equal(mapStatusToVerificationStatus(undefined), "UNKNOWN");
+});
+
+// ============================================================
+// Integración real: findEmail (Website Intelligence + Hunter.io
+// discovery/verification configurados o ausencia honesta). Si
+// HUNTER_API_KEY no está configurada, el tool no debe inventar nada —
+// debe terminar DONE con 0 emails y el motivo real en patternsFailed.
+// ============================================================
+
+test("findEmail (llamada real a Website Intelligence + Hunter.io o ausencia honesta): siempre termina DONE, nunca inventa un email", async () => {
+  const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
+  const company = await prisma.company.findFirstOrThrow({ where: { tenantId: salesUser.tenantId, website: { not: null } } });
+
+  const task = await createAndRunTaskSync(salesUser.tenantId, salesUser.id, {
+    agentKey: "contact_intelligence",
+    type: "find_email",
+    input: { companyId: company.id },
+    triggeredBy: "USER",
+  });
+
+  assert.equal(task.status, "DONE", `find_email nunca debe FAILED por un proveedor caído/sin configurar: ${task.errorMessage}`);
+  const output = task.output as {
+    contactsProcessed: number;
+    emailsFound: number;
+    emailsVerified: number;
+    contactsUpdated: Array<{ contactId: string; email: string | null; emailVerificationStatus: string }>;
+    companyEmailUpdated: boolean;
+    websitePagesVisited: number;
+    sourcesUsed: string[];
+    patternsFailed: string[];
+  };
+  assert.ok(Array.isArray(output.contactsUpdated));
+  assert.ok(Array.isArray(output.patternsFailed));
+  assert.ok(typeof output.websitePagesVisited === "number");
+
+  for (const updated of output.contactsUpdated) {
+    const contact = await prisma.contact.findUniqueOrThrow({ where: { id: updated.contactId } });
+    assert.ok(
+      ["NOT_VERIFIED", "VERIFIED", "RISKY", "INVALID", "UNKNOWN"].includes(contact.emailVerificationStatus),
+      "emailVerificationStatus fuera del vocabulario cerrado",
+    );
+    // Nunca se persiste un email sin al menos una fuente identificable.
+    if (contact.email) assert.ok(contact.emailSource, "un Contact con email debe tener emailSource — nunca un email sin procedencia");
   }
 });

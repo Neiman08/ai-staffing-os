@@ -15,6 +15,10 @@ export const companyVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED"
 // (Contact es una entidad distinta con su propio ciclo de vida de
 // procedencia) — ver ContactVerificationStatus en el schema de Prisma.
 export const contactVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED"]);
+// F4.7: entregabilidad del EMAIL específicamente — distinto de
+// contactVerificationStatusSchema (que describe la procedencia del
+// contacto como registro completo). Solo VERIFIED habilita outreach.
+export const emailVerificationStatusSchema = z.enum(["NOT_VERIFIED", "VERIFIED", "RISKY", "INVALID", "UNKNOWN"]);
 export const contactDecisionRoleSchema = z.enum([
   "OWNER",
   "HR",
@@ -77,6 +81,14 @@ export const contactSummarySchema = z.object({
   confidenceScore: z.number().nullable(),
   discoveredAt: z.string().nullable(),
   verificationStatus: contactVerificationStatusSchema,
+  // F4.7: procedencia y verificación del email — ver
+  // docs/F4_7_EMAIL_INTELLIGENCE_PLAN.md §4.
+  emailSource: z.string().nullable(),
+  emailSourceUrl: z.string().nullable(),
+  emailVerificationStatus: emailVerificationStatusSchema,
+  emailConfidenceScore: z.number().nullable(),
+  emailVerifiedAt: z.string().nullable(),
+  doNotContact: z.boolean(),
 });
 export type ContactSummary = z.infer<typeof contactSummarySchema>;
 
@@ -180,6 +192,7 @@ export const contactQuerySchema = z.object({
   companyState: z.string().optional(),
   decisionRole: contactDecisionRoleSchema.optional(),
   verificationStatus: contactVerificationStatusSchema.optional(),
+  emailVerificationStatus: emailVerificationStatusSchema.optional(), // F4.7
   minConfidence: z.coerce.number().min(0).max(1).optional(),
   companyId: z.string().optional(),
   companyName: z.string().optional(), // búsqueda parcial, insensible a mayúsculas

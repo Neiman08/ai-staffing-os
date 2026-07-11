@@ -110,9 +110,14 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
 
   const findContactsTasks = childTasks.filter((t) => t.type === "find_contacts");
   const findContactsTaskIds = findContactsTasks.map((t) => t.id);
-  const costUsdFromContacts = findContactsTasks.reduce((sum, t) => sum + Number(t.costUsd ?? 0), 0);
-  const durationMs = findContactsTasks.some((t) => t.completedAt)
-    ? findContactsTasks.reduce((sum, t) => (t.completedAt ? sum + (t.completedAt.getTime() - t.createdAt.getTime()) : sum), 0)
+  // F4.7: find_email es el mismo agente (Contact Intelligence, ampliado)
+  // corriendo justo después de find_contacts para cada Company — se suma
+  // al mismo costo/tiempo de la cadena, no es una fase aparte.
+  const findEmailTasks = childTasks.filter((t) => t.type === "find_email");
+  const contactIntelligenceTasks = [...findContactsTasks, ...findEmailTasks];
+  const costUsdFromContacts = contactIntelligenceTasks.reduce((sum, t) => sum + Number(t.costUsd ?? 0), 0);
+  const durationMs = contactIntelligenceTasks.some((t) => t.completedAt)
+    ? contactIntelligenceTasks.reduce((sum, t) => (t.completedAt ? sum + (t.completedAt.getTime() - t.createdAt.getTime()) : sum), 0)
     : null;
 
   const missionContacts = findContactsTaskIds.length
