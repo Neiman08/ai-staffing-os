@@ -52,6 +52,12 @@ const envSchema = z.object({
   // preparado, a la espera de aprobación explícita del PO antes de
   // pasar a true en cualquier entorno real. Ver core/production-mode.ts.
   PRODUCTION_MODE: z.coerce.boolean().default(false),
+
+  // F4.8: qué Tenant sirve el sitio público (dreistaff.com) — este
+  // pilot es de un solo tenant real ("titan", el mismo de siempre en
+  // seed.ts), pero el valor sigue siendo configurable por env, nunca
+  // hardcodeado en el código de las rutas públicas. Ver core/public-tenant.ts.
+  PUBLIC_TENANT_SLUG: z.string().default("titan"),
 });
 
 function loadEnv() {

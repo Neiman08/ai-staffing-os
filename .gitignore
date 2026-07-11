@@ -7,4 +7,12 @@ build/
 .DS_Store
 .pnpm-store/
 coverage/
+*.tsbuildinfo
 packages/db/prisma/migrations/.gitkeep
+
+# F4.8: robots.txt/sitemap.xml se generan en cada dev/build a partir de
+# BUSINESS_DOMAIN (ver apps/marketing/scripts/generate-seo-files.mjs) —
+# nunca se commitean, para que el dominio real nunca quede hardcodeado
+# en el repo.
+apps/marketing/public/robots.txt
+apps/marketing/public/sitemap.xml

@@ -25,6 +25,7 @@ import { missionsRouter } from "./modules/missions/router";
 import { discoveryRouter } from "./modules/discovery/router";
 import { brandingRouter } from "./modules/branding/router";
 import { productionReadinessRouter } from "./modules/production-readiness/router";
+import { publicRouter } from "./modules/public/router";
 
 export function createApp() {
   const app = express();
@@ -40,6 +41,12 @@ export function createApp() {
       res.status(503).json({ status: "degraded", db: false });
     }
   });
+
+  // F4.8: rutas públicas (sitio dreistaff.com) — SIN tenancyMiddleware,
+  // tráfico anónimo real. Montadas antes a propósito: nunca deben pasar
+  // por la resolución de identidad interna (dev-bypass/Clerk). Resuelven
+  // su propio tenant vía core/public-tenant.ts.
+  app.use("/api/v1", publicRouter);
 
   app.use("/api/v1", tenancyMiddleware);
   app.use("/api/v1/auth", authRouter);
