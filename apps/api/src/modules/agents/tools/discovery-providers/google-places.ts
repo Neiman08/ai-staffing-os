@@ -198,7 +198,11 @@ async function fetchGooglePlacesTextSearch(
 }
 
 export async function searchGooglePlaces(params: ProviderSearchParams, apiKey: string): Promise<ProviderSearchResult> {
-  const phrase = INDUSTRY_QUERY_PHRASES[params.industryName];
+  // Bugfix multi-sector: una frase de búsqueda libre (queryPhrase) tiene
+  // prioridad — Google Places entiende texto libre razonablemente bien,
+  // no hace falta que matchee una de las 4 Industry del CRM. Sin ella,
+  // sigue el mismo lookup fijo de siempre (comportamiento sin cambios).
+  const phrase = params.queryPhrase?.trim() || INDUSTRY_QUERY_PHRASES[params.industryName];
   if (!phrase) {
     // Nunca se inventa una búsqueda para una industria fuera del alcance
     // definido — el orquestador cae a Overpass, que tampoco la cubre, y
@@ -218,7 +222,7 @@ export async function searchGooglePlaces(params: ProviderSearchParams, apiKey: s
       // registramos costo solo si de verdad se le pegó a la API (no en errores de validación local).
       costUsd: TEXT_SEARCH_COST_PER_REQUEST_USD,
       sourcesUsed: [],
-      patternsFailed: [`${params.industryName}:google_places_text_search (${result.error})`],
+      patternsFailed: [`${params.queryPhrase ?? params.industryName}:google_places_text_search (${result.error})`],
       cancelled: !!result.cancelled,
     };
   }

@@ -155,15 +155,18 @@ Categorías de trabajo disponibles en este tenant: ${categories.map((c) => c.nam
 Instrucción del usuario: "${input.rawInstruction}"
 
 Responde ÚNICAMENTE con un JSON de la forma {
-  "industryNames": ["<SOLO nombres de la lista de industrias de arriba que apliquen — nunca inventes uno nuevo, puede quedar vacío>"],
+  "industryNames": ["<SOLO nombres de la lista de industrias de arriba que apliquen — nunca inventes uno nuevo, puede quedar vacío. IMPORTANTE si vas a llenar externalSearchTerms (ver abajo): igual elegí acá la industria real más cercana de la lista de arriba (ej. 'Construction' para contratistas/trades de construcción) — se usa solo para archivar las empresas encontradas en el CRM, no reemplaza a externalSearchTerms como texto de búsqueda>"],
   "state": "<código de 2 letras, ej. IL>" o null,
   "city": "<ciudad>" o null,
   "categoryNames": ["<SOLO de la lista de categorías de arriba>"],
   "desiredVolume": <número de empresas deseado> o null,
   "businessObjective": { "type": "meetings"|"new_clients"|"companies_found"|"pipeline_increase"|"custom", "target": <número> o null, "unit": "<palabra corta, SIEMPRE un string aunque target sea null — ej. 'reuniones', 'clientes', 'empresas', 'USD'>", "rawText": "<frase literal de la instrucción que describe el objetivo — si no hay un objetivo explícito, usa la instrucción completa>" },
-  "unrecognizedTerms": ["<términos que el usuario mencionó que NO coinciden con ninguna industria/categoría de arriba>"],
-  "useExternalDiscovery": <true ÚNICAMENTE si la instrucción menciona EXPLÍCITAMENTE que las empresas deben buscarse FUERA del CRM o que el sistema no las tiene todavía — frases como "fuera del CRM", "que no tengamos en el CRM/sistema", "que no conozcamos todavía", "búsqueda externa", "en internet", "fuentes externas". Es false (default, el caso normal) para CUALQUIER instrucción que solo diga "busca/encuentra empresas de <industria> en <lugar>" sin esa mención explícita — eso significa buscar entre las empresas YA existentes en el CRM, el comportamiento de siempre. La palabra "nueva/nuevas" SOLA (ej. "encontrar 1 empresa nueva") NO activa esto — en el CRM significa "una empresa todavía no targeteada en esta campaña", no "una empresa fuera del CRM". Ante la duda, false.>
-}`;
+  "unrecognizedTerms": ["<términos que el usuario mencionó que NO coinciden con ninguna industria/categoría de arriba NI se pudieron convertir en una frase de externalSearchTerms — ver abajo>"],
+  "useExternalDiscovery": <true ÚNICAMENTE si la instrucción menciona EXPLÍCITAMENTE que las empresas deben buscarse FUERA del CRM o que el sistema no las tiene todavía — frases como "fuera del CRM", "que no tengamos en el CRM/sistema", "que no conozcamos todavía", "búsqueda externa", "en internet", "fuentes externas". Es false (default, el caso normal) para CUALQUIER instrucción que solo diga "busca/encuentra empresas de <industria> en <lugar>" sin esa mención explícita — eso significa buscar entre las empresas YA existentes en el CRM, el comportamiento de siempre. La palabra "nueva/nuevas" SOLA (ej. "encontrar 1 empresa nueva") NO activa esto — en el CRM significa "una empresa todavía no targeteada en esta campaña", no "una empresa fuera del CRM". Ante la duda, false.>,
+  "externalSearchTerms": [<SOLO cuando useExternalDiscovery es true Y la instrucción enumera VARIOS tipos de negocio/trade específicos que van más allá de una sola industria genérica (ej. "contratistas eléctricos, baja tensión, fibra óptica, automatización industrial, HVAC, Mission Critical" — eso son 6 frases distintas, NUNCA una sola industria inventada que las mezcle todas). Cada elemento es una frase de búsqueda corta EN INGLÉS lista para un buscador tipo Google Places (ej. "electrical contractor", "low voltage contractor", "fiber optic contractor", "industrial automation", "HVAC contractor", "mission critical contractor", "mechanical contractor", "controls contractor", "industrial electrical contractor") — una frase por cada tipo de negocio distinto que el usuario nombró, NUNCA una sola frase que intente resumir todos. Si la instrucción ya describe una sola industria/sector claro (ej. "empresas de manufactura", "construcción de data centers"), dejá esto vacío — ese caso ya lo cubre industryNames como siempre. Si no aplica, array vacío.]
+}
+
+Regla crítica: cuando la instrucción lista varios sectores/trades distintos, CADA UNO debe quedar como su propia frase en externalSearchTerms — está PROHIBIDO colapsar varios sectores en una sola industria inventada o en un solo string. Si no podés convertir un término a una frase de búsqueda razonable Y tampoco coincide con una industria/categoría real, listalo tal cual en unrecognizedTerms — nunca lo descartes en silencio.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -190,6 +193,11 @@ Responde ÚNICAMENTE con un JSON de la forma {
             businessObjective: businessObjectiveSchema.extend({ unit: z.string().nullable() }),
             unrecognizedTerms: z.array(z.string()),
             useExternalDiscovery: z.boolean().nullable().optional(),
+            // Bugfix multi-sector: opcional en el parseo (el LLM a veces
+            // omite el campo por completo en vez de devolver []) — se
+            // normaliza a array vacío más abajo, nunca se descarta la
+            // interpretación completa por esto.
+            externalSearchTerms: z.array(z.string()).nullable().optional(),
           }),
         );
         if (!parsed) {
@@ -217,6 +225,7 @@ Responde ÚNICAMENTE con un JSON de la forma {
           businessObjective: { ...parsed.businessObjective, unit: parsed.businessObjective.unit ?? "empresas" },
           unrecognizedTerms: [...parsed.unrecognizedTerms, ...droppedTerms],
           useExternalDiscovery: parsed.useExternalDiscovery ?? false,
+          externalSearchTerms: parsed.externalSearchTerms ?? [],
         };
       },
     },

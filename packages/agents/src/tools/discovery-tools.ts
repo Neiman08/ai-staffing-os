@@ -28,6 +28,14 @@ export type DiscoveredField = z.infer<typeof discoveredFieldSchema>;
 
 export const discoverCompaniesInputSchema = z.object({
   industryNames: z.array(z.string()).min(1),
+  // Bugfix multi-sector: frases de búsqueda libres, una por búsqueda
+  // independiente (ej. "electrical contractor", "low voltage
+  // contractor"). Si se pasa, reemplaza a industryNames SOLO como texto
+  // de búsqueda enviado al proveedor — industryNames se sigue usando tal
+  // cual para resolver el Industry (FK) bajo el que se archivan las
+  // Company encontradas. Sin esto, cada industryName se busca tal cual
+  // (comportamiento de siempre, sin cambios).
+  searchTerms: z.array(z.string()).optional(),
   state: z.string().min(1),
   city: z.string().optional(),
   categoryNames: z.array(z.string()).optional(),
@@ -51,6 +59,12 @@ export const discoverCompaniesOutputSchema = z.object({
   insufficientDataSkipped: z.number(),
   sourcesUsed: z.array(z.string()),
   patternsFailed: z.array(z.string()),
+  // Bugfix multi-sector: cuántas búsquedas independientes se ejecutaron
+  // de verdad (una por industryName × searchTerm) — permite distinguir
+  // "se buscó y no había nada" (0 empresas, N búsquedas) de "no se pudo
+  // buscar nada" (0 empresas, 0 búsquedas), que nunca debe terminar en
+  // una misión COMPLETED silenciosa (ver mission-orchestrator.ts).
+  searchesExecuted: z.number(),
 });
 export type DiscoverCompaniesOutput = z.infer<typeof discoverCompaniesOutputSchema>;
 

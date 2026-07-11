@@ -199,8 +199,39 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     : [];
   const categoryIds = categories.map((c) => c.id);
 
+  // Bugfix multi-sector: una misión de descubrimiento externo (Google
+  // Places/Overpass) SIEMPRE necesita una industria real del CRM bajo la
+  // cual archivar lo que encuentre — Company.industryId es obligatorio.
+  // Antes, si el CEO Agent no lograba mapear la instrucción a ninguna
+  // industria real (típico con instrucciones multi-sector — "contratistas
+  // eléctricos, baja tensión, fibra óptica, ..." no matchea ninguna de
+  // las 4 industrias fijas), el pipeline seguía de largo con
+  // industryTargets=[null], nunca corría discover_companies (el gate de
+  // abajo exige industry != null), y la misión terminaba COMPLETED con 0
+  // empresas sin ningún error visible. Ahora se falla explícito, ACÁ,
+  // antes de crear ninguna campaña — nunca una misión de discovery
+  // externo silenciosamente vacía.
+  if (interpreted.useExternalDiscovery && industries.length === 0) {
+    const unrecognized = interpreted.unrecognizedTerms?.length
+      ? interpreted.unrecognizedTerms.join(", ")
+      : interpreted.externalSearchTerms?.length
+        ? interpreted.externalSearchTerms.join(", ")
+        : "(el CEO Agent no reportó ningún término específico)";
+    await failMission(
+      missionTaskId,
+      `No se pudo interpretar ninguna industria real del CRM para archivar los resultados de esta búsqueda externa. Términos no reconocidos: ${unrecognized}. Agregá una de las industrias existentes explícitamente en la instrucción, o creá la industria correspondiente en el CRM antes de reintentar.`,
+    );
+    return;
+  }
+
   const industryTargets: Array<{ id: string; name: string } | null> = industries.length > 0 ? industries : [null];
   const perCampaignVolume = Math.min(interpreted.desiredVolume ?? MAX_COMPANIES_PER_MISSION, MAX_COMPANIES_PER_MISSION);
+  // Bugfix multi-sector: cuántas búsquedas independientes de proveedor
+  // externo realmente se ejecutaron a lo largo de TODA la misión — si
+  // useExternalDiscovery pidió una búsqueda externa y este número queda
+  // en 0 al terminar el pipeline, la misión nunca debe cerrar COMPLETED
+  // (ver el chequeo justo antes de closeMission, al final).
+  let totalSearchesExecuted = 0;
 
   /**
    * Bugfix de ciclo de vida: chequeo único reutilizado antes de cada paso
@@ -272,12 +303,23 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     // los criterios de la campaña.
     if (interpreted.useExternalDiscovery && interpreted.state && industry) {
       if ((await checkForStop()) === "stop") return;
-      log(missionTaskId, "discovery delegated", { industry: industry.name, state: interpreted.state });
+      log(missionTaskId, "discovery delegated", {
+        industry: industry.name,
+        state: interpreted.state,
+        searchTerms: interpreted.externalSearchTerms ?? [],
+      });
       const discoverTask = await createAndRunTaskSync(tenantId, operatorUserId, {
         agentKey: "discovery",
         type: "discover_companies",
         input: {
           industryNames: [industry.name],
+          // Bugfix multi-sector: si el CEO Agent extrajo varias frases de
+          // búsqueda específicas (electrical contractor, low voltage
+          // contractor, ...), el Discovery Agent corre una búsqueda
+          // independiente por frase — ver discovery-tools.impl.ts. Sin
+          // esto, se preserva el comportamiento de siempre (una sola
+          // búsqueda con el nombre de la industria).
+          searchTerms: interpreted.externalSearchTerms?.length ? interpreted.externalSearchTerms : undefined,
           state: interpreted.state,
           city: interpreted.city ?? undefined,
           limit: perCampaignVolume,
@@ -289,6 +331,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       // caída) no aborta la misión: select_target_companies de abajo
       // simplemente no encuentra empresas nuevas — resultado real, no se
       // inventa nada para compensar.
+      totalSearchesExecuted += (discoverTask.output as { searchesExecuted?: number } | null)?.searchesExecuted ?? 0;
       await syncMissionOutput(missionTaskId, "RUNNING");
 
       // F4.6: Contact Intelligence corre acá — después de Discovery,
@@ -425,6 +468,20 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       });
       await syncMissionOutput(missionTaskId, "RUNNING");
     }
+  }
+
+  // Bugfix multi-sector: red de seguridad final — si la instrucción pidió
+  // explícitamente descubrimiento externo pero, al terminar todo el
+  // recorrido, no se ejecutó NINGUNA búsqueda real de proveedor (0
+  // llamadas a Google Places/Overpass, por cualquier motivo: estado
+  // faltante, industria sin resolver a último momento, etc.), la misión
+  // nunca cierra COMPLETED de forma silenciosa — falla explícito.
+  if (interpreted.useExternalDiscovery && totalSearchesExecuted === 0) {
+    await failMission(
+      missionTaskId,
+      "Se pidió una búsqueda externa pero no se ejecutó ninguna búsqueda de proveedor real — revisá que la instrucción incluya un estado soportado y al menos una industria o sector reconocible.",
+    );
+    return;
   }
 
   // Bugfix de ciclo de vida: antes, terminar de recorrer todas las

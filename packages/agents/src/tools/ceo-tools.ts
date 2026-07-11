@@ -44,6 +44,16 @@ export interface InterpretDailyDirectiveResult {
   // es quien decide en código qué pipeline correr (mismo principio de
   // "el LLM nunca elige el tool ni el orden").
   useExternalDiscovery: boolean;
+  // Bugfix multi-sector: frases de búsqueda libres para el proveedor
+  // externo (Google Places), solo relevantes cuando useExternalDiscovery
+  // es true. A diferencia de industryNames (vocabulario cerrado, atado a
+  // las 4 Industry del CRM), esto puede tener varias frases específicas
+  // ("electrical contractor", "low voltage contractor", "fiber optic
+  // contractor"...) cuando la instrucción lista varios sectores/trades —
+  // el Discovery Agent corre una búsqueda independiente POR frase, nunca
+  // colapsa todo en una sola. Vacío si la instrucción ya es una sola
+  // industria clara (el pipeline cae de vuelta a industryNames).
+  externalSearchTerms: string[];
 }
 export const interpretDailyDirectiveTool: AgentTool<
   z.infer<typeof interpretDailyDirectiveInputSchema>,

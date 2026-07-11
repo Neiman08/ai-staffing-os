@@ -203,3 +203,43 @@ test("discoverCompanies (llamada real al proveedor configurado): siempre termina
     }
   }
 });
+
+// ============================================================
+// Bugfix multi-sector: discover_companies debe soportar N frases de
+// búsqueda independientes (searchTerms) archivadas bajo UNA sola
+// industria real — cada frase es su propia búsqueda contra el proveedor,
+// nunca se colapsan en una sola. searchesExecuted debe reflejar que
+// realmente se intentó cada una (aunque el proveedor no devuelva nada
+// para alguna), para que mission-orchestrator.ts pueda distinguir "se
+// buscó y no había nada" de "nunca se llegó a buscar".
+// ============================================================
+
+test("discoverCompanies con searchTerms: corre una búsqueda independiente por frase, nunca inventa datos", async () => {
+  const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
+  const searchTerms = ["electrical contractor", "low voltage contractor"];
+  const task = await createAndRunTaskSync(salesUser.tenantId, salesUser.id, {
+    agentKey: "discovery",
+    type: "discover_companies",
+    input: { industryNames: ["Construction"], searchTerms, state: "IL", limit: 4 },
+    triggeredBy: "USER",
+  });
+
+  assert.equal(task.status, "DONE", `discover_companies nunca debe FAILED por una fuente externa caída: ${task.errorMessage}`);
+  const output = task.output as {
+    companiesCreated: Array<{ companyId: string; name: string }>;
+    searchesExecuted: number;
+    sourcesUsed: string[];
+    patternsFailed: string[];
+  };
+  // Dos frases de búsqueda -> al menos dos intentos reales de proveedor,
+  // nunca 0 (eso es exactamente el bug: "0 búsquedas, misión COMPLETED").
+  assert.ok(output.searchesExecuted >= searchTerms.length, `se esperaban al menos ${searchTerms.length} búsquedas ejecutadas, hubo ${output.searchesExecuted}`);
+
+  for (const created of output.companiesCreated) {
+    createdCompanyIds.push(created.companyId);
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: created.companyId } });
+    // Ambas frases archivan bajo la MISMA industria real pasada en
+    // industryNames — nunca una industria inventada por frase.
+    assert.equal(company.industryId, "industry-construction");
+  }
+});

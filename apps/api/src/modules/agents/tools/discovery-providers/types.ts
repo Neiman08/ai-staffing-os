@@ -26,6 +26,13 @@ export interface ProviderSearchResult {
 export interface ProviderSearchParams {
   taskId: string;
   industryName: string;
+  // Bugfix multi-sector: frase de búsqueda libre (ej. "electrical
+  // contractor") — si está presente, un proveedor que soporte texto
+  // libre (Google Places) la usa TAL CUAL en vez de resolver una frase
+  // fija a partir de industryName. Overpass no tiene búsqueda de texto
+  // libre (requiere tags OSM estructurados) — la ignora, sigue
+  // resolviendo por industryName como siempre, degradación honesta.
+  queryPhrase?: string;
   stateCode: string; // "IL"
   stateName: string; // "Illinois"
   city?: string;
