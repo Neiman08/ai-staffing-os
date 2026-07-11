@@ -24,6 +24,7 @@ import CampaignDetail from "./pages/CampaignDetail";
 import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
 import Missions from "./pages/Missions";
 import Discovery from "./pages/Discovery";
+import ProductionReadiness from "./pages/ProductionReadiness";
 
 export const router = createBrowserRouter([
   {
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "agents", element: <AgentsCenter /> },
       { path: "approvals", element: <Approvals /> },
       { path: "ai-dashboard", element: <AIDashboard /> },
+      { path: "production-readiness", element: <ProductionReadiness /> },
       { path: "settings", element: <Settings /> },
     ],
   },

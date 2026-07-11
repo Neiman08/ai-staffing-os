@@ -15,6 +15,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { AppError } from "../../core/errors";
+import { isProductionMode } from "../../core/production-mode";
 
 const OPEN_OPPORTUNITY_STAGES = ["MEETING_SCHEDULED", "PROPOSAL_SENT", "NEGOTIATION"] as const;
 
@@ -55,9 +56,13 @@ async function attachCompanyComputedFields(companyIds: string[]) {
 }
 
 export async function listCompanies(query: CompanyQuery): Promise<Paginated<CompanyListItem>> {
+  // F4.7.5 §2: con PRODUCTION_MODE=true, ocultar datos demo deja de ser
+  // un toggle opcional — se fuerza siempre, sin importar lo que pida el
+  // query param (nunca activado todavía, ver core/production-mode.ts).
+  const excludeDemo = query.excludeDemo || isProductionMode();
   const rows = await scopedDb.company.findMany({
     ...buildCursorArgs(query),
-    where: query.excludeDemo ? { origin: { not: "DEMO_SEED" } } : undefined,
+    where: excludeDemo ? { origin: { not: "DEMO_SEED" } } : undefined,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
       industry: true,
@@ -279,6 +284,9 @@ export async function updateCompany(id: string, input: UpdateCompanyInput) {
 }
 
 export async function listContacts(query: ContactQuery): Promise<Paginated<ContactListItem>> {
+  // F4.7.5 §2: mismo criterio que listCompanies — PRODUCTION_MODE fuerza
+  // ocultar demo sin importar el query param.
+  const excludeDemo = query.excludeDemo || isProductionMode();
   const rows = await scopedDb.contact.findMany({
     ...buildCursorArgs({ cursor: query.cursor, limit: query.limit ?? 20 }),
     where: {
@@ -291,7 +299,7 @@ export async function listContacts(query: ContactQuery): Promise<Paginated<Conta
         state: query.companyState,
         industry: query.industryName ? { name: query.industryName } : undefined,
         name: query.companyName ? { contains: query.companyName, mode: "insensitive" } : undefined,
-        origin: query.excludeDemo ? { not: "DEMO_SEED" } : undefined,
+        origin: excludeDemo ? { not: "DEMO_SEED" } : undefined,
       },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

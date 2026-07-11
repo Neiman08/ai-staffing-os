@@ -24,6 +24,7 @@ import { campaignsRouter } from "./modules/campaigns/router";
 import { missionsRouter } from "./modules/missions/router";
 import { discoveryRouter } from "./modules/discovery/router";
 import { brandingRouter } from "./modules/branding/router";
+import { productionReadinessRouter } from "./modules/production-readiness/router";
 
 export function createApp() {
   const app = express();
@@ -62,6 +63,7 @@ export function createApp() {
   app.use("/api/v1", missionsRouter);
   app.use("/api/v1", discoveryRouter);
   app.use("/api/v1", brandingRouter);
+  app.use("/api/v1", productionReadinessRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -46,6 +46,12 @@ const envSchema = z.object({
   OUTREACH_FROM_EMAIL: z.string().optional(),
   OUTREACH_REPLY_TO: z.string().optional(),
   BUSINESS_POSTAL_ADDRESS: z.string().optional(),
+
+  // F4.7.5 §2: Production Mode — default false (permite datos demo,
+  // seeds, regresión). NUNCA se activa desde este commit — queda
+  // preparado, a la espera de aprobación explícita del PO antes de
+  // pasar a true en cualquier entorno real. Ver core/production-mode.ts.
+  PRODUCTION_MODE: z.coerce.boolean().default(false),
 });
 
 function loadEnv() {

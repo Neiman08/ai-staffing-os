@@ -19,3 +19,4 @@ export * from "./schemas/campaigns";
 export * from "./schemas/missions";
 export * from "./schemas/discovery";
 export * from "./schemas/branding";
+export * from "./schemas/production-readiness";

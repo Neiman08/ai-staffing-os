@@ -1593,7 +1593,24 @@ async function seedAuditLogAndNotifications(
 // Main
 // ============================================================
 
+// F4.7.5 §2: Production Mode — el seed de demo nunca debe poder correr
+// contra una base marcada como producción. `packages/db` no depende de
+// apps/api/src/core/env.ts (paquetes separados), así que se lee la
+// misma variable directo de process.env — mismo nombre y mismo default
+// (false) para que nunca haya dos criterios distintos de "estamos en
+// producción" en el monorepo.
+function assertSeedAllowed(): void {
+  const productionMode = process.env.PRODUCTION_MODE === "true";
+  if (productionMode) {
+    console.error(
+      "PRODUCTION_MODE=true — el seed de demo está bloqueado. Nunca se ejecuta contra una base de producción real.",
+    );
+    process.exit(1);
+  }
+}
+
 async function main() {
+  assertSeedAllowed();
   console.log("Seeding AI Staffing OS (F0)...");
 
   const tenant = await seedTenant();
