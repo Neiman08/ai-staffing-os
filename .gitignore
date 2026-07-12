@@ -16,3 +16,8 @@ packages/db/prisma/migrations/.gitkeep
 # en el repo.
 apps/marketing/public/robots.txt
 apps/marketing/public/sitemap.xml
+
+# F4.9-11: salida de Playwright (traces/screenshots de fallos) — nunca
+# se commitea, se regenera en cada corrida.
+apps/web/test-results/
+apps/web/playwright-report/
