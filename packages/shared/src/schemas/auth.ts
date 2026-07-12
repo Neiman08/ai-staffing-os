@@ -24,6 +24,13 @@ export const userListItemSchema = z.object({
     id: z.string(),
     name: z.string(),
   }),
+  // F4.9 §9 del plan aprobado: el listado también expone esto — ver
+  // docs/F4_9_PRODUCTION_AUTH_PLAN.md §4.7. activeSessionCount queda
+  // fuera del listado a propósito (exigiría una llamada a Clerk por
+  // fila); vive solo en userDetailSchema (GET /auth/users/:id).
+  lastLoginAt: z.string().nullable(),
+  mfaEnabled: z.boolean(),
+  invitationStatus: z.enum(["NOT_INVITED", "PENDING", "ACCEPTED", "REVOKED", "EXPIRED"]),
 });
 export type UserListItem = z.infer<typeof userListItemSchema>;
 
@@ -35,3 +42,27 @@ export const roleListItemSchema = z.object({
   permissionCount: z.number(),
 });
 export type RoleListItem = z.infer<typeof roleListItemSchema>;
+
+// F4.9: gestión real de usuarios (invitaciones, activar/desactivar,
+// cambiar rol, revocar sesiones) — ver
+// docs/F4_9_PRODUCTION_AUTH_PLAN.md §4.7.
+export const userDetailSchema = userListItemSchema.extend({
+  activeSessionCount: z.number(),
+});
+export type UserDetail = z.infer<typeof userDetailSchema>;
+
+export const inviteUserInputSchema = z.object({
+  email: z.string().email(),
+  roleId: z.string().min(1),
+});
+export type InviteUserInput = z.infer<typeof inviteUserInputSchema>;
+
+export const setUserStatusInputSchema = z.object({
+  isActive: z.boolean(),
+});
+export type SetUserStatusInput = z.infer<typeof setUserStatusInputSchema>;
+
+export const changeUserRoleInputSchema = z.object({
+  roleId: z.string().min(1),
+});
+export type ChangeUserRoleInput = z.infer<typeof changeUserRoleInputSchema>;

@@ -1,16 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import type {
-  DocumentTypeListItem,
-  IndustryListItem,
-  JobCategoryListItem,
-  RoleListItem,
-  UserListItem,
-} from "@ai-staffing-os/shared";
+import type { DocumentTypeListItem, IndustryListItem, JobCategoryListItem, RoleListItem } from "@ai-staffing-os/shared";
 import { apiFetch, ApiError } from "@/lib/api";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { UsersPanel } from "@/components/settings/UsersPanel";
 
 function SectionError({ error }: { error: unknown }) {
   const message = error instanceof ApiError ? error.message : "No se pudo cargar esta sección.";
@@ -18,10 +13,6 @@ function SectionError({ error }: { error: unknown }) {
 }
 
 export default function Settings() {
-  const users = useQuery({
-    queryKey: ["settings", "users"],
-    queryFn: () => apiFetch<UserListItem[]>("/auth/users"),
-  });
   const roles = useQuery({
     queryKey: ["settings", "roles"],
     queryFn: () => apiFetch<RoleListItem[]>("/auth/roles"),
@@ -44,37 +35,7 @@ export default function Settings() {
       <PageHeader title="Settings" description="Usuarios, roles y catálogos configurables del tenant" />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Usuarios</CardTitle>
-          </CardHeader>
-          {users.error ? (
-            <SectionError error={users.error} />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nombre</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Rol</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.data?.map((u) => (
-                  <TableRow key={u.id}>
-                    <TableCell className="font-medium">
-                      {u.firstName} {u.lastName}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{u.email}</TableCell>
-                    <TableCell>
-                      <Badge variant="neutral">{u.role.name}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </Card>
+        <UsersPanel className="lg:col-span-2" />
 
         <Card>
           <CardHeader>
