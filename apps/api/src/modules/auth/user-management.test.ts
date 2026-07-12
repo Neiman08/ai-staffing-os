@@ -19,6 +19,7 @@ before(async () => {
 });
 
 after(async () => {
+  await prisma.auditLog.deleteMany({ where: { entityType: "user", entityId: { in: createdUserIds } } });
   await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -67,6 +68,11 @@ test("POST /users/invite: camino feliz crea un User real PENDING sin clerkId (de
   assert.equal(user?.invitationStatus, "PENDING");
   assert.equal(user?.clerkId, null);
   assert.equal(user?.isActive, true);
+
+  const auditRow = await prisma.auditLog.findFirst({ where: { entityId: body.userId, action: "auth.invitation_sent" } });
+  assert.ok(auditRow, "debe quedar un AuditLog real de auth.invitation_sent");
+  assert.equal(auditRow?.actorType, "HUMAN");
+  assert.ok(auditRow?.actorId); // el User.id real de admin@titan.dev, nunca vacío
 });
 
 test("POST /users/invite: email duplicado en el mismo tenant → 400", async () => {
@@ -104,6 +110,7 @@ test("PATCH /users/:id/status desactiva y reactiva un User real", async () => {
   assert.equal(disable.status, 204);
   let user = await prisma.user.findUnique({ where: { id: invited.userId } });
   assert.equal(user?.isActive, false);
+  assert.ok(await prisma.auditLog.findFirst({ where: { entityId: invited.userId, action: "auth.user_disabled" } }));
 
   const enable = await adminFetch(`/users/${invited.userId}/status`, {
     method: "PATCH",
@@ -112,6 +119,7 @@ test("PATCH /users/:id/status desactiva y reactiva un User real", async () => {
   assert.equal(enable.status, 204);
   user = await prisma.user.findUnique({ where: { id: invited.userId } });
   assert.equal(user?.isActive, true);
+  assert.ok(await prisma.auditLog.findFirst({ where: { entityId: invited.userId, action: "auth.user_enabled" } }));
 });
 
 test("PATCH /users/:id/role cambia el rol real; roleId de otro tenant se rechaza", async () => {
@@ -132,6 +140,11 @@ test("PATCH /users/:id/role cambia el rol real; roleId de otro tenant se rechaza
   assert.equal(changed.status, 204);
   const user = await prisma.user.findUnique({ where: { id: invited.userId } });
   assert.equal(user?.roleId, roleB.id);
+
+  const auditRow = await prisma.auditLog.findFirst({ where: { entityId: invited.userId, action: "auth.role_changed" } });
+  assert.ok(auditRow);
+  assert.deepEqual(auditRow?.before, { roleId: roleA.id, roleName: roleA.name });
+  assert.deepEqual(auditRow?.after, { roleId: roleB.id, roleName: roleB.name });
 
   const rejected = await adminFetch(`/users/${invited.userId}/role`, {
     method: "PATCH",

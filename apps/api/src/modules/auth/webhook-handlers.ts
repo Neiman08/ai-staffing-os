@@ -53,8 +53,11 @@ export async function handleUserCreated(data: UserJSON): Promise<void> {
 
 export async function handleUserUpdated(data: UserJSON): Promise<void> {
   const email = primaryEmail(data);
-  await prisma.user.updateMany({
-    where: { clerkId: data.id },
+  const before = await prisma.user.findUnique({ where: { clerkId: data.id } });
+  if (!before) return; // no-op honesto: nada vinculado a este clerkId todavía
+
+  await prisma.user.update({
+    where: { id: before.id },
     data: {
       firstName: data.first_name ?? undefined,
       lastName: data.last_name ?? undefined,
@@ -62,6 +65,22 @@ export async function handleUserUpdated(data: UserJSON): Promise<void> {
       email: email ?? undefined,
     },
   });
+
+  // F4.9 §12: "activación de MFA" — el único momento en que sabemos con
+  // certeza que un usuario activó MFA es esta transición false→true
+  // sincronizada desde Clerk (fuente de verdad real de MFA).
+  if (!before.mfaEnabled && data.two_factor_enabled) {
+    await prisma.auditLog.create({
+      data: {
+        tenantId: before.tenantId,
+        actorType: "HUMAN",
+        actorId: before.id,
+        action: "auth.mfa_enabled",
+        entityType: "user",
+        entityId: before.id,
+      },
+    });
+  }
 }
 
 /**

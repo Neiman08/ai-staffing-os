@@ -21,6 +21,30 @@ export function deriveMfaVerified(sessionClaims: unknown): boolean {
   return fva[1] >= 0;
 }
 
+// F4.9 §12: resolveIdentity corre en CADA request autenticado, no solo
+// al iniciar sesión — sin este debounce, "auth.login" se escribiría en
+// AuditLog decenas de veces por minuto de uso normal. 30 min sin
+// actividad = se considera un login nuevo, no la continuación de la
+// misma sesión. Aproximación deliberada: no hay un evento real de
+// "sesión iniciada" separado sin suscribirse a session.created de
+// Clerk (fuera del alcance de webhooks aprobado, ver
+// docs/F4_9_PRODUCTION_AUTH_PLAN.md §8).
+const LOGIN_AUDIT_DEBOUNCE_MS = 30 * 60 * 1000;
+
+export async function bumpLastLoginAndMaybeAudit(userId: string, tenantId: string): Promise<void> {
+  const previous = await prisma.user.findUnique({ where: { id: userId }, select: { lastLoginAt: true } });
+  const isFreshLogin =
+    !previous?.lastLoginAt || Date.now() - previous.lastLoginAt.getTime() > LOGIN_AUDIT_DEBOUNCE_MS;
+
+  await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+
+  if (isFreshLogin) {
+    await prisma.auditLog.create({
+      data: { tenantId, actorType: "HUMAN", actorId: userId, action: "auth.login", entityType: "user", entityId: userId },
+    });
+  }
+}
+
 /**
  * F4.9: reemplaza DevBypassAuthProvider en producción. La verificación
  * criptográfica del JWT (firma, issuer, audience, expiración) la hace
@@ -47,8 +71,8 @@ export class ClerkAuthProvider implements AuthProvider {
     });
 
     // Fire-and-forget: nunca debe bloquear ni fallar la request por esto.
-    prisma.user.update({ where: { id: identity.userId }, data: { lastLoginAt: new Date() } }).catch((err) => {
-      console.error("Failed to update lastLoginAt:", err);
+    bumpLastLoginAndMaybeAudit(identity.userId, identity.tenantId).catch((err) => {
+      console.error("Failed to update lastLoginAt / auth.login audit:", err);
     });
 
     return identity;

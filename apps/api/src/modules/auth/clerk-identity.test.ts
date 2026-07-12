@@ -82,6 +82,7 @@ before(async () => {
 });
 
 after(async () => {
+  await prisma.auditLog.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } });
   await prisma.user.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } });
   await prisma.role.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } });
   await prisma.tenant.deleteMany({ where: { id: { in: [tenantId, otherTenantId] } } });
@@ -101,30 +102,39 @@ test("orgId que no mapea a ningún Tenant → 401 unauthorized", async () => {
   );
 });
 
-test("Tenant inactivo → 401 TENANT_INACTIVE", async () => {
+test("Tenant inactivo → 401 TENANT_INACTIVE, y queda un AuditLog real de auth.login_failed", async () => {
   await prisma.tenant.update({ where: { id: tenantId }, data: { isActive: false } });
   try {
     await assert.rejects(
       () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false }),
       (err: unknown) => err instanceof AppError && err.code === "TENANT_INACTIVE",
     );
+    const auditRow = await prisma.auditLog.findFirst({
+      where: { tenantId, action: "auth.login_failed", after: { equals: { reason: "tenant_inactive" } } },
+    });
+    assert.ok(auditRow);
   } finally {
     await prisma.tenant.update({ where: { id: tenantId }, data: { isActive: true } });
   }
 });
 
-test("userId sin User interno vinculado → 401 USER_NOT_PROVISIONED", async () => {
+test("userId sin User interno vinculado → 401 USER_NOT_PROVISIONED, AuditLog usa el clerkId crudo como actorId", async () => {
   await assert.rejects(
     () => resolveIdentityFromClerkSession({ userId: "user_never_provisioned", orgId: CLERK_ORG_ID, mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.code === "USER_NOT_PROVISIONED",
   );
+  const auditRow = await prisma.auditLog.findFirst({ where: { tenantId, actorId: "user_never_provisioned" } });
+  assert.ok(auditRow);
+  assert.equal(auditRow?.action, "auth.login_failed");
 });
 
-test("User desactivado (isActive=false) → 403 USER_DISABLED", async () => {
+test("User desactivado (isActive=false) → 403 USER_DISABLED, y queda auditado", async () => {
   await assert.rejects(
     () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID_DISABLED, orgId: CLERK_ORG_ID, mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.code === "USER_DISABLED" && err.status === 403,
   );
+  const auditRow = await prisma.auditLog.findFirst({ where: { tenantId, action: "auth.login_failed", after: { equals: { reason: "user_disabled" } } } });
+  assert.ok(auditRow);
 });
 
 test("fuga entre tenants: User real de OTRO tenant no puede resolver contra este orgId", async () => {

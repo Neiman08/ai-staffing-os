@@ -19,6 +19,20 @@ export interface ClerkSessionIdentity {
   mfaVerified: boolean;
 }
 
+// F4.9 §12: "login fallido cuando sea observable" — solo se puede
+// atribuir a un tenant real en los casos donde ya resolvimos uno antes
+// de fallar (a partir de acá abajo). El caso "sin orgId"/"orgId no
+// mapea a ningún Tenant" nunca se audita: no hay tenantId real al que
+// asociar la fila (AuditLog.tenantId es NOT NULL) y este código nunca
+// inventa uno. actorId es el clerkId crudo cuando todavía no existe un
+// User interno (USER_NOT_PROVISIONED) — la única identidad real
+// disponible en ese caso.
+async function logLoginFailed(tenantId: string, actorId: string, reason: string): Promise<void> {
+  await prisma.auditLog.create({
+    data: { tenantId, actorType: "HUMAN", actorId, action: "auth.login_failed", entityType: "user", entityId: actorId, after: { reason } },
+  });
+}
+
 /**
  * Resuelve una sesión de Clerk ya verificada (firma/issuer/audience/exp
  * ya validados por el SDK antes de llegar acá) a la identidad interna
@@ -41,6 +55,7 @@ export async function resolveIdentityFromClerkSession(auth: ClerkSessionIdentity
     throw AppError.unauthorized("Organization is not linked to a tenant");
   }
   if (!tenant.isActive) {
+    await logLoginFailed(tenant.id, auth.userId, "tenant_inactive");
     throw new AppError(401, "TENANT_INACTIVE", "Tenant is inactive");
   }
 
@@ -57,6 +72,7 @@ export async function resolveIdentityFromClerkSession(auth: ClerkSessionIdentity
   // acá (eso es responsabilidad exclusiva del webhook user.created, y
   // solo cuando hay una invitación PENDING real esperándolo).
   if (!user) {
+    await logLoginFailed(tenant.id, auth.userId, "user_not_provisioned");
     throw new AppError(401, "USER_NOT_PROVISIONED", "No internal user is linked to this Clerk account");
   }
   // Defensa en profundidad: un User cuyo clerkId resuelve pero cuyo
@@ -64,9 +80,11 @@ export async function resolveIdentityFromClerkSession(auth: ClerkSessionIdentity
   // debe autorizarse — évita cualquier fuga entre tenants si alguna vez
   // hay una inconsistencia de datos.
   if (user.tenantId !== tenant.id) {
+    await logLoginFailed(tenant.id, user.id, "tenant_mismatch");
     throw AppError.unauthorized("User does not belong to the active organization's tenant");
   }
   if (!user.isActive) {
+    await logLoginFailed(tenant.id, user.id, "user_disabled");
     throw new AppError(403, "USER_DISABLED", "User account is disabled");
   }
 

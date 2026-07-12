@@ -37,6 +37,7 @@ before(async () => {
 });
 
 after(async () => {
+  await prisma.auditLog.deleteMany({ where: { tenantId } });
   await prisma.user.deleteMany({ where: { tenantId } });
   await prisma.role.deleteMany({ where: { tenantId } });
   await prisma.tenant.deleteMany({ where: { id: tenantId } });
@@ -103,6 +104,15 @@ test("user.updated: sincroniza nombre y mfaEnabled por clerkId, no-op si no exis
   const updated = await prisma.user.findUnique({ where: { id: user.id } });
   assert.equal(updated?.firstName, "New");
   assert.equal(updated?.mfaEnabled, true);
+
+  const auditRow = await prisma.auditLog.findFirst({ where: { entityId: user.id, action: "auth.mfa_enabled" } });
+  assert.ok(auditRow, "la transición false→true de mfaEnabled debe quedar auditada");
+
+  // Sincronizar de nuevo con two_factor_enabled=true (sin transición
+  // false→true, ya estaba en true) no debe duplicar el evento.
+  await handleUserUpdated(fakeUserJSON({ id: "user_to_update", two_factor_enabled: true }));
+  const auditCount = await prisma.auditLog.count({ where: { entityId: user.id, action: "auth.mfa_enabled" } });
+  assert.equal(auditCount, 1);
 
   // No-op honesto: clerkId inexistente no crea ni lanza.
   await assert.doesNotReject(() => handleUserUpdated(fakeUserJSON({ id: "user_does_not_exist" })));

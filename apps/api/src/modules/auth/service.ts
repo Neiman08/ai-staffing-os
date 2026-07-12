@@ -12,6 +12,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
 import { env } from "../../core/env";
+import { logAuditEvent } from "../../core/audit-log";
 
 export async function getCurrentUser(): Promise<CurrentUser> {
   const ctx = getTenancyContext();
@@ -138,11 +139,27 @@ export async function inviteUser(input: InviteUserInput): Promise<{ userId: stri
     });
   }
 
+  await logAuditEvent({
+    action: "auth.invitation_sent",
+    entityType: "user",
+    entityId: created.id,
+    after: { email: input.email, roleId: input.roleId },
+  });
+
   return { userId: created.id };
 }
 
 export async function setUserStatus(userId: string, input: SetUserStatusInput): Promise<void> {
+  const before = await scopedDb.user.findUnique({ where: { id: userId } });
   const user = await scopedDb.user.update({ where: { id: userId }, data: { isActive: input.isActive } });
+
+  await logAuditEvent({
+    action: input.isActive ? "auth.user_enabled" : "auth.user_disabled",
+    entityType: "user",
+    entityId: userId,
+    before: { isActive: before?.isActive },
+    after: { isActive: input.isActive },
+  });
 
   // Desactivar = perder acceso ya, no "la próxima vez que expire el
   // token" — revoca cualquier sesión activa de Clerk en el mismo paso.
@@ -155,7 +172,16 @@ export async function changeUserRole(userId: string, input: ChangeUserRoleInput)
   const role = await scopedDb.role.findFirst({ where: { id: input.roleId } });
   if (!role) throw AppError.badRequest("Invalid role for this tenant");
 
+  const before = await scopedDb.user.findUnique({ where: { id: userId }, include: { role: true } });
   await scopedDb.user.update({ where: { id: userId }, data: { roleId: input.roleId } });
+
+  await logAuditEvent({
+    action: "auth.role_changed",
+    entityType: "user",
+    entityId: userId,
+    before: { roleId: before?.roleId, roleName: before?.role.name },
+    after: { roleId: input.roleId, roleName: role.name },
+  });
 }
 
 export async function revokeUserSessions(userId: string, knownClerkId?: string | null): Promise<void> {
@@ -165,5 +191,14 @@ export async function revokeUserSessions(userId: string, knownClerkId?: string |
   if (!clerkId) return;
 
   const sessions = await clerkClient.sessions.getSessionList({ userId: clerkId, status: "active" });
+  if (sessions.data.length === 0) return;
+
   await Promise.all(sessions.data.map((s) => clerkClient.sessions.revokeSession(s.id)));
+
+  await logAuditEvent({
+    action: "auth.session_revoked",
+    entityType: "user",
+    entityId: userId,
+    after: { revokedSessionCount: sessions.data.length },
+  });
 }
