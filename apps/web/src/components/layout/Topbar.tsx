@@ -1,18 +1,13 @@
 import { Bell, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import type { CurrentUser, NotificationsSummary } from "@ai-staffing-os/shared";
+import type { NotificationsSummary } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
-
-function initials(firstName: string, lastName: string) {
-  return `${firstName[0] ?? ""}${lastName[0] ?? ""}`.toUpperCase();
-}
+import { UserMenu } from "@/components/layout/UserMenu";
 
 export function Topbar() {
-  const { data: user } = useQuery({
-    queryKey: ["auth", "me"],
-    queryFn: () => apiFetch<CurrentUser>("/auth/me"),
-  });
+  const { data: user } = useCurrentUser();
 
   const { data: notifications } = useQuery({
     queryKey: ["dashboard", "notifications"],
@@ -43,15 +38,7 @@ export function Topbar() {
           )}
         </button>
 
-        <div className="flex items-center gap-2 pl-1">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
-            {user ? initials(user.firstName, user.lastName) : "…"}
-          </div>
-          <div className="hidden text-xs leading-tight sm:block">
-            <div className="font-medium">{user ? `${user.firstName} ${user.lastName}` : "Cargando…"}</div>
-            <div className="text-muted-foreground">{user?.role.name}</div>
-          </div>
-        </div>
+        <UserMenu user={user} />
       </div>
     </header>
   );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import { usePublicBranding } from "@/lib/branding";
+import { resolveAppUrl } from "@/lib/app-url";
 import { ButtonLink } from "@/components/ui/Button";
 import { Container } from "@/components/ui/Container";
 import { cn } from "@/lib/utils";
@@ -17,9 +18,10 @@ const NAV_LINKS = [
 export function Header() {
   const branding = usePublicBranding();
   const [open, setOpen] = useState(false);
-  // F4.8: "El botón Login debe dirigir a https://app.dreistaff.com" —
-  // nunca hardcodeado, viene del mismo branding real que todo lo demás.
-  const appUrl = branding?.appDomain ? `https://${branding.appDomain}` : undefined;
+  // F4.8/F4.9: "El botón Login debe dirigir a https://app.dreistaff.com
+  // (o http://localhost:5173 en local)" — nunca hardcodeado, viene del
+  // mismo branding real que todo lo demás. Ver lib/app-url.ts.
+  const appUrl = resolveAppUrl(branding?.appDomain);
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">

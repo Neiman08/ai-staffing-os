@@ -2,11 +2,13 @@ import { useEffect } from "react";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { useSeo } from "@/lib/seo";
 import { usePublicBranding } from "@/lib/branding";
+import { resolveAppUrl } from "@/lib/app-url";
 import { Section } from "@/components/ui/Section";
 import { ButtonLink } from "@/components/ui/Button";
 
-// F4.8: esta página NO implementa autenticación — solo dirige al
-// portal privado (app.<domain>). La autenticación real es F4.9.
+// F4.8/F4.9: esta página NO implementa autenticación — solo dirige al
+// portal privado (app.<domain>, o http://localhost:5173 en local), que
+// ahora sí tiene login real (ver apps/web).
 export default function Login() {
   useSeo({
     title: "Login",
@@ -15,7 +17,7 @@ export default function Login() {
   });
 
   const branding = usePublicBranding();
-  const appUrl = branding?.appDomain ? `https://${branding.appDomain}` : undefined;
+  const appUrl = resolveAppUrl(branding?.appDomain);
 
   useEffect(() => {
     if (appUrl) {
