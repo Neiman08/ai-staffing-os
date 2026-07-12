@@ -66,7 +66,11 @@ export function createApp() {
   app.get("/api/v1/health", async (_req, res) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
-      res.json({ status: "ok", db: true });
+      // F4.9: authMode expuesto acá (nunca info sensible, es un enum
+      // público) porque el banner de dev-bypass del frontend tiene que
+      // poder mostrarse ANTES de que haya sesión — health es la única
+      // ruta ya pública para esto.
+      res.json({ status: "ok", db: true, authMode: env.AUTH_MODE });
     } catch {
       res.status(503).json({ status: "degraded", db: false });
     }

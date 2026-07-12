@@ -1,3 +1,5 @@
+import { getAuthToken } from "./auth-token";
+
 const API_BASE = "/api/v1";
 
 export interface ApiErrorBody {
@@ -20,10 +22,16 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  // F4.9: Bearer token de Clerk, nunca desde localStorage — se pide
+  // fresco a cada request vía el bridge de auth-token.ts. En dev-bypass
+  // (Clerk no configurado) esto resuelve a null y el header simplemente
+  // no se agrega.
+  const token = await getAuthToken();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   });

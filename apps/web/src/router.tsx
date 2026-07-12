@@ -1,5 +1,9 @@
 import { createBrowserRouter } from "react-router-dom";
 import App from "./App";
+import { RequireAuth } from "@/components/auth/RequireAuth";
+import { CLERK_CONFIGURED } from "@/lib/auth-config";
+import { SignInPage } from "./pages/auth/SignInPage";
+import { SignUpPage } from "./pages/auth/SignUpPage";
 import Dashboard from "./pages/Dashboard";
 import Companies from "./pages/Companies";
 import CompanyDetail from "./pages/CompanyDetail";
@@ -27,9 +31,23 @@ import Discovery from "./pages/Discovery";
 import ProductionReadiness from "./pages/ProductionReadiness";
 
 export const router = createBrowserRouter([
+  // F4.9: /sign-in y /sign-up viven FUERA de RequireAuth a propósito —
+  // tienen que ser alcanzables sin sesión. Solo se registran cuando
+  // Clerk está configurado (VITE_CLERK_PUBLISHABLE_KEY); en dev-bypass
+  // no existen, y no hace falta que existan.
+  ...(CLERK_CONFIGURED
+    ? [
+        { path: "/sign-in/*", element: <SignInPage /> },
+        { path: "/sign-up/*", element: <SignUpPage /> },
+      ]
+    : []),
   {
     path: "/",
-    element: <App />,
+    element: (
+      <RequireAuth>
+        <App />
+      </RequireAuth>
+    ),
     children: [
       { index: true, element: <Dashboard /> },
       { path: "companies", element: <Companies /> },
