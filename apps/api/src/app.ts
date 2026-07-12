@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { prisma } from "@ai-staffing-os/db";
+import { env } from "./core/env";
 import { errorHandler, notFoundHandler } from "./core/errors";
 import { tenancyMiddleware } from "./core/tenancy/middleware";
 import { authRouter } from "./modules/auth/router";
@@ -30,7 +31,25 @@ import { publicRouter } from "./modules/public/router";
 export function createApp() {
   const app = express();
 
-  app.use(cors());
+  // F4.9: reemplaza el cors() abierto de F0-F4.8 — allowlist explícito
+  // armado desde env (nunca hardcodea dominios acá, ver core/env.ts
+  // APP_ORIGIN/MARKETING_ORIGIN). Sin `credentials: true` a propósito:
+  // el modelo de auth es Bearer token (Authorization header), nunca
+  // cookies cross-origin — ver docs/F4_9_PRODUCTION_AUTH_PLAN.md §4.1/§10.
+  const allowedOrigins = [env.APP_ORIGIN, env.MARKETING_ORIGIN];
+  app.use(
+    cors({
+      origin(origin, callback) {
+        // Sin header Origin (curl, server-to-server, health checks) — se
+        // permite; no es un contexto de navegador donde CORS aplique.
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error(`Origin not allowed by CORS: ${origin}`));
+      },
+    }),
+  );
   app.use(express.json());
 
   app.get("/api/v1/health", async (_req, res) => {

@@ -3,7 +3,34 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   PORT: z.coerce.number().int().positive().default(4000),
+  // F4.9: usado exclusivamente para la guarda de arranque de abajo
+  // (dev-bypass nunca puede quedar activo con NODE_ENV=production) y
+  // para decidir el nivel de detalle de errores/logs. No confundir con
+  // PRODUCTION_MODE (F4.7.5, controla si el sistema acepta datos demo).
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   AUTH_MODE: z.enum(["dev-bypass", "clerk"]).default("dev-bypass"),
+
+  // F4.9: Clerk — proveedor de auth de producción (ver
+  // docs/F4_9_PRODUCTION_AUTH_PLAN.md). Claves opcionales a nivel de
+  // schema por el mismo motivo que OPENAI_API_KEY/HUNTER_API_KEY
+  // arriba: en dev-bypass ninguna de estas se usa, y CI nunca debería
+  // romper por su ausencia. La guarda real ("AUTH_MODE=clerk exige
+  // estas claves") se aplica más abajo, al final de loadEnv().
+  CLERK_PUBLISHABLE_KEY: z.string().optional(),
+  CLERK_SECRET_KEY: z.string().optional(),
+  CLERK_WEBHOOK_SECRET: z.string().optional(),
+  CLERK_SIGN_IN_URL: z.string().default("/sign-in"),
+  CLERK_SIGN_UP_URL: z.string().default("/sign-up"),
+  CLERK_AFTER_SIGN_IN_URL: z.string().default("/"),
+  CLERK_AFTER_SIGN_UP_URL: z.string().default("/"),
+
+  // F4.9: allowlist de CORS — reemplaza el cors() abierto de F0-F4.8.
+  // Defaults de localhost para dev; en producción se sobreescriben con
+  // los dominios reales (https://app.dreistaff.com, etc.) por env,
+  // nunca hardcodeados acá.
+  APP_ORIGIN: z.string().default("http://localhost:5173"),
+  MARKETING_ORIGIN: z.string().default("http://localhost:5174"),
+  API_ORIGIN: z.string().default("http://localhost:4000"),
   // F2: optional at the env-validation level so F0/F1 environments (CI,
   // tests that never invoke the Sales Agent) don't break. Enforced instead
   // at the point of actual use (task-runner refuses to call OpenAI without it).
@@ -66,7 +93,33 @@ function loadEnv() {
     console.error("Invalid environment variables:", parsed.error.flatten().fieldErrors);
     process.exit(1);
   }
-  return parsed.data;
+  const data = parsed.data;
+
+  // F4.9: la regla no-negociable del PO — dev-bypass confía ciegamente
+  // en un header sin verificación criptográfica (ver
+  // modules/auth/dev-bypass.provider.ts); si esto llegara a quedar
+  // activo en producción cualquiera podría autenticarse como cualquier
+  // usuario con solo mandar `x-dev-user: admin@titan.dev`. Falla rápido
+  // y ruidoso al arrancar, nunca un bug silencioso de seguridad.
+  if (data.NODE_ENV === "production" && data.AUTH_MODE === "dev-bypass") {
+    console.error(
+      "FATAL: AUTH_MODE=dev-bypass is not allowed when NODE_ENV=production. " +
+        "Set AUTH_MODE=clerk (with CLERK_SECRET_KEY/CLERK_PUBLISHABLE_KEY configured) before deploying.",
+    );
+    process.exit(1);
+  }
+
+  // F4.9: si se eligió Clerk como proveedor, sus dos claves centrales
+  // dejan de ser opcionales — un ClerkAuthProvider sin ellas fallaría
+  // de forma impredecible en cada request en vez de al arrancar.
+  if (data.AUTH_MODE === "clerk" && (!data.CLERK_SECRET_KEY || !data.CLERK_PUBLISHABLE_KEY)) {
+    console.error(
+      "FATAL: AUTH_MODE=clerk requires CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY to be set.",
+    );
+    process.exit(1);
+  }
+
+  return data;
 }
 
 export const env = loadEnv();
