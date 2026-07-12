@@ -28,6 +28,7 @@ import { discoveryRouter } from "./modules/discovery/router";
 import { brandingRouter } from "./modules/branding/router";
 import { productionReadinessRouter } from "./modules/production-readiness/router";
 import { publicRouter } from "./modules/public/router";
+import { authWebhookRouter } from "./modules/auth/webhook.router";
 
 export function createApp() {
   const app = express();
@@ -51,6 +52,15 @@ export function createApp() {
       },
     }),
   );
+
+  // F4.9: webhook de Clerk — necesita el body crudo (Buffer) para
+  // verificar la firma svix, por eso se monta ANTES del
+  // express.json() global de abajo (mismo principio que ya aplica
+  // publicRouter de F4.8: el orden de middleware importa). Nunca lee
+  // x-dev-user ni pasa por tenancyMiddleware — resuelve su propio
+  // Tenant/User por clerkId/clerkOrganizationId dentro del handler.
+  app.use("/api/v1/auth", authWebhookRouter);
+
   app.use(express.json());
 
   app.get("/api/v1/health", async (_req, res) => {
