@@ -14,11 +14,13 @@
     "@ai-staffing-os/agents": "workspace:*",
     "@ai-staffing-os/db": "workspace:*",
     "@ai-staffing-os/shared": "workspace:*",
+    "@clerk/express": "^2.1.40",
     "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "express-rate-limit": "^8.5.2",
     "robots-parser": "^3.0.1",
+    "svix": "^1.96.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

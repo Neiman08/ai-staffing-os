@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { env } from "../env";
 import { AppError } from "../errors";
 import { DevBypassAuthProvider } from "../../modules/auth/dev-bypass.provider";
+import { ClerkAuthProvider } from "../../modules/auth/clerk.provider";
 import type { AuthProvider } from "../../modules/auth/auth-provider";
 import { runWithTenancyContext } from "./context";
 
@@ -10,7 +11,7 @@ function resolveAuthProvider(): AuthProvider {
     case "dev-bypass":
       return new DevBypassAuthProvider();
     case "clerk":
-      throw new Error("AUTH_MODE=clerk is not implemented until F1");
+      return new ClerkAuthProvider();
   }
 }
 

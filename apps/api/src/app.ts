@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { clerkMiddleware } from "@clerk/express";
 import { prisma } from "@ai-staffing-os/db";
 import { env } from "./core/env";
 import { errorHandler, notFoundHandler } from "./core/errors";
@@ -66,6 +67,16 @@ export function createApp() {
   // por la resolución de identidad interna (dev-bypass/Clerk). Resuelven
   // su propio tenant vía core/public-tenant.ts.
   app.use("/api/v1", publicRouter);
+
+  // F4.9: clerkMiddleware() verifica el JWT (firma/issuer/audience/exp)
+  // y adjunta el AuthObject a `req` para que getAuth(req) lo lea en
+  // ClerkAuthProvider — se monta SOLO si AUTH_MODE=clerk. Montarlo
+  // incondicionalmente exigiría CLERK_SECRET_KEY incluso en dev-bypass
+  // local, que no lo necesita (ver core/env.ts, la guarda ya exige las
+  // claves cuando AUTH_MODE=clerk).
+  if (env.AUTH_MODE === "clerk") {
+    app.use(clerkMiddleware());
+  }
 
   app.use("/api/v1", tenancyMiddleware);
   app.use("/api/v1/auth", authRouter);
