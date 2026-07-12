@@ -9,6 +9,13 @@ export interface TenancyContext {
   // attribute actions (activity-log, audit-log) check this before
   // falling back to `userId`.
   actor?: { type: "AGENT"; agentInstanceId: string };
+  // F4.9 §6: ver ResolvedIdentity en modules/auth/auth-provider.ts —
+  // mismo significado, requirePermission los lee de acá. Default true
+  // para contextos que no pasan por un AuthProvider real (scheduler,
+  // task-runner de agentes) — un AgentTask nunca es una "sesión humana
+  // sin MFA", el gate de MFA no aplica a ese actor.
+  mfaVerified?: boolean;
+  mfaEnforced?: boolean;
 }
 
 const storage = new AsyncLocalStorage<TenancyContext>();

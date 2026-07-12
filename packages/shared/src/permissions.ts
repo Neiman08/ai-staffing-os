@@ -73,3 +73,21 @@ export const SPECIAL_PERMISSIONS: PermissionDefinition[] = SPECIAL_PERMISSION_KE
 }));
 
 export const ALL_PERMISSIONS: PermissionDefinition[] = [...CRUD_PERMISSIONS, ...SPECIAL_PERMISSIONS];
+
+/**
+ * F4.9 §6 (decisión aprobada del PO): permisos que exigen MFA verificado
+ * en la sesión actual cuando la política del tenant está activa (ver
+ * Tenant.settings.security.mfaEnforced, apps/api/src/core/security-settings.ts).
+ * El PO pidió también "invoices.send" — no existe en el vocabulario real
+ * de PermissionKey (no hay módulo de invoices/billing todavía, ver
+ * PERMISSION_RESOURCES arriba); se omite acá en vez de inventar un
+ * permiso que ningún Role/endpoint usa. Agregar cuando exista.
+ */
+export const MFA_REQUIRED_PERMISSIONS: PermissionKey[] = [
+  "payroll.approve",
+  "agents.configure",
+  "settings.manage",
+  "users.manage",
+  "approvals.decide",
+  "compliance.block",
+];

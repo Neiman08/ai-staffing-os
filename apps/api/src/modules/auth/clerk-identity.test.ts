@@ -89,14 +89,14 @@ after(async () => {
 
 test("sin orgId en la sesión → 401 unauthorized", async () => {
   await assert.rejects(
-    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: null }),
+    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: null, mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.status === 401,
   );
 });
 
 test("orgId que no mapea a ningún Tenant → 401 unauthorized", async () => {
   await assert.rejects(
-    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: "org_does_not_exist" }),
+    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: "org_does_not_exist", mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.status === 401,
   );
 });
@@ -105,7 +105,7 @@ test("Tenant inactivo → 401 TENANT_INACTIVE", async () => {
   await prisma.tenant.update({ where: { id: tenantId }, data: { isActive: false } });
   try {
     await assert.rejects(
-      () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID }),
+      () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false }),
       (err: unknown) => err instanceof AppError && err.code === "TENANT_INACTIVE",
     );
   } finally {
@@ -115,28 +115,51 @@ test("Tenant inactivo → 401 TENANT_INACTIVE", async () => {
 
 test("userId sin User interno vinculado → 401 USER_NOT_PROVISIONED", async () => {
   await assert.rejects(
-    () => resolveIdentityFromClerkSession({ userId: "user_never_provisioned", orgId: CLERK_ORG_ID }),
+    () => resolveIdentityFromClerkSession({ userId: "user_never_provisioned", orgId: CLERK_ORG_ID, mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.code === "USER_NOT_PROVISIONED",
   );
 });
 
 test("User desactivado (isActive=false) → 403 USER_DISABLED", async () => {
   await assert.rejects(
-    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID_DISABLED, orgId: CLERK_ORG_ID }),
+    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID_DISABLED, orgId: CLERK_ORG_ID, mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.code === "USER_DISABLED" && err.status === 403,
   );
 });
 
 test("fuga entre tenants: User real de OTRO tenant no puede resolver contra este orgId", async () => {
   await assert.rejects(
-    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID_OTHER_TENANT, orgId: CLERK_ORG_ID }),
+    () => resolveIdentityFromClerkSession({ userId: CLERK_USER_ID_OTHER_TENANT, orgId: CLERK_ORG_ID, mfaVerified: false }),
     (err: unknown) => err instanceof AppError && err.status === 401,
   );
 });
 
 test("camino feliz: resuelve tenantId/userId/permissions reales desde la DB", async () => {
-  const identity = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID });
+  const identity = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false });
   assert.equal(identity.tenantId, tenantId);
   assert.deepEqual(identity.permissions, ["companies.view"]);
   assert.notEqual(identity.userId, CLERK_USER_ID); // es el User.id interno, nunca el clerkId
+});
+
+test("mfaEnforced por default es false (Tenant.settings sin política configurada)", async () => {
+  const identity = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false });
+  assert.equal(identity.mfaEnforced, false);
+});
+
+test("mfaVerified de la sesión se propaga tal cual (true y false)", async () => {
+  const verified = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: true });
+  assert.equal(verified.mfaVerified, true);
+
+  const notVerified = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false });
+  assert.equal(notVerified.mfaVerified, false);
+});
+
+test("Tenant.settings.security.mfaEnforced=true se refleja en la identidad resuelta", async () => {
+  await prisma.tenant.update({ where: { id: tenantId }, data: { settings: { security: { mfaEnforced: true } } } });
+  try {
+    const identity = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false });
+    assert.equal(identity.mfaEnforced, true);
+  } finally {
+    await prisma.tenant.update({ where: { id: tenantId }, data: { settings: {} } });
+  }
 });

@@ -1,5 +1,6 @@
 import { prisma } from "@ai-staffing-os/db";
 import { AppError } from "../../core/errors";
+import { isMfaEnforced } from "../../core/security-settings";
 import type { ResolvedIdentity } from "./auth-provider";
 
 /**
@@ -11,6 +12,11 @@ import type { ResolvedIdentity } from "./auth-provider";
 export interface ClerkSessionIdentity {
   userId: string;
   orgId: string | null;
+  // F4.9 §6: derivado en clerk.provider.ts desde sessionClaims.fva (si
+  // el segundo factor fue verificado EN ESTA sesión) — nunca desde
+  // User.mfaEnabled acá (eso es solo estado de enrollment, no de
+  // verificación de la sesión actual).
+  mfaVerified: boolean;
 }
 
 /**
@@ -68,5 +74,7 @@ export async function resolveIdentityFromClerkSession(auth: ClerkSessionIdentity
     tenantId: tenant.id,
     userId: user.id,
     permissions: user.role.permissions.map((rp) => rp.permission.key),
+    mfaVerified: auth.mfaVerified,
+    mfaEnforced: isMfaEnforced(tenant),
   };
 }
