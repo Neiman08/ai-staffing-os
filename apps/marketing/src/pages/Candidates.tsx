@@ -4,6 +4,7 @@ import { Section, Eyebrow } from "@/components/ui/Section";
 import { ButtonLink } from "@/components/ui/Button";
 import { CTABand } from "@/components/sections/CTABand";
 import { StepsList } from "@/components/sections/StepsList";
+import { PHOTOS } from "@/lib/photos";
 import { HOW_IT_WORKS_CANDIDATES } from "@/lib/content";
 
 const SECURITY_POINTS = [
@@ -34,7 +35,7 @@ export default function Candidates() {
 
   return (
     <>
-      <Section tone="ink" className="pt-28">
+      <Section tone="ink" className="pt-28" backgroundPhoto={PHOTOS.professionalPortraitWoman}>
         <div className="max-w-2xl">
           <Eyebrow>For Candidates</Eyebrow>
           <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">

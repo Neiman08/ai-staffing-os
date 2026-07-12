@@ -3,6 +3,7 @@ import { useSeo } from "@/lib/seo";
 import { usePublicBranding } from "@/lib/branding";
 import { Section, Eyebrow } from "@/components/ui/Section";
 import { CTABand } from "@/components/sections/CTABand";
+import { PHOTOS } from "@/lib/photos";
 
 const VALUES = [
   {
@@ -40,7 +41,7 @@ export default function About() {
 
   return (
     <>
-      <Section tone="ink" className="pt-28">
+      <Section tone="ink" className="pt-28" backgroundPhoto={PHOTOS.teamMeetingDiscussion}>
         <div className="max-w-2xl">
           <Eyebrow>About Us</Eyebrow>
           <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">

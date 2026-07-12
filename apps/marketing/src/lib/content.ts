@@ -15,7 +15,9 @@ import {
   Mail,
   BrainCircuit,
   Gauge,
+  Sparkles,
 } from "lucide-react";
+import { PHOTOS } from "./photos";
 
 /**
  * F4.8: contenido estático real de posicionamiento — describe
@@ -84,21 +86,25 @@ export const SERVICE_TYPES = [
   {
     name: "Temporary Staffing",
     icon: Users,
+    photo: PHOTOS.warehouseLogistics,
     description: "Flexible, short-to-medium term coverage for seasonal demand, project surges, or unexpected gaps — without the overhead of a direct hire.",
   },
   {
     name: "Direct Hire",
     icon: Handshake,
+    photo: PHOTOS.officeTeamMeeting,
     description: "Full-cycle recruiting for permanent roles, from sourcing through offer — built for teams that need to hire right the first time.",
   },
   {
     name: "Skilled Trades",
     icon: HardHat,
+    photo: PHOTOS.electricalTrade,
     description: "Licensed and certified trades talent — electricians, mechanics, and technicians — vetted for the credentials your job actually requires.",
   },
   {
     name: "Project Staffing",
     icon: FileCheck,
+    photo: PHOTOS.constructionSite,
     description: "Dedicated crews scoped to a single project timeline, scaled up or down as the build progresses.",
   },
 ] as const;
@@ -164,5 +170,31 @@ export const FAQ_ITEMS = [
     question: "How do you verify candidates?",
     answer:
       "Every candidate is reviewed by a recruiter before being presented to an employer. Contact and credential data used in our process is sourced from authorized providers and verified before it's relied on — we never fabricate or infer data we can't confirm.",
+  },
+] as const;
+
+// F4.8A: franja de beneficios del Home — restatement de hechos reales
+// ya presentes en SERVICE_TYPES/AI_CAPABILITIES arriba, nunca una
+// afirmación nueva sin respaldo.
+export const BENEFITS = [
+  {
+    title: "Verified Talent",
+    icon: ShieldCheck,
+    description: "Every candidate is reviewed by a recruiter before you ever see them — no automated placements.",
+  },
+  {
+    title: "Flexible Engagement",
+    icon: Sparkles,
+    description: "Temporary, Direct Hire, Skilled Trades, or Project Staffing — whichever model fits your need.",
+  },
+  {
+    title: "AI-Accelerated Discovery",
+    icon: Radar,
+    description: "Our discovery engine identifies real, verifiable opportunities faster than manual sourcing alone.",
+  },
+  {
+    title: "Human-Approved, Always",
+    icon: Users,
+    description: "AI accelerates research — every placement decision is reviewed and approved by a real person.",
   },
 ] as const;

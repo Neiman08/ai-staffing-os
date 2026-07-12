@@ -6,6 +6,7 @@ import { publicApiFetch, PublicApiError } from "@/lib/api";
 import { Section, Eyebrow } from "@/components/ui/Section";
 import { Button } from "@/components/ui/Button";
 import { Label, Input, TextArea } from "@/components/ui/Field";
+import { PHOTOS } from "@/lib/photos";
 
 interface ContactForm {
   contactName: string;
@@ -53,7 +54,7 @@ export default function Contact() {
 
   return (
     <>
-      <Section tone="ink" className="pt-28">
+      <Section tone="ink" className="pt-28" backgroundPhoto={PHOTOS.corporateBuildingExterior}>
         <div className="max-w-2xl">
           <Eyebrow>Contact</Eyebrow>
           <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">Let's talk</h1>

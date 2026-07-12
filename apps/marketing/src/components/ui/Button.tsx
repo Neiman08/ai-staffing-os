@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 const VARIANT_CLASSES: Record<string, string> = {
-  primary: "bg-primary text-primary-foreground hover:opacity-90 glow-primary",
+  primary: "bg-primary text-primary-foreground hover:bg-primary-hover glow-primary",
   outline: "border border-border bg-transparent hover:bg-muted",
   ghost: "bg-transparent hover:bg-muted",
   inverse: "bg-white text-ink hover:bg-white/90",

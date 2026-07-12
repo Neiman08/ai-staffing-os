@@ -24,7 +24,7 @@ export function Header() {
   const appUrl = resolveAppUrl(branding?.appDomain);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
+    <header className="sticky top-0 z-50 border-b border-white/10 bg-ink/85 text-ink-foreground backdrop-blur-md transition-colors">
       <Container className="flex h-16 items-center justify-between">
         <Link to="/" className="flex items-center gap-2 font-semibold">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
@@ -39,7 +39,10 @@ export function Header() {
               key={l.to}
               to={l.to}
               className={({ isActive }) =>
-                cn("text-sm font-medium text-foreground/70 transition-colors hover:text-foreground", isActive && "text-foreground")
+                cn(
+                  "text-sm font-medium text-ink-foreground/70 transition-colors hover:text-ink-foreground",
+                  isActive && "text-ink-foreground",
+                )
               }
             >
               {l.label}
@@ -48,7 +51,12 @@ export function Header() {
         </nav>
 
         <div className="hidden items-center gap-3 md:flex">
-          <ButtonLink to="/request-talent" size="md" variant="outline">
+          <ButtonLink
+            to="/request-talent"
+            size="md"
+            variant="outline"
+            className="border-white/20 text-ink-foreground hover:bg-white/10"
+          >
             Request Talent
           </ButtonLink>
           <ButtonLink to={appUrl ?? "#"} external={!!appUrl} size="md" variant="primary" aria-disabled={!appUrl}>
@@ -57,7 +65,7 @@ export function Header() {
         </div>
 
         <button
-          className="flex h-9 w-9 items-center justify-center rounded-md md:hidden"
+          className="flex h-9 w-9 items-center justify-center rounded-md text-ink-foreground md:hidden"
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? "Close menu" : "Open menu"}
         >
@@ -66,20 +74,25 @@ export function Header() {
       </Container>
 
       {open && (
-        <div className="border-t border-border bg-background md:hidden">
+        <div className="border-t border-white/10 bg-ink md:hidden">
           <Container className="flex flex-col gap-1 py-4">
             {NAV_LINKS.map((l) => (
               <NavLink
                 key={l.to}
                 to={l.to}
                 onClick={() => setOpen(false)}
-                className="rounded-md px-2 py-2 text-sm font-medium text-foreground/80 hover:bg-muted"
+                className="rounded-md px-2 py-2 text-sm font-medium text-ink-foreground/80 hover:bg-white/10"
               >
                 {l.label}
               </NavLink>
             ))}
             <div className="mt-2 flex flex-col gap-2">
-              <ButtonLink to="/request-talent" variant="outline" onClick={() => setOpen(false)}>
+              <ButtonLink
+                to="/request-talent"
+                variant="outline"
+                className="border-white/20 text-ink-foreground hover:bg-white/10"
+                onClick={() => setOpen(false)}
+              >
                 Request Talent
               </ButtonLink>
               <ButtonLink to={appUrl ?? "#"} external={!!appUrl} variant="primary" aria-disabled={!appUrl}>

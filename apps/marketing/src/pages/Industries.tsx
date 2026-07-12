@@ -2,6 +2,7 @@ import { useSeo } from "@/lib/seo";
 import { Section, Eyebrow } from "@/components/ui/Section";
 import { ButtonLink } from "@/components/ui/Button";
 import { CTABand } from "@/components/sections/CTABand";
+import { PHOTOS } from "@/lib/photos";
 import { INDUSTRIES } from "@/lib/content";
 
 export default function Industries() {
@@ -14,7 +15,7 @@ export default function Industries() {
 
   return (
     <>
-      <Section tone="ink" className="pt-28">
+      <Section tone="ink" className="pt-28" backgroundPhoto={PHOTOS.weldingSkilledTrade}>
         <div className="max-w-2xl">
           <Eyebrow>Industries</Eyebrow>
           <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">

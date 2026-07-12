@@ -2,8 +2,10 @@ import { CheckCircle2 } from "lucide-react";
 import { useSeo } from "@/lib/seo";
 import { Section, Eyebrow } from "@/components/ui/Section";
 import { ButtonLink } from "@/components/ui/Button";
+import { PhotoCard } from "@/components/ui/PhotoCard";
 import { CTABand } from "@/components/sections/CTABand";
 import { StepsList } from "@/components/sections/StepsList";
+import { PHOTOS } from "@/lib/photos";
 import { SERVICE_TYPES, HOW_IT_WORKS_EMPLOYERS, INDUSTRIES } from "@/lib/content";
 
 export default function Employers() {
@@ -16,7 +18,7 @@ export default function Employers() {
 
   return (
     <>
-      <Section tone="ink" className="pt-28">
+      <Section tone="ink" className="pt-28" backgroundPhoto={PHOTOS.officeInterior}>
         <div className="max-w-2xl">
           <Eyebrow>For Employers</Eyebrow>
           <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">
@@ -40,16 +42,9 @@ export default function Employers() {
           <h2 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">How we can help</h2>
         </div>
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          {SERVICE_TYPES.map((s) => {
-            const Icon = s.icon;
-            return (
-              <div key={s.name} className="rounded-xl border border-border bg-card p-6">
-                <Icon className="h-6 w-6 text-primary" />
-                <h3 className="mt-4 font-semibold">{s.name}</h3>
-                <p className="mt-2 text-sm text-muted-foreground">{s.description}</p>
-              </div>
-            );
-          })}
+          {SERVICE_TYPES.map((s) => (
+            <PhotoCard key={s.name} photo={s.photo} icon={s.icon} title={s.name} description={s.description} />
+          ))}
         </div>
       </Section>
 

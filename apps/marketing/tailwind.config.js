@@ -1,9 +1,8 @@
 /** @type {import('tailwindcss').Config} */
-// F4.8: mismo primary (HSL 255 92% 62%) que apps/web — la marca es UNA
-// sola entre el sitio público y el portal privado, nunca dos paletas
-// distintas. El resto del sistema (ink/slate profundo, acentos) es
-// nuevo, pensado para un sitio de marketing premium — no reutiliza el
-// look utilitario del dashboard interno.
+// F4.8A: paleta corporativa propia del sitio público (aprobada por el
+// PO) — deliberadamente distinta de la del CRM interno (apps/web
+// mantiene su violeta sin cambios). Todo color vive en index.css como
+// variable CSS, nunca hardcodeado en un componente.
 export default {
   darkMode: ["class"],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
@@ -18,11 +17,16 @@ export default {
         foreground: "hsl(var(--foreground))",
         primary: {
           DEFAULT: "hsl(var(--primary))",
+          hover: "hsl(var(--primary-hover))",
           foreground: "hsl(var(--primary-foreground))",
         },
         ink: {
           DEFAULT: "hsl(var(--ink))",
           foreground: "hsl(var(--ink-foreground))",
+        },
+        surface: {
+          DEFAULT: "hsl(var(--surface))",
+          foreground: "hsl(var(--surface-foreground))",
         },
         muted: {
           DEFAULT: "hsl(var(--muted))",

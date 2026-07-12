@@ -41,9 +41,20 @@ export function Footer() {
   const year = new Date().getFullYear();
 
   return (
-    <footer className="border-t border-border bg-ink text-ink-foreground">
+    <footer className="border-t border-white/10 bg-surface text-ink-foreground">
       <Container className="py-16">
-        <div className="grid grid-cols-2 gap-10 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-10 sm:grid-cols-6">
+          <div className="col-span-2 sm:col-span-2">
+            <Link to="/" className="flex items-center gap-2 font-semibold">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
+                {brandName?.[0] ?? "…"}
+              </span>
+              <span className="text-lg tracking-tight">{brandName || "…"}</span>
+            </Link>
+            <p className="mt-4 max-w-xs text-sm text-ink-foreground/60">
+              Specialized staffing for the industries that keep everything running.
+            </p>
+          </div>
           {COLUMNS.map((col) => (
             <div key={col.title}>
               <p className="text-xs font-semibold uppercase tracking-widest text-ink-foreground/50">{col.title}</p>
