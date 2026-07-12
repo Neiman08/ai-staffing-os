@@ -345,6 +345,25 @@ model Tenant {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // F4.9: mapeo Tenant ↔ Clerk Organization. null hasta que se cree/vincule
+  // la organización real en Clerk (ver docs/F4_9_PRODUCTION_AUTH_PLAN.md
+  // §4.3) — ClerkAuthProvider resuelve tenantId ÚNICAMENTE por acá, nunca
+  // por un header o dato enviado por el cliente.
+  clerkOrganizationId String? @unique
+}
+
+// F4.9: estado del flujo de invitación de un User frente a Clerk — NOT_INVITED
+// es el default honesto para todo usuario que nunca pasó por invitación
+// (ej. los usuarios seed, creados directo en DB). PENDING se setea al invitar
+// (POST /auth/users/invite); ACCEPTED cuando el webhook user.created encuentra
+// esa invitación; REVOKED/EXPIRED reflejan el estado equivalente en Clerk.
+enum InvitationStatus {
+  NOT_INVITED
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
 }
 
 model User {
@@ -359,6 +378,15 @@ model User {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // F4.9: espejo de lectura de Clerk — Clerk sigue siendo la fuente de
+  // verdad real de identidad/sesión/MFA (ver docs/F4_9_PRODUCTION_AUTH_PLAN.md
+  // §1), estas columnas solo evitan una llamada a Clerk en cada render de
+  // la UI de Users & Roles. Se sincronizan vía webhook (user.updated) y en
+  // ClerkAuthProvider.resolveIdentity (lastLoginAt).
+  lastLoginAt      DateTime?
+  mfaEnabled       Boolean           @default(false)
+  invitationStatus InvitationStatus  @default(NOT_INVITED)
 
   @@unique([tenantId, email])
   @@index([tenantId])
