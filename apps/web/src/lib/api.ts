@@ -1,6 +1,12 @@
 import { getAuthToken } from "./auth-token";
 
-const API_BASE = "/api/v1";
+// F4.9-D5: por default, ruta relativa — funciona en dev local vía el
+// proxy de Vite (ver vite.config.ts) y en cualquier despliegue donde
+// un mismo origen sirva front y back detrás de un reverse proxy.
+// VITE_API_URL permite apuntar a un origen absoluto distinto (ej.
+// Render, con apps/web y apps/api como servicios separados) sin tocar
+// código — solo configurar la variable en el build del frontend.
+const API_BASE = `${import.meta.env.VITE_API_URL ?? ""}/api/v1`;
 
 export interface ApiErrorBody {
   error: {
