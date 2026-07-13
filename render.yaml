@@ -1,0 +1,99 @@
+# F4.9-D4: Blueprint de Render para apps/api + su base de datos.
+#
+# Esto es preparación de código únicamente — no crea ningún recurso
+# real. Desplegar de verdad requiere que el PO conecte este repo desde
+# su propia cuenta de Render (Render lee este archivo automáticamente
+# al crear un "Blueprint"), igual que con Clerk: no puedo crear cuentas
+# ni recursos de terceros por mi cuenta.
+#
+# DECISIÓN PENDIENTE (el PO la está evaluando, ver conversación):
+# el valor de NODE_ENV de este servicio. env.ts se niega a arrancar si
+# NODE_ENV=production y AUTH_MODE=dev-bypass — guarda pedida
+# explícitamente en F4.9 y que no se toca sin aprobación. Mientras
+# Clerk siga diferido (decisión del PO, 2026-07-12), NODE_ENV acá debe
+# quedar en "development" para que el servicio arranque; cambiar a
+# "production" recién quedará habilitado cuando AUTH_MODE=clerk esté
+# realmente activo. Ver docs/F4_9_PRODUCTION_AUTH_PLAN.md.
+#
+# apps/web y apps/marketing (frontends estáticos) no están en este
+# blueprint todavía — este bloque cubre solo el API, tal como pidió el
+# PO ("preparación y despliegue del API en Render").
+
+databases:
+  - name: ai-staffing-os-db
+    plan: starter
+    region: oregon
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: ai-staffing-os-api
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    # corepack activa la versión de pnpm fijada en package.json
+    # ("packageManager"). --frozen-lockfile: nunca resuelve versiones
+    # nuevas en el deploy, usa exactamente el lockfile commiteado.
+    # prisma generate: el cliente de Prisma se genera en build, no en
+    # git. migrate:deploy: aplica migraciones pendientes de forma no
+    # interactiva (nunca "migrate dev", eso pediría confirmación).
+    buildCommand: >-
+      corepack enable &&
+      pnpm install --frozen-lockfile &&
+      pnpm --filter @ai-staffing-os/db run generate &&
+      pnpm --filter @ai-staffing-os/db run migrate:deploy
+    # start:deploy (apps/api/package.json) — sin el wrapper dotenv-cli
+    # de "start": en Render no existe un archivo .env, las variables ya
+    # llegan inyectadas en process.env por la plataforma.
+    startCommand: pnpm --filter @ai-staffing-os/api run start:deploy
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: development # ver "DECISIÓN PENDIENTE" arriba
+      - key: AUTH_MODE
+        value: dev-bypass
+      - key: DEV_DEFAULT_USER_EMAIL
+        value: admin@titan.dev
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-staffing-os-db
+          property: connectionString
+      # CORS — completar en el dashboard de Render con las URLs reales
+      # una vez que apps/web/apps/marketing también estén desplegados
+      # (ver F4.9-D2). Vacíos acá a propósito, nunca un dominio
+      # hardcodeado en este archivo.
+      - key: APP_ORIGIN
+        sync: false
+      - key: MARKETING_ORIGIN
+        sync: false
+      - key: API_ORIGIN
+        sync: false
+      # Proveedores opcionales (F2/F4.5/F4.6/F4.7) — el sistema funciona
+      # sin ellos (cada uno se degrada honestamente, nunca inventa
+      # datos); completar solo si el PO decide habilitarlos en este
+      # entorno.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_PLACES_API_KEY
+        sync: false
+      - key: PEOPLEDATALABS_API_KEY
+        sync: false
+      - key: HUNTER_API_KEY
+        sync: false
+      # Branding — mismo default real que .env.example (ver
+      # apps/api/src/core/env.ts). Dominio se completa cuando el
+      # dominio real esté conectado a este servicio.
+      - key: BUSINESS_LEGAL_NAME
+        value: "Data More LLC"
+      - key: BUSINESS_BRAND_NAME
+        value: "DreiStaff"
+      - key: BUSINESS_DOMAIN
+        sync: false
+      - key: APP_DOMAIN
+        sync: false
+      - key: PUBLIC_TENANT_SLUG
+        value: titan
+      # Clerk — deliberadamente SIN entradas acá. Diferido (decisión del
+      # PO, 2026-07-12); AUTH_MODE=dev-bypass no las necesita, y
+      # agregarlas ahora sería revivir un trabajo explícitamente pausado.

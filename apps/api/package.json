@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "start": "dotenv -e ../../.env -- tsx src/index.ts",
+    "start:deploy": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "dotenv -e ../../.env -- node --import tsx --test --test-concurrency=1 src/**/*.test.ts"

@@ -8,6 +8,7 @@
   "scripts": {
     "generate": "prisma generate",
     "migrate": "dotenv -e ../../.env -- prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "studio": "dotenv -e ../../.env -- prisma studio",
     "typecheck": "tsc --noEmit"
