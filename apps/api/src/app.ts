@@ -38,6 +38,10 @@ export function createApp() {
   // APP_ORIGIN/MARKETING_ORIGIN). Sin `credentials: true` a propósito:
   // el modelo de auth es Bearer token (Authorization header), nunca
   // cookies cross-origin — ver docs/F4_9_PRODUCTION_AUTH_PLAN.md §4.1/§10.
+  // F4.9-D2: listo para Render sin tocar código — el dashboard de Render
+  // sobreescribe APP_ORIGIN/MARKETING_ORIGIN con las URLs reales del
+  // servicio (ej. https://ai-staffing-os-web.onrender.com) como
+  // variables de entorno del servicio de apps/api.
   const allowedOrigins = [env.APP_ORIGIN, env.MARKETING_ORIGIN];
   app.use(
     cors({
