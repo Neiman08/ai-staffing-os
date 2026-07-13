@@ -1,21 +1,25 @@
 import type { Request } from "express";
 import { prisma } from "@ai-staffing-os/db";
 import { AppError } from "../../core/errors";
+import { env } from "../../core/env";
 import { isMfaEnforced } from "../../core/security-settings";
 import type { AuthProvider, ResolvedIdentity } from "./auth-provider";
 
-const DEFAULT_DEV_USER_EMAIL = "admin@titan.dev";
-
 /**
- * SECURITY: dev-bypass — reemplazar por Clerk antes de cualquier deploy.
- * Este provider confía ciegamente en el header `x-dev-user` (o usa el
- * admin por defecto) sin ninguna verificación criptográfica de sesión.
- * Solo debe activarse con AUTH_MODE=dev-bypass en entornos locales.
+ * SECURITY: dev-bypass — reemplazar por Clerk antes de cualquier deploy
+ * real (ver modules/auth/clerk.provider.ts, ya implementado pero
+ * inactivo mientras AUTH_MODE=dev-bypass; F4.9 dejó la integración de
+ * Clerk explícitamente diferida — ver docs/F4_9_PRODUCTION_AUTH_PLAN.md).
+ * Este provider confía ciegamente en el header `x-dev-user` (o usa
+ * env.DEV_DEFAULT_USER_EMAIL) sin ninguna verificación criptográfica de
+ * sesión. Solo debe activarse con AUTH_MODE=dev-bypass en entornos
+ * locales o de prueba — nunca en producción (env.ts se niega a arrancar
+ * si NODE_ENV=production con este modo activo).
  */
 export class DevBypassAuthProvider implements AuthProvider {
   async resolveIdentity(req: Request): Promise<ResolvedIdentity> {
     const headerValue = req.header("x-dev-user");
-    const email = (Array.isArray(headerValue) ? headerValue[0] : headerValue) || DEFAULT_DEV_USER_EMAIL;
+    const email = (Array.isArray(headerValue) ? headerValue[0] : headerValue) || env.DEV_DEFAULT_USER_EMAIL;
 
     const user = await prisma.user.findFirst({
       where: { email, isActive: true },

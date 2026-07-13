@@ -10,6 +10,16 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   AUTH_MODE: z.enum(["dev-bypass", "clerk"]).default("dev-bypass"),
 
+  // F4.9-D1: usuario por default de DevBypassAuthProvider — configurable
+  // por env en vez de hardcodeado, para que cada entorno (local, Render
+  // de prueba, etc.) pueda apuntar a un usuario semilla distinto sin
+  // tocar código. Nunca es auth real: sigue siendo el mismo mecanismo
+  // sin verificación criptográfica de modules/auth/dev-bypass.provider.ts,
+  // solo bloqueado en producción por la guarda de abajo. El reemplazo de
+  // fondo sigue siendo Clerk (ver modules/auth/clerk.provider.ts, ya
+  // implementado pero inactivo — se conecta cambiando AUTH_MODE=clerk).
+  DEV_DEFAULT_USER_EMAIL: z.string().default("admin@titan.dev"),
+
   // F4.9: Clerk — proveedor de auth de producción (ver
   // docs/F4_9_PRODUCTION_AUTH_PLAN.md). Claves opcionales a nivel de
   // schema por el mismo motivo que OPENAI_API_KEY/HUNTER_API_KEY
