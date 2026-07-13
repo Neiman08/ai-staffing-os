@@ -49,6 +49,11 @@ function toListItem(task: AgentTaskDetail): MissionListItem {
     completedAt: task.completedAt,
     progressUpdatedAt: (output as { progressUpdatedAt?: string | null }).progressUpdatedAt ?? null,
     error: (output as { error?: string | null }).error ?? (task.status === "FAILED" ? task.errorMessage : null),
+    // Corrección estructural (misión Iowa, 2026-07-13): null/[] en
+    // misiones lanzadas antes de este fix — no tenían este campo.
+    appliedRestrictions:
+      (output as { appliedRestrictions?: MissionListItem["appliedRestrictions"] }).appliedRestrictions ?? null,
+    restrictionNotes: (output as { restrictionNotes?: string[] }).restrictionNotes ?? [],
   };
 }
 
@@ -81,7 +86,7 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
   ]);
 
   const listItem = toListItem(detail);
-  const output = (detail.output ?? {}) as { report?: string | null };
+  const output = (detail.output ?? {}) as { report?: string | null; contactCoverage?: MissionDetail["contactCoverage"] };
   const input = detail.input as { unrecognizedTerms?: string[] };
 
   // F4.5: las empresas "seleccionadas" por la misión son las CampaignCompany
@@ -98,6 +103,35 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
         include: { company: { include: { industry: true } } },
         orderBy: { createdAt: "asc" },
       })
+    : [];
+
+  // Corrección estructural (misión Iowa, 2026-07-13): cuando la misión
+  // corrió con `allowCampaignCreation=false`, no hay ninguna Campaign ni
+  // CampaignCompany — antes, `selectedCompanies` dependía EXCLUSIVAMENTE
+  // de CampaignCompany, así que una misión sin campaña reportaba "0
+  // empresas" en Mission Detail pese a haber encontrado/procesado
+  // empresas reales. Se completa con las Company que las tareas hijas
+  // (discover_companies/find_contacts/find_email/score_company/
+  // create_lead) tocaron realmente, sin depender de que exista campaña.
+  const companyIdsFromChildTasks = new Set<string>();
+  for (const t of childTasks) {
+    if (t.type === "discover_companies" && t.output) {
+      const created = (t.output as { companiesCreated?: Array<{ companyId: string }> }).companiesCreated ?? [];
+      for (const c of created) companyIdsFromChildTasks.add(c.companyId);
+    }
+    if (["find_contacts", "find_email", "score_company"].includes(t.type)) {
+      const companyId = (t.input as { companyId?: string } | null)?.companyId;
+      if (companyId) companyIdsFromChildTasks.add(companyId);
+    }
+    if (t.type === "create_lead" && t.output) {
+      const leadCompanyId = (t.input as { companyId?: string } | null)?.companyId;
+      if (leadCompanyId) companyIdsFromChildTasks.add(leadCompanyId);
+    }
+  }
+  const campaignCompanyIds = new Set(campaignCompanies.map((cc) => cc.companyId));
+  const extraCompanyIds = Array.from(companyIdsFromChildTasks).filter((id) => !campaignCompanyIds.has(id));
+  const extraCompanies = extraCompanyIds.length
+    ? await scopedDb.company.findMany({ where: { id: { in: extraCompanyIds } }, include: { industry: true } })
     : [];
 
   // F4.6: cadena de métricas de Contact Intelligence — agregada de las
@@ -133,18 +167,32 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     unrecognizedTerms: input.unrecognizedTerms ?? [],
     report: output.report ?? null,
     childTasks: await Promise.all(childTasks.map((t) => toAgentTaskDetail(t))),
-    selectedCompanies: campaignCompanies.map((cc) => ({
-      companyId: cc.companyId,
-      companyName: cc.company.name,
-      industryName: cc.company.industry.name,
-      origin: cc.company.origin,
-      sourceUrl: cc.company.sourceUrl,
-      website: cc.company.website,
-      phone: cc.company.phone,
-      email: cc.company.email,
-      confidenceScore: cc.company.confidenceScore,
-      verificationStatus: cc.company.verificationStatus,
-    })),
+    selectedCompanies: [
+      ...campaignCompanies.map((cc) => ({
+        companyId: cc.companyId,
+        companyName: cc.company.name,
+        industryName: cc.company.industry.name,
+        origin: cc.company.origin,
+        sourceUrl: cc.company.sourceUrl,
+        website: cc.company.website,
+        phone: cc.company.phone,
+        email: cc.company.email,
+        confidenceScore: cc.company.confidenceScore,
+        verificationStatus: cc.company.verificationStatus,
+      })),
+      ...extraCompanies.map((c) => ({
+        companyId: c.id,
+        companyName: c.name,
+        industryName: c.industry.name,
+        origin: c.origin,
+        sourceUrl: c.sourceUrl,
+        website: c.website,
+        phone: c.phone,
+        email: c.email,
+        confidenceScore: c.confidenceScore,
+        verificationStatus: c.verificationStatus,
+      })),
+    ],
     contacts: missionContacts.map((c) => ({
       contactId: c.id,
       companyId: c.companyId,
@@ -169,6 +217,7 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
       costUsd: costUsdFromContacts,
       durationMs,
     },
+    contactCoverage: output.contactCoverage ?? null,
   };
 }
 

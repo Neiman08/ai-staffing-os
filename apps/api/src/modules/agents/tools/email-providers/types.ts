@@ -1,3 +1,5 @@
+import type { ProviderHealthStatus } from "../provider-health";
+
 /**
  * F4.7 §2: contrato compartido entre proveedores de email discovery
  * (Website Intelligence hoy — gratis — y Hunter.io como proveedor
@@ -27,6 +29,10 @@ export interface EmailProviderSearchResult {
   sourcesUsed: string[];
   patternsFailed: string[];
   cancelled: boolean;
+  // Corrección estructural: distingue "sin resultado para este dominio"
+  // de "la cuenta del proveedor no puede responder nada ahora" — ver
+  // ../provider-health.ts.
+  providerStatus: ProviderHealthStatus;
 }
 
 export interface EmailProviderSearchParams {
@@ -39,5 +45,5 @@ export interface EmailProviderSearchParams {
 }
 
 export function emptyEmailResult(): EmailProviderSearchResult {
-  return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false };
+  return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE" };
 }

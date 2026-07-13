@@ -17,6 +17,7 @@ export * from "./tools/campaign-tools";
 export * from "./tools/outreach-tools";
 export * from "./tools/conversation-tools";
 export * from "./tools/ceo-tools";
+export * from "./tools/mission-restrictions";
 export * from "./tools/discovery-tools";
 export * from "./tools/contact-intelligence-tools";
 

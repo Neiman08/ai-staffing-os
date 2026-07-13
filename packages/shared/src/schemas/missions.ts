@@ -12,6 +12,20 @@ import { companyOriginSchema, companyVerificationStatusSchema, contactVerificati
 // API, no una tabla nueva.
 // ============================================================
 
+// Corrección estructural (misión Iowa, 2026-07-13): espejo de
+// packages/agents/src/tools/mission-restrictions.ts — packages/shared no
+// puede importar de packages/agents (dependencia va al revés, ver
+// package.json), así que este shape simple (4 booleanos) se duplica acá
+// a propósito, mismo criterio ya usado para otros enums espejados entre
+// capas en este proyecto.
+export const missionRestrictionsSchema = z.object({
+  allowCampaignCreation: z.boolean(),
+  allowOpportunityCreation: z.boolean(),
+  allowOutreach: z.boolean(),
+  allowMessageSending: z.boolean(),
+});
+export type MissionRestrictions = z.infer<typeof missionRestrictionsSchema>;
+
 export const businessObjectiveTypeSchema = z.enum([
   "meetings",
   "new_clients",
@@ -39,18 +53,27 @@ export const objectiveProgressSchema = z.object({
 export type ObjectiveProgress = z.infer<typeof objectiveProgressSchema>;
 
 // "RUNNING"/"DONE"/"FAILED" son el AgentTask.status real (enum ya
-// existente); los sub-estados de PAUSED_*/CANCELLED/COMPLETED/FAILED
-// viven dentro de output.missionState (Json), no en una columna nueva —
-// ver la decisión explícita en el addendum de no ensanchar
+// existente); los sub-estados de PAUSED_*/CANCELLED/COMPLETED/FAILED/
+// PARTIAL viven dentro de output.missionState (Json), no en una columna
+// nueva — ver la decisión explícita en el addendum de no ensanchar
 // AgentTaskStatus. FAILED (bugfix de ciclo de vida): una misión que se
 // cae por una excepción real, un timeout global, o el watchdog de
 // inactividad, transiciona acá — nunca se queda en RUNNING para siempre.
+// PARTIAL (corrección estructural, misión Iowa 2026-07-13): el pipeline
+// corrió de punta a punta sin excepciones, pero no logró lo que la
+// instrucción pedía (ej. "buscá contactos" y quedaron empresas sin
+// ningún punto de contacto, real o organizacional) — antes esto se
+// reportaba como COMPLETED sin ninguna distinción, presentando un
+// resultado incompleto como si fuera un éxito total. Ver
+// contactCoverage en missionDetailSchema para el detalle honesto de qué
+// faltó y por qué.
 export const missionStateSchema = z.enum([
   "RUNNING",
   "PAUSED_BY_USER",
   "PAUSED_BUDGET",
   "CANCELLED",
   "COMPLETED",
+  "PARTIAL",
   "FAILED",
 ]);
 export type MissionState = z.infer<typeof missionStateSchema>;
@@ -97,6 +120,11 @@ export const missionListItemSchema = z.object({
   // bugfix de ciclo de vida: mensaje de error real cuando missionState
   // es FAILED — nunca null en ese caso, siempre explica qué pasó.
   error: z.string().nullable(),
+  // Corrección estructural (misión Iowa, 2026-07-13): qué restricciones
+  // pidió la instrucción y qué se saltó por eso — nunca silencioso. null
+  // en misiones lanzadas antes de este fix (no tenían este campo).
+  appliedRestrictions: missionRestrictionsSchema.nullable(),
+  restrictionNotes: z.array(z.string()),
 });
 export type MissionListItem = z.infer<typeof missionListItemSchema>;
 
@@ -153,6 +181,20 @@ export const missionContactStatsSchema = z.object({
 });
 export type MissionContactStats = z.infer<typeof missionContactStatsSchema>;
 
+// Corrección estructural (misión Iowa, 2026-07-13): antes, "0 contactos"
+// no se distinguía de "no se buscaron contactos" ni de "el proveedor no
+// pudo responder" — esto lo hace explícito. companiesWithContactPoint
+// cuenta tanto Contact nombrados como Company.email organizacional
+// (ver §6 del pedido: un email genérico real sin persona identificada
+// también cuenta como punto de contacto).
+export const missionContactCoverageSchema = z.object({
+  companiesConsidered: z.number(),
+  companiesWithContactPoint: z.number(),
+  companiesWithoutContactPoint: z.number(),
+  providersOmitted: z.array(z.string()),
+});
+export type MissionContactCoverage = z.infer<typeof missionContactCoverageSchema>;
+
 export const missionDetailSchema = missionListItemSchema.extend({
   unrecognizedTerms: z.array(z.string()),
   report: z.string().nullable(), // Executive Report — null mientras RUNNING/PAUSED_*
@@ -160,5 +202,6 @@ export const missionDetailSchema = missionListItemSchema.extend({
   selectedCompanies: z.array(missionCompanySchema),
   contacts: z.array(missionContactSchema),
   contactStats: missionContactStatsSchema,
+  contactCoverage: missionContactCoverageSchema.nullable(),
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;

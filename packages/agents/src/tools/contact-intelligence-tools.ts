@@ -36,6 +36,15 @@ export const discoveredContactSchema = z.object({
 });
 export type DiscoveredContact = z.infer<typeof discoveredContactSchema>;
 
+// Corrección estructural (misión Iowa, 2026-07-13): antes, "el proveedor
+// no encontró a nadie" y "la cuenta del proveedor se quedó sin créditos"
+// solo se distinguían leyendo el texto libre de patternsFailed — ningún
+// campo estructurado lo exponía para que el orquestador de la misión (o
+// el humano en Mission Detail) supiera que 0 contactos no significa "no
+// existen", significa "no se pudo preguntar". Ver provider-health.ts.
+export const providerStatusSchema = z.enum(["AVAILABLE", "CREDIT_EXHAUSTED", "UNAUTHORIZED", "UNAVAILABLE", "NOT_CONFIGURED"]);
+export type ProviderStatusValue = z.infer<typeof providerStatusSchema>;
+
 export const findContactsOutputSchema = z.object({
   contactsCreated: z.array(discoveredContactSchema),
   candidatesFound: z.number(),
@@ -47,6 +56,7 @@ export const findContactsOutputSchema = z.object({
   irrelevantTitleSkipped: z.number(),
   sourcesUsed: z.array(z.string()),
   patternsFailed: z.array(z.string()),
+  providerStatus: providerStatusSchema,
 });
 export type FindContactsOutput = z.infer<typeof findContactsOutputSchema>;
 
@@ -84,13 +94,19 @@ export type EmailUpdatedContact = z.infer<typeof emailUpdatedContactSchema>;
 
 export const findEmailOutputSchema = z.object({
   contactsProcessed: z.number(),
+  // Corrección estructural: ahora incluye el email organizacional
+  // (Company.email) cuando se encontró, no solo los emails por Contact —
+  // antes, una Company sin ningún Contact pero con "info@empresa.com"
+  // encontrado en su sitio reportaba emailsFound=0, subestimando el
+  // trabajo real hecho.
   emailsFound: z.number(),
   emailsVerified: z.number(), // status distinto de NOT_VERIFIED/UNKNOWN, es decir, el proveedor devolvió una clasificación real
   contactsUpdated: z.array(emailUpdatedContactSchema),
-  companyEmailUpdated: z.boolean(), // Company.email se completó con un email genérico encontrado en el sitio
+  companyEmailUpdated: z.boolean(), // Company.email se completó con un email genérico encontrado en el sitio o en Hunter
   websitePagesVisited: z.number(),
   sourcesUsed: z.array(z.string()),
   patternsFailed: z.array(z.string()),
+  hunterProviderStatus: providerStatusSchema,
 });
 export type FindEmailOutput = z.infer<typeof findEmailOutputSchema>;
 

@@ -1,10 +1,11 @@
 import type { AgentTaskDetail, MissionState } from "@ai-staffing-os/shared";
-import type { InterpretDailyDirectiveResult } from "@ai-staffing-os/agents";
+import type { InterpretDailyDirectiveResult, MissionRestrictions } from "@ai-staffing-os/agents";
+import { DEFAULT_MISSION_RESTRICTIONS } from "@ai-staffing-os/agents";
 import { getTenancyContext, runWithTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
 import { createAndRunTaskSync, createQueuedTask, runCeoToolDirectly, toAgentTaskDetail } from "./task-executor";
-import { computeMissionProgress } from "./tools/ceo-tools.impl";
+import { computeMissionProgress, computeContactCoverage } from "./tools/ceo-tools.impl";
 import { abortTask } from "./cancellation";
 
 // F4 addendum: tope general por misión, independiente del desiredVolume
@@ -35,10 +36,33 @@ interface MissionOutput {
   // bugfix de ciclo de vida: heartbeat + error visible en Mission Detail.
   progressUpdatedAt: string;
   error?: string | null;
+  // Corrección estructural (misión Iowa, 2026-07-13): qué restricciones
+  // se aplicaron realmente y qué se saltó por eso — nunca "silencioso".
+  appliedRestrictions?: MissionRestrictions;
+  restrictionNotes?: string[];
+  // Corrección estructural: honestidad del resultado — ver
+  // computeContactCoverage()/closeMission(). null mientras la misión
+  // sigue corriendo (se calcula recién al cerrar).
+  contactCoverage?: {
+    companiesConsidered: number;
+    companiesWithContactPoint: number;
+    companiesWithoutContactPoint: number;
+    providersOmitted: string[];
+  } | null;
 }
 
 function log(missionTaskId: string, event: string, data?: Record<string, unknown>): void {
   console.log(`[mission] ${event}`, JSON.stringify({ missionTaskId, ...data }));
+}
+
+/** Corrección estructural: un mensaje explícito por cada restricción aplicada — nunca silencioso. Usado tanto al lanzar la misión como al arrancar el pipeline. */
+function buildRestrictionNotes(restrictions: MissionRestrictions): string[] {
+  const notes: string[] = [];
+  if (!restrictions.allowCampaignCreation) notes.push("No se creó ninguna Campaign — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowOpportunityCreation) notes.push("No se crearon Opportunities — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowOutreach) notes.push("No se planificó ninguna secuencia de outreach — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowMessageSending) notes.push("No se redactó ningún mensaje/borrador — la instrucción lo prohibió explícitamente.");
+  return notes;
 }
 
 export async function getMissionSettings(tenantId: string) {
@@ -100,9 +124,19 @@ async function getCurrentMissionState(missionTaskId: string): Promise<MissionSta
  * tomó una decisión terminal o de pausa), este heartbeat no escribe
  * nada — deja que esa decisión se mantenga.
  */
-async function syncMissionOutput(missionTaskId: string, missionState: MissionState): Promise<void> {
+async function syncMissionOutput(
+  missionTaskId: string,
+  missionState: MissionState,
+  restrictionInfo?: { appliedRestrictions: MissionRestrictions; restrictionNotes: string[] },
+): Promise<void> {
   const currentState = await getCurrentMissionState(missionTaskId);
   if (currentState !== "RUNNING" && currentState !== "PAUSED_BUDGET") return;
+
+  // Corrección estructural: los flags/notas de restricciones se calculan
+  // una sola vez al arrancar el pipeline — cada heartbeat posterior debe
+  // conservarlos (no pisarlos con undefined) leyendo lo que ya hay en DB.
+  const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } });
+  const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
 
   const progress = await computeMissionProgress(missionTaskId);
   const output: MissionOutput = {
@@ -116,6 +150,8 @@ async function syncMissionOutput(missionTaskId: string, missionState: MissionSta
     objectiveProgress: progress.objectiveProgress,
     progressUpdatedAt: new Date().toISOString(),
     error: null,
+    appliedRestrictions: restrictionInfo?.appliedRestrictions ?? existingOutput.appliedRestrictions,
+    restrictionNotes: restrictionInfo?.restrictionNotes ?? existingOutput.restrictionNotes,
   };
   await scopedDb.agentTask.update({ where: { id: missionTaskId }, data: { output: output as never } });
 }
@@ -131,6 +167,8 @@ async function syncMissionOutput(missionTaskId: string, missionState: MissionSta
  */
 async function failMission(missionTaskId: string, errorMessage: string): Promise<void> {
   const progress = await computeMissionProgress(missionTaskId).catch(() => null);
+  const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } }).catch(() => null);
+  const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
   const output: MissionOutput = {
     missionState: "FAILED",
     companiesTargeted: progress?.companiesTargeted ?? 0,
@@ -142,6 +180,8 @@ async function failMission(missionTaskId: string, errorMessage: string): Promise
     objectiveProgress: progress?.objectiveProgress,
     progressUpdatedAt: new Date().toISOString(),
     error: errorMessage,
+    appliedRestrictions: existingOutput.appliedRestrictions,
+    restrictionNotes: existingOutput.restrictionNotes,
   };
   await scopedDb.agentTask.update({
     where: { id: missionTaskId },
@@ -153,6 +193,8 @@ async function failMission(missionTaskId: string, errorMessage: string): Promise
 /** Bugfix de ciclo de vida: transición terminal real para cancelación — AgentTask.status deja de quedarse en RUNNING para siempre. */
 async function markMissionCancelled(missionTaskId: string): Promise<void> {
   const progress = await computeMissionProgress(missionTaskId);
+  const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } });
+  const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
   const output: MissionOutput = {
     missionState: "CANCELLED",
     companiesTargeted: progress.companiesTargeted,
@@ -164,6 +206,8 @@ async function markMissionCancelled(missionTaskId: string): Promise<void> {
     objectiveProgress: progress.objectiveProgress,
     progressUpdatedAt: new Date().toISOString(),
     error: null,
+    appliedRestrictions: existingOutput.appliedRestrictions,
+    restrictionNotes: existingOutput.restrictionNotes,
   };
   await scopedDb.agentTask.update({
     where: { id: missionTaskId },
@@ -233,6 +277,19 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
   // (ver el chequeo justo antes de closeMission, al final).
   let totalSearchesExecuted = 0;
 
+  // Corrección estructural (misión Iowa, 2026-07-13): antes, "no crear
+  // campañas/oportunidades" y "no enviar nada" existían solo como texto
+  // en la instrucción — nada en código los leía. `interpreted.missionRestrictions`
+  // ya viene combinado (LLM AND detector determinista, ver
+  // mission-restrictions.ts) desde interpretDailyDirective; acá solo se
+  // aplica un default permisivo por si faltara (misiones viejas antes de
+  // este fix, o un parseo defensivo). Se registra explícitamente en el
+  // log y en el output — nunca una restricción aplicada en silencio.
+  const restrictions: MissionRestrictions = interpreted.missionRestrictions ?? DEFAULT_MISSION_RESTRICTIONS;
+  const restrictionNotes = buildRestrictionNotes(restrictions);
+  log(missionTaskId, "mission restrictions applied", { restrictions, restrictionNotes });
+  await syncMissionOutput(missionTaskId, "RUNNING", { appliedRestrictions: restrictions, restrictionNotes });
+
   /**
    * Bugfix de ciclo de vida: chequeo único reutilizado antes de cada paso
    * del pipeline — corta la ejecución por presupuesto excedido, por
@@ -274,25 +331,35 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
   for (const industry of industryTargets) {
     if ((await checkForStop()) === "stop") return;
 
-    const campaignName = `${industry?.name ?? "Prospección general"}${interpreted.state ? ` ${interpreted.state}` : ""} — misión ${new Date().toISOString().slice(0, 10)}`;
+    // Corrección estructural (misión Iowa, 2026-07-13): antes esto se
+    // creaba SIEMPRE, sin importar qué pidiera la instrucción. Ahora
+    // `campaignId` queda `null` cuando la misión lo prohíbe explícitamente
+    // — el resto del pipeline (líneas de abajo) lo trata como "no hay
+    // campaña" en vez de asumir que siempre existe una.
+    let campaignId: string | null = null;
+    if (restrictions.allowCampaignCreation) {
+      const campaignName = `${industry?.name ?? "Prospección general"}${interpreted.state ? ` ${interpreted.state}` : ""} — misión ${new Date().toISOString().slice(0, 10)}`;
 
-    const campaignTask = await createAndRunTaskSync(tenantId, operatorUserId, {
-      agentKey: "campaign",
-      type: "create_campaign",
-      input: {
-        name: campaignName,
-        industryId: industry?.id,
-        state: interpreted.state ?? undefined,
-        city: interpreted.city ?? undefined,
-        targetCategoryIds: categoryIds.length > 0 ? categoryIds : undefined,
-        priority: "MEDIUM",
-      },
-      triggeredBy: "AGENT",
-      parentTaskId: missionTaskId,
-    });
-    await syncMissionOutput(missionTaskId, "RUNNING");
-    if (campaignTask.status === "FAILED" || !campaignTask.output) continue;
-    const campaignId = (campaignTask.output as { campaignId: string }).campaignId;
+      const campaignTask = await createAndRunTaskSync(tenantId, operatorUserId, {
+        agentKey: "campaign",
+        type: "create_campaign",
+        input: {
+          name: campaignName,
+          industryId: industry?.id,
+          state: interpreted.state ?? undefined,
+          city: interpreted.city ?? undefined,
+          targetCategoryIds: categoryIds.length > 0 ? categoryIds : undefined,
+          priority: "MEDIUM",
+        },
+        triggeredBy: "AGENT",
+        parentTaskId: missionTaskId,
+      });
+      await syncMissionOutput(missionTaskId, "RUNNING");
+      if (campaignTask.status === "FAILED" || !campaignTask.output) continue;
+      campaignId = (campaignTask.output as { campaignId: string }).campaignId;
+    } else {
+      log(missionTaskId, "campaign creation skipped by restriction", { industry: industry?.name ?? null });
+    }
 
     // F4.5A: solo cuando el CEO Agent marcó useExternalDiscovery=true (la
     // instrucción pidió explícitamente empresas FUERA del CRM) y hay
@@ -300,7 +367,10 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     // busca "cualquier industria/estado"). Crea Company nuevas con
     // origin=EXTERNAL_DISCOVERY — select_target_companies (abajo, sin
     // cambios) las recoge igual que a cualquier otra porque ya cumplen
-    // los criterios de la campaña.
+    // los criterios de la campaña. Este paso NUNCA dependió de que exista
+    // una Campaign — discover_companies solo escribe Company, así que
+    // corre igual esté o no permitida la Campaign.
+    let externalNewCompanyIds: string[] = [];
     if (interpreted.useExternalDiscovery && interpreted.state && industry) {
       if ((await checkForStop()) === "stop") return;
       log(missionTaskId, "discovery delegated", {
@@ -342,6 +412,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       const newCompanyIds = (
         (discoverTask.output as { companiesCreated?: Array<{ companyId: string }> } | null)?.companiesCreated ?? []
       ).map((c) => c.companyId);
+      externalNewCompanyIds = newCompanyIds;
       for (const newCompanyId of newCompanyIds) {
         if ((await checkForStop()) === "stop") return;
         log(missionTaskId, "contact intelligence delegated", { companyId: newCompanyId });
@@ -376,16 +447,44 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     }
 
     if ((await checkForStop()) === "stop") return;
-    const selectTask = await createAndRunTaskSync(tenantId, operatorUserId, {
-      agentKey: "campaign",
-      type: "select_target_companies",
-      input: { campaignId, limit: perCampaignVolume },
-      triggeredBy: "AGENT",
-      parentTaskId: missionTaskId,
-    });
-    await syncMissionOutput(missionTaskId, "RUNNING");
-    if (selectTask.status === "FAILED" || !selectTask.output) continue;
-    const companyIds = (selectTask.output as { companyIds: string[] }).companyIds;
+
+    // Corrección estructural: select_target_companies exige un campaignId
+    // real (CampaignCompany no puede existir sin Campaign) — cuando la
+    // Campaign está prohibida, se resuelve la lista de empresas a
+    // procesar sin pasar por ahí. En discovery externo, las empresas ya
+    // se conocen (externalNewCompanyIds); si no es discovery externo, se
+    // consulta directo por industria/estado/ciudad (mismo criterio de
+    // selectTargetCompanies, sin el bookkeeping de CampaignCompany que no
+    // aplica sin campaña).
+    let companyIds: string[];
+    if (campaignId) {
+      const selectTask = await createAndRunTaskSync(tenantId, operatorUserId, {
+        agentKey: "campaign",
+        type: "select_target_companies",
+        input: { campaignId, limit: perCampaignVolume },
+        triggeredBy: "AGENT",
+        parentTaskId: missionTaskId,
+      });
+      await syncMissionOutput(missionTaskId, "RUNNING");
+      if (selectTask.status === "FAILED" || !selectTask.output) continue;
+      companyIds = (selectTask.output as { companyIds: string[] }).companyIds;
+    } else if (interpreted.useExternalDiscovery) {
+      companyIds = externalNewCompanyIds;
+    } else {
+      companyIds = (
+        await scopedDb.company.findMany({
+          where: {
+            industryId: industry?.id ?? undefined,
+            state: interpreted.state ?? undefined,
+            city: interpreted.city ?? undefined,
+          },
+          orderBy: [{ commercialScore: "desc" }, { createdAt: "asc" }],
+          take: perCampaignVolume,
+          select: { id: true },
+        })
+      ).map((c) => c.id);
+      log(missionTaskId, "companies selected without campaign", { count: companyIds.length });
+    }
 
     for (const companyId of companyIds) {
       if ((await checkForStop()) === "stop") return;
@@ -426,7 +525,12 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
           // acá — califica y crea el Lead, nunca abre Opportunity ni
           // planifica secuencia/mensaje. El pipeline F4 normal (abajo)
           // sigue exactamente igual para misiones que no piden discovery.
-          if (!interpreted.useExternalDiscovery) {
+          // Corrección estructural: además del caso de discovery externo,
+          // `restrictions.allowOpportunityCreation` bloquea esto para
+          // CUALQUIER misión que lo pida explícitamente — antes solo el
+          // flag de discovery lo protegía, así que una misión normal con
+          // "no crear oportunidades" no tenía ninguna protección real.
+          if (!interpreted.useExternalDiscovery && restrictions.allowOpportunityCreation) {
             await createAndRunTaskSync(tenantId, operatorUserId, {
               agentKey: "sales",
               type: "create_opportunity",
@@ -439,6 +543,14 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       }
 
       if (interpreted.useExternalDiscovery) continue;
+
+      // Corrección estructural: sin Campaign no hay CampaignCompany —
+      // outreach (plan_sequence/personalize_message) es estructuralmente
+      // imposible sin una, independiente de allowOutreach/
+      // allowMessageSending (que además también lo bloquean si hay
+      // Campaign). No es una limitación oculta: restrictionNotes ya
+      // registró explícitamente por qué no se creó la Campaign.
+      if (!campaignId || !restrictions.allowOutreach) continue;
 
       const cc = await scopedDb.campaignCompany.findUnique({
         where: { campaignId_companyId: { campaignId, companyId } },
@@ -459,13 +571,20 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
 
       if ((await checkForStop()) === "stop") return;
 
-      await createAndRunTaskSync(tenantId, operatorUserId, {
-        agentKey: "outreach",
-        type: "personalize_message",
-        input: { campaignCompanyId: cc.id, step: 0 },
-        triggeredBy: "AGENT",
-        parentTaskId: missionTaskId,
-      });
+      // Corrección estructural: el paso que redacta un borrador de
+      // mensaje (lo único que produce contenido pensado para alguien
+      // fuera del tenant) tiene su propio flag — se puede planificar la
+      // secuencia (arriba) sin necesariamente redactar el primer mensaje,
+      // si la instrucción prohibió el envío pero no el plan.
+      if (restrictions.allowMessageSending) {
+        await createAndRunTaskSync(tenantId, operatorUserId, {
+          agentKey: "outreach",
+          type: "personalize_message",
+          input: { campaignCompanyId: cc.id, step: 0 },
+          triggeredBy: "AGENT",
+          parentTaskId: missionTaskId,
+        });
+      }
       await syncMissionOutput(missionTaskId, "RUNNING");
     }
   }
@@ -562,6 +681,14 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
     rawInstruction: instruction,
   })) as InterpretDailyDirectiveResult;
 
+  // Corrección estructural: se calculan acá también (no solo dentro de
+  // runMissionPipeline, que corre async) para que la respuesta síncrona
+  // de POST /missions ya las muestre — sin esto, un cliente que lea la
+  // respuesta inmediata del POST vería appliedRestrictions=null aunque
+  // la instrucción sí las haya pedido.
+  const initialRestrictions = interpreted.missionRestrictions ?? DEFAULT_MISSION_RESTRICTIONS;
+  const initialRestrictionNotes = buildRestrictionNotes(initialRestrictions);
+
   await scopedDb.agentTask.update({
     where: { id: task.id },
     data: {
@@ -584,6 +711,8 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
         },
         progressUpdatedAt: new Date().toISOString(),
         error: null,
+        appliedRestrictions: initialRestrictions,
+        restrictionNotes: initialRestrictionNotes,
       } as never,
     },
   });
@@ -689,8 +818,25 @@ export async function closeMission(missionTaskId: string): Promise<void> {
   };
 
   const progress = await computeMissionProgress(missionTaskId);
+  const contactCoverage = await computeContactCoverage(missionTaskId);
+  const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } });
+  const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
+
+  // Corrección estructural (misión Iowa, 2026-07-13): antes esto era
+  // SIEMPRE "COMPLETED", sin importar si la misión encontró lo que se le
+  // pidió. Una misión que buscó contactos y terminó con empresas sin
+  // ningún punto de contacto (ni Contact nombrado ni email
+  // organizacional) es un resultado parcial, no un éxito total — se
+  // marca PARTIAL, con contactCoverage explicando exactamente qué faltó
+  // y por qué (proveedores omitidos, créditos agotados, etc.), nunca
+  // presentado como éxito sin explicación.
+  const missionState: MissionState =
+    contactCoverage.companiesConsidered > 0 && contactCoverage.companiesWithoutContactPoint > 0
+      ? "PARTIAL"
+      : "COMPLETED";
+
   const output: MissionOutput = {
-    missionState: "COMPLETED",
+    missionState,
     companiesTargeted: progress.companiesTargeted,
     leadsCreated: progress.leadsCreated,
     opportunitiesCreated: progress.opportunitiesCreated,
@@ -701,11 +847,15 @@ export async function closeMission(missionTaskId: string): Promise<void> {
     report: result.report,
     progressUpdatedAt: new Date().toISOString(),
     error: null,
+    appliedRestrictions: existingOutput.appliedRestrictions,
+    restrictionNotes: existingOutput.restrictionNotes,
+    contactCoverage,
   };
 
   await scopedDb.agentTask.update({
     where: { id: missionTaskId },
     data: { status: "DONE", completedAt: new Date(), output: output as never },
   });
+  log(missionTaskId, "mission closed", { missionState, contactCoverage });
 }
 

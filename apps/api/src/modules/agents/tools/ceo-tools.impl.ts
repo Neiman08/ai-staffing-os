@@ -7,6 +7,8 @@ import {
   closeDailyMissionInputSchema,
   interpretDailyDirectiveTool as interpretDailyDirectiveToolStub,
   interpretDailyDirectiveInputSchema,
+  missionRestrictionsSchema,
+  mergeMissionRestrictions,
   type AgentTool,
   type InterpretDailyDirectiveResult,
   type LLMProvider,
@@ -132,6 +134,75 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
   };
 }
 
+export interface MissionContactCoverage {
+  companiesConsidered: number;
+  companiesWithContactPoint: number;
+  companiesWithoutContactPoint: number;
+  providersOmitted: string[];
+}
+
+/**
+ * Corrección estructural (misión Iowa, 2026-07-13): antes, el cierre de
+ * la misión (closeMission) siempre marcaba COMPLETED sin mirar si en
+ * verdad se encontró algo de lo que la instrucción pedía. Esto agrega el
+ * dato real que le falta: de las Company que esta misión realmente
+ * intentó enriquecer con contactos (find_contacts/find_email), cuántas
+ * terminaron con al menos un punto de contacto real — un Contact
+ * nombrado O un email organizacional en Company.email (§6 del pedido:
+ * ambos cuentan, nunca se descarta un email real solo porque no tiene un
+ * nombre asociado) — y cuántas se quedaron sin nada, y por qué (créditos
+ * agotados, proveedor no configurado, etc., nunca "no se sabe").
+ */
+export async function computeContactCoverage(missionTaskId: string): Promise<MissionContactCoverage> {
+  const children = await scopedDb.agentTask.findMany({ where: { parentTaskId: missionTaskId } });
+  const findContactsTasks = children.filter((t) => t.type === "find_contacts");
+  const findEmailTasks = children.filter((t) => t.type === "find_email");
+  const intelligenceTasks = [...findContactsTasks, ...findEmailTasks];
+
+  const companyIds = Array.from(
+    new Set(
+      intelligenceTasks
+        .map((t) => (t.input as { companyId?: string } | null)?.companyId)
+        .filter((id): id is string => !!id),
+    ),
+  );
+
+  const providersOmitted = new Set<string>();
+  for (const t of intelligenceTasks) {
+    const output = t.output as { providerStatus?: string; hunterProviderStatus?: string } | null;
+    if (output?.providerStatus && output.providerStatus !== "AVAILABLE") {
+      providersOmitted.add(`People Data Labs: ${output.providerStatus}`);
+    }
+    if (output?.hunterProviderStatus && output.hunterProviderStatus !== "AVAILABLE") {
+      providersOmitted.add(`Hunter.io: ${output.hunterProviderStatus}`);
+    }
+  }
+
+  if (companyIds.length === 0) {
+    return {
+      companiesConsidered: 0,
+      companiesWithContactPoint: 0,
+      companiesWithoutContactPoint: 0,
+      providersOmitted: Array.from(providersOmitted),
+    };
+  }
+
+  const [contactRows, companies] = await Promise.all([
+    scopedDb.contact.findMany({ where: { companyId: { in: companyIds } }, select: { companyId: true } }),
+    scopedDb.company.findMany({ where: { id: { in: companyIds } }, select: { id: true, email: true } }),
+  ]);
+  const companiesWithNamedContact = new Set(contactRows.map((c) => c.companyId));
+  const companiesWithOrgEmail = new Set(companies.filter((c) => !!c.email).map((c) => c.id));
+  const companiesWithContactPoint = new Set([...companiesWithNamedContact, ...companiesWithOrgEmail]);
+
+  return {
+    companiesConsidered: companyIds.length,
+    companiesWithContactPoint: companiesWithContactPoint.size,
+    companiesWithoutContactPoint: companyIds.length - companiesWithContactPoint.size,
+    providersOmitted: Array.from(providersOmitted),
+  };
+}
+
 /**
  * F4: los dos únicos tools del CEO Agent. Ambos corren DIRECTAMENTE
  * contra la misión raíz (vía runCeoToolDirectly en task-executor.ts), no
@@ -166,10 +237,13 @@ Responde ÚNICAMENTE con un JSON de la forma {
   "externalSearchTerms": [<SOLO cuando useExternalDiscovery es true Y la instrucción menciona sectores/trades específicos que van más allá de una sola industria genérica del CRM (ej. "empresas de manufactura" NO necesita esto, industryNames alcanza). Dos casos típicos, cada uno con su propia frase — NUNCA colapsados en una sola:
      (a) Sectores de construcción/infraestructura especializada de Data Centers — "data center", "data centers", "mission critical", "colocation", "hyperscale", "critical facilities" son SIEMPRE frases de búsqueda propias acá (NUNCA solo industryNames=["Construction"] genérico) — ej. "data center construction", "colocation facility", "hyperscale data center construction", "critical facilities contractor", "mission critical construction".
      (b) Contratistas/trades específicos — ej. "contratistas eléctricos, baja tensión, fibra óptica, automatización industrial, HVAC, Mission Critical" son 6 frases distintas: "electrical contractor", "low voltage contractor", "fiber optic contractor", "industrial automation", "HVAC contractor", "mission critical contractor". Mismo criterio para "mechanical contractor", "controls contractor", "industrial electrical contractor".
-     Cada elemento es una frase de búsqueda corta EN INGLÉS lista para un buscador tipo Google Places — una frase por cada sector/trade distinto que el usuario nombró, NUNCA una sola frase que intente resumir todos. Si no aplica ninguno de los dos casos (instrucción de una sola industria genérica, sin sectores especializados), array vacío.]
+     Cada elemento es una frase de búsqueda corta EN INGLÉS lista para un buscador tipo Google Places — una frase por cada sector/trade distinto que el usuario nombró, NUNCA una sola frase que intente resumir todos. Si no aplica ninguno de los dos casos (instrucción de una sola industria genérica, sin sectores especializados), array vacío.],
+  "missionRestrictions": { "allowCampaignCreation": <false ÚNICAMENTE si la instrucción dice explícitamente algo como "no crear campañas"/"sin crear campañas"/"no campaigns" — default true>, "allowOpportunityCreation": <false ÚNICAMENTE si dice "no crear oportunidades"/"no opportunities" — default true>, "allowOutreach": <false ÚNICAMENTE si dice "no enviar correos/mensajes/emails", "no contactar a nadie", "no outreach" — default true>, "allowMessageSending": <mismo criterio que allowOutreach — si se prohíbe uno, el otro también, default true> }
 }
 
-Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores de Data Center distintos, CADA UNO debe quedar como su propia frase en externalSearchTerms — está PROHIBIDO colapsar varios sectores en una sola industria inventada o en un solo string. Si no podés convertir un término a una frase de búsqueda razonable Y tampoco coincide con una industria/categoría real, listalo tal cual en unrecognizedTerms — nunca lo descartes en silencio.`;
+Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores de Data Center distintos, CADA UNO debe quedar como su propia frase en externalSearchTerms — está PROHIBIDO colapsar varios sectores en una sola industria inventada o en un solo string. Si no podés convertir un término a una frase de búsqueda razonable Y tampoco coincide con una industria/categoría real, listalo tal cual en unrecognizedTerms — nunca lo descartes en silencio.
+
+Regla crítica sobre missionRestrictions: estos 4 flags son SIEMPRE true salvo que la instrucción los prohíba EXPLÍCITAMENTE con una frase negativa clara — nunca los pongas en false por inferencia o por precaución tuya. Esta interpretación es solo una de dos señales que se combinan en código; una segunda verificación determinista revisa el texto literal después, así que es más importante que seas preciso (no le agregues restricciones que el texto no pidió) que "seguro" por las dudas.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -201,6 +275,12 @@ Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores
             // normaliza a array vacío más abajo, nunca se descarta la
             // interpretación completa por esto.
             externalSearchTerms: z.array(z.string()).nullable().optional(),
+            // Corrección estructural: opcional y parcial en el parseo — si
+            // el LLM omite el campo (o alguna de sus 4 claves), se
+            // completa con el default permisivo (true) ANTES de combinar
+            // con el detector determinista (mergeMissionRestrictions),
+            // nunca se descarta la interpretación completa por esto.
+            missionRestrictions: missionRestrictionsSchema.partial().nullable().optional(),
           }),
         );
         if (!parsed) {
@@ -229,6 +309,9 @@ Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores
           unrecognizedTerms: [...parsed.unrecognizedTerms, ...droppedTerms],
           useExternalDiscovery: parsed.useExternalDiscovery ?? false,
           externalSearchTerms: parsed.externalSearchTerms ?? [],
+          // Corrección estructural: el AND del detector determinista con lo
+          // que el LLM interpretó — nunca al revés. Ver mission-restrictions.ts.
+          missionRestrictions: mergeMissionRestrictions(parsed.missionRestrictions, input.rawInstruction),
         };
       },
     },
@@ -238,7 +321,13 @@ Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores
       ...closeDailyMissionToolStub,
       async execute(input: z.infer<typeof closeDailyMissionInputSchema>) {
         const progress = await computeMissionProgress(input.missionTaskId);
+        const contactCoverage = await computeContactCoverage(input.missionTaskId);
         const { objectiveProgress } = progress;
+
+        const contactCoverageLine =
+          contactCoverage.companiesConsidered > 0
+            ? `Cobertura de contacto: ${contactCoverage.companiesWithContactPoint}/${contactCoverage.companiesConsidered} empresas con al menos un punto de contacto real (Contact nombrado o email organizacional)${contactCoverage.companiesWithoutContactPoint > 0 ? `; ${contactCoverage.companiesWithoutContactPoint} sin ninguno` : ""}.${contactCoverage.providersOmitted.length > 0 ? ` Proveedores no disponibles durante esta misión: ${contactCoverage.providersOmitted.join(", ")}.` : ""}`
+            : "No se buscaron contactos en esta misión.";
 
         const prompt = `Objetivo de negocio: "${objectiveProgress.rawText}" (${objectiveProgress.target ?? "sin número objetivo"} ${objectiveProgress.unit})
 Progreso hacia el objetivo: ${objectiveProgress.current} ${objectiveProgress.unit}${objectiveProgress.percentComplete != null ? ` (${objectiveProgress.percentComplete.toFixed(0)}%)` : ""}
@@ -249,8 +338,9 @@ Oportunidades creadas: ${progress.opportunitiesCreated} (pipeline estimado $${pr
 Secuencias planificadas: ${progress.sequencesPlanned}
 Borradores pendientes de aprobación: ${progress.draftsAwaitingApproval}
 Costo de IA de la misión: $${progress.costUsdSoFar.toFixed(4)}
+${contactCoverageLine}
 
-Responde ÚNICAMENTE con un JSON de la forma {"report": "<párrafo ejecutivo de 3-4 frases en español, declarando explícitamente el objetivo y su cumplimiento con los números de arriba — nunca inventes un número que no esté listado>"}.`;
+Responde ÚNICAMENTE con un JSON de la forma {"report": "<párrafo ejecutivo de 3-5 frases en español, declarando explícitamente el objetivo y su cumplimiento con los números de arriba — si companiesWithoutContactPoint > 0 o hay proveedores no disponibles, decilo explícitamente y con honestidad (nunca lo presentes como éxito total) — nunca inventes un número que no esté listado>"}.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,

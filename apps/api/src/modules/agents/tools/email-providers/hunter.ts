@@ -1,4 +1,7 @@
 import type { EmailCandidate, EmailProviderSearchParams, EmailProviderSearchResult } from "./types";
+import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "../provider-health";
+
+const PROVIDER_KEY = "hunter_domain_search";
 
 /**
  * F4.7 §2.3: Hunter.io Domain Search — proveedor #2 de email discovery
@@ -57,7 +60,7 @@ async function fetchHunterDomainSearch(
   domain: string,
   limit: number,
   abortSignal: AbortSignal | undefined,
-): Promise<{ emails: HunterEmailRecord[] } | { error: string; cancelled?: boolean }> {
+): Promise<{ emails: HunterEmailRecord[] } | { error: string; cancelled?: boolean; httpStatus?: number }> {
   const url = new URL(HUNTER_DOMAIN_SEARCH_ENDPOINT);
   url.searchParams.set("domain", domain);
   url.searchParams.set("api_key", apiKey);
@@ -82,13 +85,13 @@ async function fetchHunterDomainSearch(
       if (!res.ok) {
         if (res.status < 500 && res.status !== 429) {
           const body = await res.text().catch(() => "");
-          return { error: `HTTP ${res.status}${body ? `: ${body.slice(0, 300)}` : ""}` };
+          return { error: `HTTP ${res.status}${body ? `: ${body.slice(0, 300)}` : ""}`, httpStatus: res.status };
         }
         if (attempt < MAX_RETRIES) {
           await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
           continue;
         }
-        return { error: `HTTP ${res.status}` };
+        return { error: `HTTP ${res.status}`, httpStatus: res.status };
       }
       const json = (await res.json()) as { data?: { emails?: HunterEmailRecord[] } };
       return { emails: json.data?.emails ?? [] };
@@ -112,18 +115,33 @@ async function fetchHunterDomainSearch(
 
 export async function searchHunterEmails(params: EmailProviderSearchParams, apiKey: string): Promise<EmailProviderSearchResult> {
   if (!params.domain) {
-    return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [`${params.companyName}:sin dominio derivable de companyWebsite`], cancelled: false };
+    return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [`${params.companyName}:sin dominio derivable de companyWebsite`], cancelled: false, providerStatus: "AVAILABLE" };
+  }
+
+  const existingHealth = getProviderHealth(PROVIDER_KEY);
+  if (existingHealth && existingHealth.status !== "AVAILABLE") {
+    return {
+      candidates: [],
+      costUsd: 0,
+      sourcesUsed: [],
+      patternsFailed: [`Hunter.io: ${existingHealth.status} — ${existingHealth.reason} (no se reintenta por ~15 min)`],
+      cancelled: false,
+      providerStatus: existingHealth.status,
+    };
   }
 
   const result = await fetchHunterDomainSearch(params.taskId, apiKey, params.domain, params.limit, params.abortSignal);
 
   if ("error" in result) {
+    const providerStatus = result.httpStatus != null ? classifyProviderHttpStatus(result.httpStatus) : "AVAILABLE";
+    if (providerStatus !== "AVAILABLE") markProviderStatus(PROVIDER_KEY, providerStatus, result.error);
     return {
       candidates: [],
       costUsd: 0, // error real de la API — no se cobra un request fallido
       sourcesUsed: [],
       patternsFailed: [`${params.domain}:hunter_domain_search (${result.error})`],
       cancelled: !!result.cancelled,
+      providerStatus,
     };
   }
 
@@ -146,5 +164,6 @@ export async function searchHunterEmails(params: EmailProviderSearchParams, apiK
     sourcesUsed: candidates.length > 0 ? [`Hunter.io (${params.domain})`] : [],
     patternsFailed: [],
     cancelled: false,
+    providerStatus: "AVAILABLE",
   };
 }

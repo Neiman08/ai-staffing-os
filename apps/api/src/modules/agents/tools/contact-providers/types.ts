@@ -1,4 +1,5 @@
 import type { DiscoveredField } from "@ai-staffing-os/agents";
+import type { ProviderHealthStatus } from "../provider-health";
 
 /**
  * F4.6: contrato compartido entre proveedores de contactos (People Data
@@ -26,6 +27,11 @@ export interface ContactProviderSearchResult {
   sourcesUsed: string[];
   patternsFailed: string[];
   cancelled: boolean;
+  // Corrección estructural: distingue "esta empresa puntual no tiene
+  // datos" (AVAILABLE, candidates vacío) de "la cuenta del proveedor no
+  // puede responder nada ahora" (CREDIT_EXHAUSTED/UNAUTHORIZED/
+  // UNAVAILABLE) — ver provider-health.ts.
+  providerStatus: ProviderHealthStatus;
 }
 
 export interface ContactProviderSearchParams {
@@ -44,5 +50,5 @@ export interface ContactProviderSearchParams {
 }
 
 export function emptyContactResult(): ContactProviderSearchResult {
-  return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false };
+  return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE" };
 }

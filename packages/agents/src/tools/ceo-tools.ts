@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AgentTool } from "../core/AgentTool";
 import { NotImplementedError } from "../core/AgentRuntime";
+import type { MissionRestrictions } from "./mission-restrictions";
 
 function notImplemented<TInput, TOutput>(): (input: TInput) => Promise<TOutput> {
   return async () => {
@@ -54,6 +55,14 @@ export interface InterpretDailyDirectiveResult {
   // colapsa todo en una sola. Vacío si la instrucción ya es una sola
   // industria clara (el pipeline cae de vuelta a industryNames).
   externalSearchTerms: string[];
+  // Corrección estructural (misión Iowa, 2026-07-13): antes no existía
+  // ningún campo para "el usuario prohibió crear campañas/oportunidades/
+  // outreach" — mission-orchestrator.ts los creaba siempre, sin leer la
+  // instrucción. Ver mission-restrictions.ts — combina lo que el LLM
+  // interpretó con un detector determinista de palabras clave; el
+  // resultado nunca puede ser MÁS permisivo que cualquiera de las dos
+  // fuentes.
+  missionRestrictions: MissionRestrictions;
 }
 export const interpretDailyDirectiveTool: AgentTool<
   z.infer<typeof interpretDailyDirectiveInputSchema>,

@@ -93,6 +93,26 @@ async function waitForMissionChildren(missionId: string, minChildren: number, ti
   throw new Error(`Mission ${missionId} did not reach ${minChildren} SETTLED child tasks within ${timeoutMs}ms`);
 }
 
+/**
+ * Corrección estructural: a diferencia de waitForMissionChildren, esto NO
+ * asume que la misión va a crear ningún hijo — una misión cuyas empresas
+ * ya tenían score/lead (o cuyo filtro no matcheó ninguna) puede legítimamente
+ * cerrar con 0 tareas hijas (ver mission-orchestrator.ts: sin Campaign
+ * permitida, no hay nada obligatorio que crear). Usado por el test de
+ * restricciones, que no puede garantizar cuántas empresas reales del seed
+ * matchean su filtro en el momento de correr.
+ */
+async function waitForMissionSettled(missionId: string, timeoutMs = 45_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const task = await prisma.agentTask.findUniqueOrThrow({ where: { id: missionId } });
+    const missionState = (task.output as { missionState?: string } | null)?.missionState ?? "RUNNING";
+    if (missionState !== "RUNNING" && missionState !== "PAUSED_BUDGET") return missionState;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error(`Mission ${missionId} did not settle within ${timeoutMs}ms`);
+}
+
 test("POST /missions as compliance@titan.dev returns 403 (no missions.create)", async () => {
   const res = await fetch(`${baseUrl}/api/v1/missions`, {
     method: "POST",
@@ -199,6 +219,61 @@ test("a second mission the same day is rejected while the first is still RUNNING
   const body3 = (await res3.json()) as { id: string };
   createdMissionIds.push(body3.id);
   await fetch(`${baseUrl}/api/v1/missions/${body3.id}`, {
+    method: "PATCH",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ action: "cancel" }),
+  });
+});
+
+// Corrección estructural (misión Iowa, 2026-07-13): la instrucción real
+// dijo "no crear campañas; no crear oportunidades; no enviar correos; no
+// contactar a nadie" y el sistema creó una Campaign de todas formas. Este
+// test cubre exactamente esa combinación contra el pipeline real (con
+// una llamada real a OpenAI para interpretDailyDirective, mismo criterio
+// que el resto de este archivo) — nunca debe existir ningún
+// create_campaign/create_opportunity/personalize_message entre las
+// tareas hijas, y restrictionNotes debe explicarlo.
+test("una instrucción que prohíbe campañas/oportunidades/outreach nunca las crea, aunque el pipeline las hubiera creado por default", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/missions`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({
+      instruction:
+        "Busca empresas de manufactura en Illinois. No crear campañas; no crear oportunidades; no enviar correos; no contactar a nadie.",
+    }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { id: string; appliedRestrictions: Record<string, boolean> };
+  createdMissionIds.push(body.id);
+
+  assert.equal(body.appliedRestrictions.allowCampaignCreation, false);
+  assert.equal(body.appliedRestrictions.allowOpportunityCreation, false);
+  assert.equal(body.appliedRestrictions.allowOutreach, false);
+  assert.equal(body.appliedRestrictions.allowMessageSending, false);
+
+  // No se puede asumir que el pipeline vaya a crear NINGÚN hijo — sin
+  // Campaign permitida, la única empresa real de Manufacturing/IL del
+  // seed puede ya tener score y lead (nada que hacer), y eso es un
+  // resultado válido, no un timeout. Se espera a que la misión misma
+  // termine, no a una cantidad de hijos que no se puede garantizar.
+  const finalState = await waitForMissionSettled(body.id, 45_000);
+  assert.ok(
+    ["COMPLETED", "PARTIAL"].includes(finalState),
+    `la misión debe cerrar normalmente (COMPLETED/PARTIAL), no ${finalState}`,
+  );
+
+  const detailRes = await fetch(`${baseUrl}/api/v1/missions/${body.id}`, { headers: SALES_HEADERS });
+  const detail = (await detailRes.json()) as {
+    childTasks: Array<{ type: string }>;
+    restrictionNotes: string[];
+  };
+
+  assert.ok(!detail.childTasks.some((t) => t.type === "create_campaign"), "no debe existir ningún create_campaign");
+  assert.ok(!detail.childTasks.some((t) => t.type === "create_opportunity"), "no debe existir ningún create_opportunity");
+  assert.ok(!detail.childTasks.some((t) => t.type === "personalize_message"), "no debe existir ningún personalize_message");
+  assert.ok(detail.restrictionNotes.length >= 3, "debe explicar explícitamente qué restricciones se aplicaron");
+
+  await fetch(`${baseUrl}/api/v1/missions/${body.id}`, {
     method: "PATCH",
     headers: SALES_HEADERS,
     body: JSON.stringify({ action: "cancel" }),

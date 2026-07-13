@@ -55,5 +55,6 @@ export async function searchWebsitePublicEmail(params: EmailProviderSearchParams
     sourcesUsed: candidates.length > 0 ? [`Website (${params.companyWebsite})`] : [],
     patternsFailed: result.patternsFailed,
     cancelled: false,
+    providerStatus: "AVAILABLE",
   };
 }

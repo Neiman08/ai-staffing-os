@@ -9,6 +9,7 @@ import {
   type DiscoveredField,
   type EmailUpdatedContact,
   type LLMProvider,
+  type ProviderStatusValue,
 } from "@ai-staffing-os/agents";
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
@@ -160,6 +161,8 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
         let irrelevantTitleSkipped = 0;
         let cancelled = false;
 
+        let providerStatus: ProviderStatusValue = "NOT_CONFIGURED";
+
         // Solo People Data Labs hoy — un proveedor nuevo (Apollo/Proxycurl/
         // Clay) se agrega en contact-providers/ y se enchufa acá, el agente
         // nunca sabe cuál está usando (ver contact-providers/README.md).
@@ -168,6 +171,7 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
           if (budgetStatus.exceeded) {
             log(deps.taskId, "data provider budget exceeded, skipping contact search", { ...budgetStatus });
             patternsFailed.push(`presupuesto de proveedor de datos excedido ($${budgetStatus.spentUsd.toFixed(2)}/$${budgetStatus.budgetUsd.toFixed(2)})`);
+            providerStatus = "UNAVAILABLE";
           } else {
             const result = await searchPeopleDataLabs(
               {
@@ -184,6 +188,7 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
               env.PEOPLEDATALABS_API_KEY,
             );
             if (result.costUsd > 0) deps.usage.recordExternalCost(result.costUsd);
+            providerStatus = result.providerStatus;
             if (result.cancelled) {
               cancelled = true;
             } else {
@@ -297,6 +302,7 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
           irrelevantTitleSkipped,
           sourcesUsed: Array.from(sourcesUsed),
           patternsFailed,
+          providerStatus,
         };
       },
     },
@@ -365,19 +371,31 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
           patternsFailed.push("Company sin website — Website Intelligence no tiene qué visitar");
         }
 
-        // 2) Hunter.io — solo si hace falta (al menos un contacto sin match
-        // todavía en el website) y hay presupuesto disponible. Una sola
-        // consulta por Company, nunca una por contacto (cuida el free tier).
+        // 2) Hunter.io — respaldo pago, una sola consulta por Company, nunca
+        // una por contacto (cuida el free tier). Corrección estructural
+        // (misión Iowa, 2026-07-13): antes, esto SOLO corría si `contacts`
+        // (los Contact ya existentes de la Company) tenía al menos uno sin
+        // match en el sitio — así que cuando find_contacts no había creado
+        // ningún Contact (ej. People Data Labs sin créditos), `contacts`
+        // quedaba vacío, `stillNeedsLookup` daba `false` por vacuidad, y
+        // Hunter NUNCA se llamaba — ni siquiera para el email genérico de
+        // la empresa, que no depende de que exista ningún Contact. Ahora
+        // son dos necesidades independientes: la de la empresa (un email
+        // general, sin nombre) y la de cada Contact (un email personal).
         let hunterCandidates: EmailCandidate[] = [];
+        let hunterProviderStatus: ProviderStatusValue = "NOT_CONFIGURED";
+        const needsCompanyEmail = !company.email && !companyEmailUpdated;
+        const needsContactEmails = contacts.some(
+          (c) => !websiteResult?.namedPeople.some((p) => p.email && namesMatch(p, c)),
+        );
+        const shouldQueryHunter = needsCompanyEmail || needsContactEmails;
         if (!cancelled && env.HUNTER_API_KEY) {
-          const stillNeedsLookup = contacts.some(
-            (c) => !websiteResult?.namedPeople.some((p) => p.email && namesMatch(p, c)),
-          );
-          if (stillNeedsLookup) {
+          if (shouldQueryHunter) {
             const budgetStatus = await getDataProviderBudgetStatus(ctx.tenantId);
             if (budgetStatus.exceeded) {
               log(deps.taskId, "data provider budget exceeded, skipping Hunter email discovery", { ...budgetStatus });
               patternsFailed.push(`presupuesto de proveedor de datos excedido ($${budgetStatus.spentUsd.toFixed(2)}/$${budgetStatus.budgetUsd.toFixed(2)})`);
+              hunterProviderStatus = "UNAVAILABLE";
             } else {
               const domain = deriveDomain(company.website);
               const result = await searchHunterEmails(
@@ -385,6 +403,7 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
                 env.HUNTER_API_KEY,
               );
               if (result.costUsd > 0) deps.usage.recordExternalCost(result.costUsd);
+              hunterProviderStatus = result.providerStatus;
               if (result.cancelled) {
                 cancelled = true;
               } else {
@@ -393,11 +412,18 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
                 hunterCandidates = result.candidates;
 
                 // Respaldo de Company.email si el sitio no trajo nada.
-                if (!company.email && !companyEmailUpdated) {
+                if (needsCompanyEmail) {
                   const generic = hunterCandidates.find((c) => !c.firstName && !c.lastName);
                   if (generic) {
                     await scopedDb.company.update({ where: { id: company.id }, data: { email: generic.email } });
                     companyEmailUpdated = true;
+                    await auditAgentAction({
+                      agentInstanceId: deps.agentInstanceId,
+                      action: "company.email_found_by_agent",
+                      entityType: "company",
+                      entityId: company.id,
+                      after: { email: generic.email, provider: "Hunter.io" },
+                    });
                     log(deps.taskId, "company email found", { companyId: company.id, provider: "Hunter.io" });
                   }
                 }
@@ -488,12 +514,20 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
           });
         }
 
+        // Corrección estructural: emailsFound antes solo contaba emails de
+        // Contact — una Company sin ningún Contact pero con "info@..."
+        // encontrado en su sitio (o vía Hunter) reportaba emailsFound=0,
+        // subestimando el trabajo real. companyEmailUpdated ya distingue
+        // "fue un email organizacional" de "fue de una persona".
+        const totalEmailsFound = emailsFound + (companyEmailUpdated ? 1 : 0);
+
         log(deps.taskId, cancelled ? "email intelligence cancelled" : "email intelligence completed", {
           contactsProcessed: contacts.length,
-          emailsFound,
+          emailsFound: totalEmailsFound,
           emailsVerified,
           companyEmailUpdated,
           websitePagesVisited,
+          hunterProviderStatus,
         });
 
         if (cancelled) {
@@ -502,13 +536,14 @@ export function createContactIntelligenceTools(deps: ContactIntelligenceToolDeps
 
         return {
           contactsProcessed: contacts.length,
-          emailsFound,
+          emailsFound: totalEmailsFound,
           emailsVerified,
           contactsUpdated,
           companyEmailUpdated,
           websitePagesVisited,
           sourcesUsed: Array.from(sourcesUsed),
           patternsFailed,
+          hunterProviderStatus,
         };
       },
     },

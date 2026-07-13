@@ -21,6 +21,10 @@ const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   PAUSED_BUDGET: "warning",
   CANCELLED: "neutral",
   COMPLETED: "success",
+  // Corrección estructural (misión Iowa, 2026-07-13): un resultado
+  // parcial (ej. empresas encontradas, pero sin ningún contacto) nunca
+  // debe verse como un COMPLETED verde silencioso — badge de advertencia.
+  PARTIAL: "warning",
   FAILED: "danger",
 };
 
@@ -107,7 +111,10 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
   });
 
   const isTerminal =
-    mission.missionState === "COMPLETED" || mission.missionState === "CANCELLED" || mission.missionState === "FAILED";
+    mission.missionState === "COMPLETED" ||
+    mission.missionState === "PARTIAL" ||
+    mission.missionState === "CANCELLED" ||
+    mission.missionState === "FAILED";
   if (isTerminal) return null;
 
   return (
@@ -182,6 +189,18 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           {detail.missionState === "RUNNING" && detail.progressUpdatedAt && (
             <p className="text-xs text-muted-foreground">Última actividad: {timeAgo(detail.progressUpdatedAt)}</p>
           )}
+          {detail.restrictionNotes.length > 0 && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                Restricciones aplicadas
+              </p>
+              <ul className="list-inside list-disc space-y-0.5 text-sm">
+                {detail.restrictionNotes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
               Empresas seleccionadas ({detail.selectedCompanies.length})
@@ -254,6 +273,27 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
                 <p className="text-muted-foreground">Tiempo</p>
               </div>
             </div>
+            {detail.contactCoverage && detail.contactCoverage.companiesConsidered > 0 && (
+              <div
+                className={`mt-2 rounded-md border p-2 text-xs ${
+                  detail.contactCoverage.companiesWithoutContactPoint > 0
+                    ? "border-amber-500/30 bg-amber-500/5"
+                    : "border-emerald-500/30 bg-emerald-500/5"
+                }`}
+              >
+                <p>
+                  {detail.contactCoverage.companiesWithContactPoint}/{detail.contactCoverage.companiesConsidered} empresas
+                  con al menos un punto de contacto real (nombrado o email organizacional).
+                  {detail.contactCoverage.companiesWithoutContactPoint > 0 &&
+                    ` ${detail.contactCoverage.companiesWithoutContactPoint} sin ninguno.`}
+                </p>
+                {detail.contactCoverage.providersOmitted.length > 0 && (
+                  <p className="mt-1 text-muted-foreground">
+                    Proveedores no disponibles: {detail.contactCoverage.providersOmitted.join(" · ")}
+                  </p>
+                )}
+              </div>
+            )}
             <div className="mt-2 space-y-1.5">
               {detail.contacts.length ? (
                 detail.contacts.map((c) => (

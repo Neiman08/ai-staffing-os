@@ -1,5 +1,8 @@
 import type { DiscoveredField, FieldStatus } from "@ai-staffing-os/agents";
 import type { ContactCandidate, ContactProviderSearchParams, ContactProviderSearchResult } from "./types";
+import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "../provider-health";
+
+const PROVIDER_KEY = "people_data_labs";
 
 /**
  * F4.6: People Data Labs — Person Search API. Proveedor PRIMARIO del
@@ -123,7 +126,7 @@ async function fetchPdlSearch(
   companyName: string,
   size: number,
   abortSignal: AbortSignal | undefined,
-): Promise<{ people: PdlPersonRecord[] } | { error: string; cancelled?: boolean }> {
+): Promise<{ people: PdlPersonRecord[] } | { error: string; cancelled?: boolean; httpStatus?: number }> {
   // Probado en vivo: PDL rechaza `minimum_should_match` dentro de `bool`
   // ("Query clause [minimum_should_match] not allowed or invalid field
   // name", HTTP 400) — no soporta esa cláusula de Elasticsearch estándar.
@@ -171,13 +174,13 @@ async function fetchPdlSearch(
       if (!res.ok) {
         if (res.status < 500 && res.status !== 429) {
           const body = await res.text().catch(() => "");
-          return { error: `HTTP ${res.status}${body ? `: ${body.slice(0, 300)}` : ""}` };
+          return { error: `HTTP ${res.status}${body ? `: ${body.slice(0, 300)}` : ""}`, httpStatus: res.status };
         }
         if (attempt < MAX_RETRIES) {
           await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
           continue;
         }
-        return { error: `HTTP ${res.status}` };
+        return { error: `HTTP ${res.status}`, httpStatus: res.status };
       }
       const json = (await res.json()) as { data?: PdlPersonRecord[] };
       return { people: json.data ?? [] };
@@ -204,6 +207,24 @@ export async function searchPeopleDataLabs(
   params: ContactProviderSearchParams,
   apiKey: string,
 ): Promise<ContactProviderSearchResult> {
+  // Corrección estructural (misión Iowa, 2026-07-13): antes de gastar un
+  // request real, se chequea si esta cuenta ya se marcó CREDIT_EXHAUSTED/
+  // UNAUTHORIZED/UNAVAILABLE hace poco — evita repetir la misma llamada
+  // condenada por cada una de las N empresas de una misión (25 llamadas
+  // idénticas a un 402 en el caso real que motivó este fix).
+  const existingHealth = getProviderHealth(PROVIDER_KEY);
+  if (existingHealth && existingHealth.status !== "AVAILABLE") {
+    log(params.taskId, "provider skipped — marked unavailable", { provider: "People Data Labs", status: existingHealth.status, reason: existingHealth.reason });
+    return {
+      candidates: [],
+      costUsd: 0,
+      sourcesUsed: [],
+      patternsFailed: [`People Data Labs: ${existingHealth.status} — ${existingHealth.reason} (no se reintenta por ~15 min para no repetir la misma llamada fallida en cada empresa)`],
+      cancelled: false,
+      providerStatus: existingHealth.status,
+    };
+  }
+
   // Se pide más de lo que hace falta (hasta 20) porque el filtro por
   // cargo prioritario se aplica client-side, DESPUÉS de esta llamada
   // (ver fetchPdlSearch) — sin margen, la mayoría de una empresa
@@ -213,12 +234,18 @@ export async function searchPeopleDataLabs(
   const result = await fetchPdlSearch(params.taskId, apiKey, params.companyName, searchSize, params.abortSignal);
 
   if ("error" in result) {
+    const providerStatus = result.httpStatus != null ? classifyProviderHttpStatus(result.httpStatus) : "AVAILABLE";
+    if (providerStatus !== "AVAILABLE") {
+      markProviderStatus(PROVIDER_KEY, providerStatus, result.error);
+      log(params.taskId, "provider marked unavailable", { provider: "People Data Labs", status: providerStatus, reason: result.error });
+    }
     return {
       candidates: [],
       costUsd: 0, // error real de la API — no se le cobra por un request fallido
       sourcesUsed: [],
       patternsFailed: [`${params.companyName}:people_data_labs_search (${result.error})`],
       cancelled: !!result.cancelled,
+      providerStatus,
     };
   }
 
@@ -236,5 +263,6 @@ export async function searchPeopleDataLabs(
     sourcesUsed: candidates.length > 0 ? [`People Data Labs (${params.companyName})`] : [],
     patternsFailed: [],
     cancelled: false,
+    providerStatus: "AVAILABLE",
   };
 }
