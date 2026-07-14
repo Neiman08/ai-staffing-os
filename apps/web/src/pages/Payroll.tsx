@@ -1,6 +1,14 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AssignmentListItem, CreateTimeEntryInput, Paginated, TimeEntryListItem } from "@ai-staffing-os/shared";
+import type {
+  AssignmentListItem,
+  CreatePayrollRunInput,
+  CreateTimeEntryInput,
+  Paginated,
+  PayrollRunListItem,
+  TimeEntryListItem,
+} from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useToast } from "@/components/ui/toast";
@@ -15,10 +23,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { Plus } from "lucide-react";
 
 const STATUS_FILTERS = ["PENDING", "APPROVED", "LOCKED"];
+type Tab = "timesheets" | "runs";
 
 function LogHoursForm({ onDone }: { onDone: () => void }) {
   const { toast } = useToast();
@@ -146,7 +156,68 @@ function LogHoursForm({ onDone }: { onDone: () => void }) {
   );
 }
 
-export default function Payroll() {
+function CreatePayrollRunForm({ onCreated }: { onCreated: (id: string) => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState<CreatePayrollRunInput>(() => ({
+    periodStart: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    periodEnd: new Date().toISOString().slice(0, 10),
+  }));
+
+  const createMutation = useMutation({
+    mutationFn: (input: CreatePayrollRunInput) =>
+      apiFetch<{ id: string }>("/payroll/runs", { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: (run) => {
+      toast({ title: "Payroll run creado (DRAFT)", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["time-entries"] });
+      onCreated(run.id);
+    },
+    onError: (err) => toast({ title: "No se pudo crear el run", description: String(err), variant: "error" }),
+  });
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        createMutation.mutate(form);
+      }}
+    >
+      <p className="text-xs text-muted-foreground">
+        Agrega todas las TimeEntry APPROVED dentro del período elegido, agrupadas por Assignment. Las entradas
+        incluidas pasan a LOCKED — no vuelven a incluirse en otro run.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label htmlFor="periodStart">Desde *</Label>
+          <Input
+            id="periodStart"
+            type="date"
+            required
+            value={form.periodStart.slice(0, 10)}
+            onChange={(e) => setForm({ ...form, periodStart: e.target.value })}
+          />
+        </div>
+        <div>
+          <Label htmlFor="periodEnd">Hasta *</Label>
+          <Input
+            id="periodEnd"
+            type="date"
+            required
+            value={form.periodEnd.slice(0, 10)}
+            onChange={(e) => setForm({ ...form, periodEnd: e.target.value })}
+          />
+        </div>
+      </div>
+      <Button type="submit" className="w-full" disabled={createMutation.isPending}>
+        {createMutation.isPending ? "Creando…" : "Crear Payroll Run"}
+      </Button>
+    </form>
+  );
+}
+
+function TimesheetsTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: currentUser } = useCurrentUser();
@@ -194,23 +265,8 @@ export default function Payroll() {
     });
   }
 
-  const pendingItems = data?.items.filter((e) => e.status === "PENDING") ?? [];
-
   return (
     <div>
-      <PageHeader
-        title="Payroll"
-        description="Horas registradas, márgenes y aprobación por asignación"
-        action={
-          canCreate ? (
-            <Button onClick={() => setLogHoursOpen(true)}>
-              <Plus className="h-4 w-4" />
-              Log Hours
-            </Button>
-          ) : undefined
-        }
-      />
-
       <Card className="mb-4 flex flex-wrap items-end gap-3 p-3">
         <div className="w-44">
           <Label htmlFor="statusFilter">Estado</Label>
@@ -223,6 +279,12 @@ export default function Payroll() {
             ))}
           </Select>
         </div>
+        {canCreate && (
+          <Button size="sm" onClick={() => setLogHoursOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Log Hours
+          </Button>
+        )}
         {canApprove && selectedIds.size > 0 && (
           <Button
             size="sm"
@@ -296,13 +358,123 @@ export default function Payroll() {
         />
       </Card>
 
-      {pendingItems.length === 0 && data && data.items.length > 0 && status === "" && (
-        <p className="mt-2 text-xs text-muted-foreground">No hay entradas PENDING en esta página para aprobar.</p>
-      )}
-
       <Drawer open={logHoursOpen} onClose={() => setLogHoursOpen(false)} title="Log Hours">
         <LogHoursForm onDone={() => setLogHoursOpen(false)} />
       </Drawer>
+    </div>
+  );
+}
+
+function PayrollRunsTab() {
+  const navigate = useNavigate();
+  const { data: currentUser } = useCurrentUser();
+  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const cursor = cursorStack[cursorStack.length - 1];
+
+  const canCreate = currentUser?.permissions.includes("payrollRuns.create") ?? false;
+
+  const params = new URLSearchParams({ limit: "20" });
+  if (cursor) params.set("cursor", cursor);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["payroll-runs", cursor],
+    queryFn: () => apiFetch<Paginated<PayrollRunListItem>>(`/payroll/runs?${params.toString()}`),
+  });
+
+  return (
+    <div>
+      <Card className="mb-4 flex items-center justify-between p-3">
+        <p className="text-sm text-muted-foreground">Runs de nómina generados desde horas ya aprobadas.</p>
+        {canCreate && (
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            New Payroll Run
+          </Button>
+        )}
+      </Card>
+
+      <Card>
+        {isLoading ? (
+          <LoadingTable />
+        ) : data?.items.length ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Período</TableHead>
+                <TableHead>Workers</TableHead>
+                <TableHead>Gross</TableHead>
+                <TableHead>Bill</TableHead>
+                <TableHead>Margen</TableHead>
+                <TableHead>Creado por</TableHead>
+                <TableHead>Estado</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.items.map((run) => (
+                <TableRow key={run.id} className="cursor-pointer" onClick={() => navigate(`/payroll-runs/${run.id}`)}>
+                  <TableCell className="font-medium">
+                    {new Date(run.periodStart).toLocaleDateString()} – {new Date(run.periodEnd).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{run.itemCount}</TableCell>
+                  <TableCell className="text-muted-foreground">${run.totalGross}</TableCell>
+                  <TableCell className="text-muted-foreground">${run.totalBill}</TableCell>
+                  <TableCell className="font-medium text-emerald-600 dark:text-emerald-400">${run.totalMargin}</TableCell>
+                  <TableCell className="text-muted-foreground">{run.createdByName ?? "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariant(run.status)}>{formatStatusLabel(run.status)}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <p className="p-6 text-center text-sm text-muted-foreground">
+            Sin Payroll Runs todavía — crea el primero con "New Payroll Run".
+          </p>
+        )}
+        <Pagination
+          hasPrevious={cursorStack.length > 1}
+          hasNext={!!data?.nextCursor}
+          onPrevious={() => setCursorStack((stack) => stack.slice(0, -1))}
+          onNext={() => data?.nextCursor && setCursorStack((stack) => [...stack, data.nextCursor!])}
+        />
+      </Card>
+
+      <Drawer open={createOpen} onClose={() => setCreateOpen(false)} title="New Payroll Run">
+        <CreatePayrollRunForm
+          onCreated={(id) => {
+            setCreateOpen(false);
+            navigate(`/payroll-runs/${id}`);
+          }}
+        />
+      </Drawer>
+    </div>
+  );
+}
+
+export default function Payroll() {
+  const [tab, setTab] = useState<Tab>("timesheets");
+
+  return (
+    <div>
+      <PageHeader title="Payroll" description="Horas registradas, márgenes, aprobación y runs de nómina" />
+
+      <div className="mb-4 flex gap-1 rounded-md border border-border bg-secondary/40 p-1 w-fit">
+        {(["timesheets", "runs"] as const).map((t) => (
+          <Button
+            key={t}
+            variant={tab === t ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setTab(t)}
+            className={cn(tab !== t && "text-muted-foreground")}
+          >
+            {t === "timesheets" ? "Timesheets" : "Payroll Runs"}
+          </Button>
+        ))}
+      </div>
+
+      {tab === "timesheets" ? <TimesheetsTab /> : <PayrollRunsTab />}
     </div>
   );
 }

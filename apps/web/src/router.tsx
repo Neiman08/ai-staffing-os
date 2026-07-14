@@ -22,6 +22,7 @@ import Workers from "./pages/Workers";
 import WorkerDetail from "./pages/WorkerDetail";
 import Assignments from "./pages/Assignments";
 import AssignmentDetail from "./pages/AssignmentDetail";
+import PayrollRunDetail from "./pages/PayrollRunDetail";
 import Compliance from "./pages/Compliance";
 import Payroll from "./pages/Payroll";
 import Pricing from "./pages/Pricing";
@@ -80,6 +81,7 @@ export const router = createBrowserRouter([
       { path: "assignments/:id", element: <AssignmentDetail /> },
       { path: "compliance", element: <Compliance /> },
       { path: "payroll", element: <Payroll /> },
+      { path: "payroll-runs/:id", element: <PayrollRunDetail /> },
       { path: "pricing", element: <Pricing /> },
       { path: "agents", element: <AgentsCenter /> },
       { path: "approvals", element: <Approvals /> },
