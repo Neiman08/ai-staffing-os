@@ -118,8 +118,14 @@ export const updateCandidateStatusInputSchema = z.object({
 });
 export type UpdateCandidateStatusInput = z.infer<typeof updateCandidateStatusInputSchema>;
 
+// F5.3: enum real (packages/db/prisma/schema.prisma EmploymentType) —
+// factorizado acá porque F5.2 lo repetía inline en 3 lugares distintos
+// (convertCandidateToWorkerInputSchema, su result, y workerDetailSchema).
+export const workerEmploymentTypeSchema = z.enum(["W2", "C1099"]);
+export type WorkerEmploymentTypeValue = z.infer<typeof workerEmploymentTypeSchema>;
+
 export const convertCandidateToWorkerInputSchema = z.object({
-  employmentType: z.enum(["W2", "C1099"]),
+  employmentType: workerEmploymentTypeSchema,
   defaultPayRate: z.number().positive(),
 });
 export type ConvertCandidateToWorkerInput = z.infer<typeof convertCandidateToWorkerInputSchema>;
@@ -128,7 +134,7 @@ export const convertCandidateToWorkerResultSchema = z.object({
   worker: z.object({
     id: z.string(),
     candidateId: z.string(),
-    employmentType: z.enum(["W2", "C1099"]),
+    employmentType: workerEmploymentTypeSchema,
     defaultPayRate: z.string(),
     status: z.string(),
     complianceStatus: z.string(),
@@ -137,6 +143,30 @@ export const convertCandidateToWorkerResultSchema = z.object({
   alreadyConverted: z.boolean(), // true cuando la conversión era idempotente (Worker ya existía)
 });
 export type ConvertCandidateToWorkerResult = z.infer<typeof convertCandidateToWorkerResultSchema>;
+
+// F5.3: enum real (packages/db/prisma/schema.prisma WorkerStatus) — no se
+// amplía. ASSIGNED nunca es un destino de transición manual (mismo criterio
+// ya aplicado a JobOrder.PARTIALLY_FILLED/FILLED en F5.1): en el schema
+// actual ya hay Workers seedeados en ASSIGNED desde F0 porque hay
+// Assignments de seed reales, pero mientras el módulo de Assignments no
+// exista (fuera de alcance de F5.3), nadie debe poder ENTRAR a ASSIGNED a
+// mano — solo salir de él hacia ON_LEAVE/TERMINATED. TERMINATED es
+// terminal en esta fase: no se pidió reapertura, así que no se inventa una.
+export const workerStatusSchema = z.enum(["AVAILABLE", "ASSIGNED", "ON_LEAVE", "TERMINATED"]);
+export type WorkerStatusValue = z.infer<typeof workerStatusSchema>;
+
+export const WORKER_STATUS_TRANSITIONS: Record<WorkerStatusValue, WorkerStatusValue[]> = {
+  AVAILABLE: ["ON_LEAVE", "TERMINATED"],
+  ASSIGNED: ["ON_LEAVE", "TERMINATED"], // nunca se entra acá a mano, pero sí se puede salir
+  ON_LEAVE: ["AVAILABLE", "TERMINATED"],
+  TERMINATED: [],
+};
+
+/** Idempotente: pedir el mismo estado ya vigente siempre es válido (no-op), nunca un error. */
+export function isValidWorkerStatusTransition(from: WorkerStatusValue, to: WorkerStatusValue): boolean {
+  if (from === to) return true;
+  return WORKER_STATUS_TRANSITIONS[from].includes(to);
+}
 
 // F5.2 §8 (aprobado): un documento nunca se mueve/duplica en la conversión
 // — el detalle de Worker muestra los documentos propios del Worker Y los
@@ -151,22 +181,85 @@ export const workerDocumentSchema = z.object({
 });
 export type WorkerDocument = z.infer<typeof workerDocumentSchema>;
 
-// F5.2: superficie mínima aprobada — solo lo necesario para verificar la
-// conversión desde la UI. Listado completo/edición/filtros de Worker
-// quedan para el bloque siguiente (ver F5_STAFFING_OPERATIONS_PLAN.md §5).
-export const workerDetailSchema = z.object({
+// F5.3: CRUD completo aprobado. Worker nunca duplica datos de Candidate —
+// city/state/languages/categoryNames se leen por la relación 1:1, igual
+// que F5.2 ya decidió para nombre/contacto/categorías.
+export const workerListItemSchema = z.object({
   id: z.string(),
   candidateId: z.string(),
   candidateName: z.string(),
-  employmentType: z.enum(["W2", "C1099"]),
+  city: z.string().nullable(),
+  state: z.string().nullable(),
+  categoryNames: z.array(z.string()),
+  employmentType: workerEmploymentTypeSchema,
   defaultPayRate: z.string(),
-  status: z.string(),
+  status: workerStatusSchema,
   complianceStatus: z.string(),
   hiredAt: z.string().nullable(),
-  documents: z.array(workerDocumentSchema),
   createdAt: z.string(),
 });
+export type WorkerListItem = z.infer<typeof workerListItemSchema>;
+
+export const workerQuerySchema = paginationQuerySchema.extend({
+  search: z.string().optional(), // contains sobre candidate.firstName/lastName, insensible a mayúsculas
+  status: workerStatusSchema.optional(),
+  employmentType: workerEmploymentTypeSchema.optional(),
+  complianceStatus: z.enum(["COMPLIANT", "PENDING", "BLOCKED"]).optional(),
+  categoryId: z.string().optional(), // filtra por candidate.categories
+  state: z.string().optional(), // filtra por candidate.state (no confundir con el status del Worker)
+  city: z.string().optional(),
+  sortBy: z.enum(["createdAt", "hiredAt", "defaultPayRate"]).optional(),
+  sortDir: z.enum(["asc", "desc"]).optional(),
+});
+export type WorkerQuery = z.infer<typeof workerQuerySchema>;
+
+// F5.2 original + F5.3: se mantienen los campos ya consumidos por
+// WorkerDetail.tsx desde F5.2 (nunca se quitan ni se renombran — solo se
+// agregan), más los datos de contacto/ubicación/idiomas/categorías del
+// Candidate de origen y `updatedAt` (columna real, nunca expuesta antes).
+export const workerDetailSchema = workerListItemSchema.extend({
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  languages: z.array(z.string()),
+  documents: z.array(workerDocumentSchema),
+  updatedAt: z.string(),
+});
 export type WorkerDetail = z.infer<typeof workerDetailSchema>;
+
+// F5.3: candidateId es obligatorio (Worker.candidateId es una FK única y
+// NO nullable en el schema — un Worker no puede existir sin un Candidate).
+// Esto significa que "crear un Worker manualmente" es, en la práctica, la
+// misma operación que convertCandidateToWorker (F5.2): seleccionar un
+// Candidate QUALIFIED sin Worker todavía y proveer employmentType/
+// defaultPayRate. Ver apps/api/src/modules/talent/service.ts
+// (createWorkerFromQualifiedCandidate) — se reutiliza la misma regla de
+// negocio y la misma transacción, nunca se duplica ni se diverge.
+export const createWorkerInputSchema = z.object({
+  candidateId: z.string().min(1),
+  employmentType: workerEmploymentTypeSchema,
+  defaultPayRate: z.number().positive(),
+  hiredAt: z.string().optional(),
+  // Deliberadamente SIN: status (siempre AVAILABLE), complianceStatus
+  // (siempre PENDING — es dominio de Compliance, fuera de alcance de
+  // F5.3), tenantId — ninguno se acepta desde el body.
+});
+export type CreateWorkerInput = z.infer<typeof createWorkerInputSchema>;
+
+// F5.3: complianceStatus deliberadamente ausente — pertenece al dominio de
+// Compliance (permisos compliance.verify/compliance.block ya reservados
+// para eso desde F0), no al CRUD de Workers. status tampoco aparece acá —
+// se cambia únicamente vía PATCH /workers/:id/status.
+export const updateWorkerInputSchema = z.object({
+  employmentType: workerEmploymentTypeSchema.optional(),
+  defaultPayRate: z.number().positive().optional(),
+  hiredAt: z.string().optional(),
+});
+export type UpdateWorkerInput = z.infer<typeof updateWorkerInputSchema>;
+
+export const updateWorkerStatusInputSchema = z.object({
+  status: workerStatusSchema,
+});
+export type UpdateWorkerStatusInput = z.infer<typeof updateWorkerStatusInputSchema>;
 
 export const industryListItemSchema = z.object({
   id: z.string(),
