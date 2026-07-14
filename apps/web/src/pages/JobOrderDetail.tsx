@@ -3,10 +3,12 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ActivityItem,
+  AssignmentListItem,
   CompanyListItem,
   JobCategoryListItem,
   JobOrderDetail,
   JobOrderStatusValue,
+  Paginated,
   UpdateJobOrderInput,
 } from "@ai-staffing-os/shared";
 import { JOB_ORDER_STATUS_TRANSITIONS } from "@ai-staffing-os/shared";
@@ -215,6 +217,14 @@ export default function JobOrderDetailPage() {
     enabled: !!id,
   });
 
+  // F5.4: sección de solo lectura — la creación real de Assignments vive
+  // en /assignments (selector de Worker+Job Order), no acá.
+  const { data: assignments } = useQuery({
+    queryKey: ["job-order-assignments", id],
+    queryFn: () => apiFetch<Paginated<AssignmentListItem>>(`/assignments?jobOrderId=${id}&limit=50`),
+    enabled: !!id,
+  });
+
   // F5.1: solo para mostrar el nombre real de la empresa/categoría ya
   // elegidas — no se usan para poblar el formulario de edición.
   const { data: companies } = useQuery({
@@ -392,6 +402,37 @@ export default function JobOrderDetailPage() {
               <span className="text-muted-foreground">Creado</span>
               <span>{new Date(jobOrder.createdAt).toLocaleString()}</span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              Assignments
+              {(jobOrder.status === "OPEN" || jobOrder.status === "PARTIALLY_FILLED") && (
+                <Link to="/assignments">
+                  <Button variant="outline" size="sm">
+                    Assign Worker
+                  </Button>
+                </Link>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {assignments && assignments.items.length > 0 ? (
+              <ul className="divide-y divide-border text-sm">
+                {assignments.items.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between py-2">
+                    <Link to={`/assignments/${a.id}`} className="text-primary underline">
+                      {a.workerName}
+                    </Link>
+                    <Badge variant={statusVariant(a.status)}>{formatStatusLabel(a.status)}</Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin Assignments todavía para este Job Order.</p>
+            )}
           </CardContent>
         </Card>
 

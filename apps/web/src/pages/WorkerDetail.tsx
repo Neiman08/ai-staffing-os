@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ActivityItem, UpdateWorkerInput, WorkerDetail, WorkerStatusValue } from "@ai-staffing-os/shared";
+import type {
+  ActivityItem,
+  AssignmentListItem,
+  Paginated,
+  UpdateWorkerInput,
+  WorkerDetail,
+  WorkerStatusValue,
+} from "@ai-staffing-os/shared";
 import { WORKER_STATUS_TRANSITIONS } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
@@ -103,6 +110,14 @@ export default function WorkerDetailPage() {
   const { data: activity } = useQuery({
     queryKey: ["worker-activity", id],
     queryFn: () => apiFetch<ActivityItem[]>(`/activities?entityType=worker&entityId=${id}`),
+    enabled: !!id,
+  });
+
+  // F5.4: sección de solo lectura — la creación real de Assignments vive
+  // en /assignments.
+  const { data: assignments } = useQuery({
+    queryKey: ["worker-assignments", id],
+    queryFn: () => apiFetch<Paginated<AssignmentListItem>>(`/assignments?workerId=${id}&limit=50`),
     enabled: !!id,
   });
 
@@ -244,6 +259,28 @@ export default function WorkerDetailPage() {
               <span className="text-muted-foreground">Actualizado</span>
               <span>{new Date(worker.updatedAt).toLocaleString()}</span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Assignments</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {assignments && assignments.items.length > 0 ? (
+              <ul className="divide-y divide-border text-sm">
+                {assignments.items.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between py-2">
+                    <Link to={`/assignments/${a.id}`} className="text-primary underline">
+                      {a.jobOrderTitle}
+                    </Link>
+                    <Badge variant={statusVariant(a.status)}>{formatStatusLabel(a.status)}</Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin Assignments todavía para este Worker.</p>
+            )}
           </CardContent>
         </Card>
 

@@ -20,6 +20,8 @@ import Candidates from "./pages/Candidates";
 import CandidateDetail from "./pages/CandidateDetail";
 import Workers from "./pages/Workers";
 import WorkerDetail from "./pages/WorkerDetail";
+import Assignments from "./pages/Assignments";
+import AssignmentDetail from "./pages/AssignmentDetail";
 import Compliance from "./pages/Compliance";
 import Payroll from "./pages/Payroll";
 import Pricing from "./pages/Pricing";
@@ -74,6 +76,8 @@ export const router = createBrowserRouter([
       { path: "candidates/:id", element: <CandidateDetail /> },
       { path: "workers", element: <Workers /> },
       { path: "workers/:id", element: <WorkerDetail /> },
+      { path: "assignments", element: <Assignments /> },
+      { path: "assignments/:id", element: <AssignmentDetail /> },
       { path: "compliance", element: <Compliance /> },
       { path: "payroll", element: <Payroll /> },
       { path: "pricing", element: <Pricing /> },
