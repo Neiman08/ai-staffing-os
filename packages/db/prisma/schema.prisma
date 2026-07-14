@@ -742,6 +742,14 @@ model Candidate {
   smsOptIn        Boolean         @default(false) // TCPA desde F0
   documents       Document[]
   worker          Worker?
+  // F5.2: referencia de actor sin @relation — mismo patrón que
+  // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
+  // completa desde el contexto de tenancy en el service, nunca desde el
+  // body del cliente. Nullable, sin backfill: los candidatos existentes
+  // (seed de F0) no tienen un creador humano real. AuditLog sigue siendo
+  // la fuente de auditoría detallada; este campo es solo para mostrar
+  // "creado por" en la UI sin una consulta adicional.
+  createdById     String?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
