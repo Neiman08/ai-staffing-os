@@ -27,6 +27,7 @@ export const activityEntityTypeSchema = z.enum([
   "candidate",
   "worker",
   "assignment",
+  "payrollRun", // F5.7
 ]);
 
 export const activityQuerySchema = z.object({

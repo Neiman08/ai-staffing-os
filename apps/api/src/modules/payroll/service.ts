@@ -1,12 +1,18 @@
 import type {
   BulkApproveTimeEntriesInput,
   BulkApproveTimeEntriesResult,
+  CreatePayrollRunInput,
   CreateTimeEntryInput,
   Paginated,
+  PayrollItem,
+  PayrollRunDetail,
+  PayrollRunListItem,
+  PaginationQuery,
   TimeEntryListItem,
   TimeEntryQuery,
   UpdateTimeEntryInput,
 } from "@ai-staffing-os/shared";
+import { isValidPayrollRunStatusTransition, PAYROLL_RUN_STATUS_TRANSITIONS } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
@@ -233,4 +239,355 @@ export async function bulkApproveTimeEntries(input: BulkApproveTimeEntriesInput)
   }
 
   return { approved: eligibleIds.length, skipped: candidates.length - eligibleIds.length };
+}
+
+// ================= Payroll Runs (F5.7) =================
+
+// F5.7 (plan §9.2, aprobado como valor provisional hasta que se apruebe
+// un campo/setting real — ver JobOrder.supervisorContactId/otMultiplier
+// en el plan §4.2/§9.2): multiplicador fijo de horas extra.
+const OT_MULTIPLIER = 1.5;
+
+async function resolveUserName(userId: string | null): Promise<string | null> {
+  if (!userId) return null;
+  const user = await scopedDb.user.findUnique({ where: { id: userId } });
+  return user ? `${user.firstName} ${user.lastName}` : null;
+}
+
+async function toPayrollRunListItem(run: {
+  id: string;
+  periodStart: Date;
+  periodEnd: Date;
+  status: string;
+  totalGross: { toString(): string };
+  totalBill: { toString(): string };
+  totalMargin: { toString(): string };
+  createdById: string | null;
+  approvedById: string | null;
+  createdAt: Date;
+  _count?: { items: number };
+}): Promise<PayrollRunListItem> {
+  const itemCount = run._count?.items ?? (await scopedDb.payrollItem.count({ where: { payrollRunId: run.id } }));
+  return {
+    id: run.id,
+    periodStart: run.periodStart.toISOString(),
+    periodEnd: run.periodEnd.toISOString(),
+    status: run.status as never,
+    totalGross: run.totalGross.toString(),
+    totalBill: run.totalBill.toString(),
+    totalMargin: run.totalMargin.toString(),
+    itemCount,
+    createdByName: await resolveUserName(run.createdById),
+    approvedByName: await resolveUserName(run.approvedById),
+    createdAt: run.createdAt.toISOString(),
+  };
+}
+
+export async function listPayrollRuns(query: PaginationQuery): Promise<Paginated<PayrollRunListItem>> {
+  const rows = await scopedDb.payrollRun.findMany({
+    ...buildCursorArgs(query),
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: { _count: { select: { items: true } } },
+  });
+
+  const { items, nextCursor } = toCursorPage(rows, query.limit);
+  const mapped: PayrollRunListItem[] = [];
+  for (const run of items) mapped.push(await toPayrollRunListItem(run));
+  return { items: mapped, nextCursor };
+}
+
+export async function getPayrollRunDetail(id: string): Promise<PayrollRunDetail> {
+  const run = await scopedDb.payrollRun.findUnique({
+    where: { id },
+    include: {
+      items: { include: { worker: { include: { candidate: true } }, assignment: { include: { jobOrder: true } } } },
+    },
+  });
+  if (!run) throw AppError.notFound("Payroll run not found");
+
+  const items: PayrollItem[] = run.items.map((item) => ({
+    id: item.id,
+    workerName: `${item.worker.candidate.firstName} ${item.worker.candidate.lastName}`,
+    jobOrderTitle: item.assignment.jobOrder.title,
+    regularHours: item.regularHours.toString(),
+    otHours: item.otHours.toString(),
+    regularPay: item.regularPay.toString(),
+    otPay: item.otPay.toString(),
+    perDiem: item.perDiem.toString(),
+    bonus: item.bonus.toString(),
+    grossPay: item.grossPay.toString(),
+    billAmount: item.billAmount.toString(),
+    margin: item.margin.toString(),
+  }));
+
+  return {
+    ...(await toPayrollRunListItem(run)),
+    items,
+    updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F5.7 (plan §9.2, aprobado): agrega TimeEntry APPROVED (nunca PENDING)
+ * dentro del período, agrupadas por Assignment → Worker. Marca cada
+ * TimeEntry incluida como LOCKED en la misma transacción — impide que
+ * una hora ya pagada se vuelva a incluir en otro run.
+ *
+ * Limitación real documentada (no un bug oculto): PayrollItem no tiene
+ * una columna propia para horas dobles (el schema, desde F0, solo
+ * declara regularHours/otHours) — TimeEntry.doubleHours se suma dentro
+ * de otHours para el cálculo agregado, aplicando el mismo OT_MULTIPLIER
+ * a ambas. Esto es una simplificación real: horas dobles deberían
+ * pagarse a 2x, no a 1.5x. Se documenta acá y en el informe final en
+ * vez de ocultarlo — resolver esto correctamente requeriría una columna
+ * nueva en PayrollItem, que no se agrega sin aprobación explícita.
+ */
+export async function createPayrollRun(input: CreatePayrollRunInput): Promise<PayrollRunListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const periodStart = new Date(input.periodStart);
+  const periodEnd = new Date(input.periodEnd);
+
+  const entries = await scopedDb.timeEntry.findMany({
+    where: { status: "APPROVED", date: { gte: periodStart, lte: periodEnd } },
+    include: { assignment: true },
+  });
+
+  if (entries.length === 0) {
+    throw AppError.badRequest("No APPROVED time entries were found in this period", {
+      periodStart: input.periodStart,
+      periodEnd: input.periodEnd,
+    });
+  }
+
+  const byAssignment = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    const group = byAssignment.get(entry.assignmentId) ?? [];
+    group.push(entry);
+    byAssignment.set(entry.assignmentId, group);
+  }
+
+  let totalGross = 0;
+  let totalBill = 0;
+  let totalMargin = 0;
+  const itemsData: Array<{
+    assignmentId: string;
+    workerId: string;
+    regularHours: number;
+    otHours: number;
+    regularPay: number;
+    otPay: number;
+    perDiem: number;
+    bonus: number;
+    grossPay: number;
+    billAmount: number;
+    margin: number;
+  }> = [];
+
+  for (const [assignmentId, group] of byAssignment) {
+    const assignment = group[0]!.assignment;
+    const payRate = Number(assignment.payRate);
+    const billRate = Number(assignment.billRate);
+
+    let regularHours = 0;
+    let otHours = 0;
+    let perDiem = 0;
+    let bonus = 0;
+    for (const entry of group) {
+      regularHours += Number(entry.regularHours);
+      otHours += Number(entry.overtimeHours) + Number(entry.doubleHours);
+      perDiem += Number(entry.perDiem ?? 0);
+      bonus += Number(entry.bonus ?? 0);
+    }
+
+    const regularPay = regularHours * payRate;
+    const otPay = otHours * payRate * OT_MULTIPLIER;
+    const grossPay = regularPay + otPay + perDiem + bonus;
+    const billAmount = (regularHours + otHours) * billRate;
+    const margin = billAmount - grossPay;
+
+    totalGross += grossPay;
+    totalBill += billAmount;
+    totalMargin += margin;
+
+    itemsData.push({
+      assignmentId,
+      workerId: assignment.workerId,
+      regularHours,
+      otHours,
+      regularPay,
+      otPay,
+      perDiem,
+      bonus,
+      grossPay,
+      billAmount,
+      margin,
+    });
+  }
+
+  const entryIds = entries.map((e) => e.id);
+
+  const run = await scopedDb.$transaction(async (tx) => {
+    const created = await tx.payrollRun.create({
+      data: {
+        tenantId: ctx.tenantId,
+        periodStart,
+        periodEnd,
+        status: "DRAFT",
+        totalGross,
+        totalBill,
+        totalMargin,
+        createdById: ctx.userId,
+      },
+    });
+
+    for (const item of itemsData) {
+      await tx.payrollItem.create({
+        data: {
+          tenantId: ctx.tenantId,
+          payrollRunId: created.id,
+          ...item,
+        },
+      });
+    }
+
+    await tx.timeEntry.updateMany({ where: { id: { in: entryIds } }, data: { status: "LOCKED" } });
+
+    return created;
+  });
+
+  await logActivity({
+    entityType: "payrollRun",
+    entityId: run.id,
+    type: "SYSTEM",
+    subject: `Payroll run created: ${input.periodStart.slice(0, 10)} → ${input.periodEnd.slice(0, 10)} (${itemsData.length} workers)`,
+  });
+  await logAuditEvent({
+    action: "payrollRun.created",
+    entityType: "payrollRun",
+    entityId: run.id,
+    after: { periodStart: input.periodStart, periodEnd: input.periodEnd, itemCount: itemsData.length, totalGross },
+  });
+
+  return toPayrollRunListItem(run);
+}
+
+async function transitionPayrollRun(
+  id: string,
+  to: "PENDING_APPROVAL" | "APPROVED" | "PAID" | "EXPORTED",
+  action: string,
+): Promise<PayrollRunListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.payrollRun.findUnique({ where: { id } });
+  if (!existing) throw AppError.notFound("Payroll run not found");
+
+  const from = existing.status as never;
+  if (from === to) return toPayrollRunListItem(existing);
+
+  if (!isValidPayrollRunStatusTransition(from, to)) {
+    throw AppError.badRequest(`Cannot transition Payroll run from ${existing.status} to ${to}`, {
+      from: existing.status,
+      to,
+      allowedFromCurrentStatus: PAYROLL_RUN_STATUS_TRANSITIONS[from],
+    });
+  }
+
+  // F5.7 (plan §9.3, aprobado): separación de funciones — quien crea el
+  // run no puede ser quien lo aprueba.
+  if (to === "APPROVED" && existing.createdById === ctx.userId) {
+    throw AppError.forbidden("A Payroll run cannot be approved by the same user who created it");
+  }
+
+  const updated = await scopedDb.payrollRun.update({
+    where: { id },
+    data: {
+      status: to,
+      approvedById: to === "APPROVED" ? ctx.userId : undefined,
+    },
+  });
+
+  await logActivity({
+    entityType: "payrollRun",
+    entityId: id,
+    type: "SYSTEM",
+    subject: `Payroll run status changed: ${existing.status} → ${to}`,
+  });
+  await logAuditEvent({
+    action,
+    entityType: "payrollRun",
+    entityId: id,
+    before: { status: existing.status },
+    after: { status: to },
+  });
+
+  return toPayrollRunListItem(updated);
+}
+
+export async function submitPayrollRun(id: string): Promise<PayrollRunListItem> {
+  return transitionPayrollRun(id, "PENDING_APPROVAL", "payrollRun.submitted");
+}
+
+export async function approvePayrollRun(id: string): Promise<PayrollRunListItem> {
+  return transitionPayrollRun(id, "APPROVED", "payrollRun.approved");
+}
+
+export async function markPayrollRunPaid(id: string): Promise<PayrollRunListItem> {
+  return transitionPayrollRun(id, "PAID", "payrollRun.paid");
+}
+
+function toCsvRow(fields: Array<string | number>): string {
+  return fields.map((f) => `"${String(f).replace(/"/g, '""')}"`).join(",");
+}
+
+/**
+ * F5.7 (plan §9.3/§9.6, aprobado): "genera un archivo — CSV en la
+ * primera pasada, sin PDF todavía". Sin storage real (decisión ya
+ * diferida desde F0/F5.5) — se devuelve el CSV directo en la respuesta
+ * HTTP para descarga, nunca se guarda un archivo en disco/bucket.
+ */
+export async function exportPayrollRun(id: string): Promise<{ csv: string; filename: string }> {
+  const detail = await getPayrollRunDetail(id);
+  if (detail.status !== "PAID") {
+    throw AppError.badRequest(`Cannot export a Payroll run that is ${detail.status} (must be PAID first)`, {
+      status: detail.status,
+    });
+  }
+
+  await transitionPayrollRun(id, "EXPORTED", "payrollRun.exported");
+
+  const header = toCsvRow([
+    "Worker",
+    "Job Order",
+    "Regular Hours",
+    "OT Hours",
+    "Regular Pay",
+    "OT Pay",
+    "Per Diem",
+    "Bonus",
+    "Gross Pay",
+    "Bill Amount",
+    "Margin",
+  ]);
+  const rows = detail.items.map((item) =>
+    toCsvRow([
+      item.workerName,
+      item.jobOrderTitle,
+      item.regularHours,
+      item.otHours,
+      item.regularPay,
+      item.otPay,
+      item.perDiem,
+      item.bonus,
+      item.grossPay,
+      item.billAmount,
+      item.margin,
+    ]),
+  );
+  const csv = [header, ...rows].join("\n");
+  const filename = `payroll-run-${detail.periodStart.slice(0, 10)}-to-${detail.periodEnd.slice(0, 10)}.csv`;
+
+  return { csv, filename };
 }
