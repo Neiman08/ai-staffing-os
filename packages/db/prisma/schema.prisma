@@ -1007,11 +1007,36 @@ model Invoice {
   dueDate     DateTime?
   pdfUrl      String?
   lines       InvoiceLine[]
+  // F5.8: Opción B aprobada (plan §10.1) — historial completo de pagos
+  // parciales vía un modelo propio, en vez de paidAmount/paidAt planos en
+  // Invoice. balance siempre se deriva (total - sum(Payment.amount)),
+  // nunca se guarda una columna que pueda desincronizarse (mismo
+  // principio ya aplicado en todo el proyecto desde F1).
+  payments    Payment[]
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   @@unique([tenantId, number])
   @@index([tenantId, status])
+}
+
+// F5.8 (plan §10.1, Opción B aprobada por el PO): un Invoice puede
+// cobrarse en varias cuotas — cada Payment es una fila real, nunca se
+// sobreescribe. method es texto libre (no un enum cerrado): no se pidió
+// una lista fija de métodos de pago, y el proyecto ya prefiere data
+// sobre código para catálogos abiertos (mismo criterio D13).
+model Payment {
+  id        String   @id @default(cuid())
+  tenantId  String
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+  amount    Decimal  @db.Decimal(12, 2)
+  paidAt    DateTime @default(now())
+  method    String?
+  reference String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, invoiceId])
 }
 
 model InvoiceLine {

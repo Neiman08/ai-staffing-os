@@ -26,6 +26,7 @@ const STRICT_TENANT_MODELS = new Set([
   "PayrollRun",
   "PayrollItem",
   "Invoice",
+  "Payment",
   "Contract",
   "LaborBurdenConfig",
   "PricingScenario",
