@@ -15,6 +15,9 @@ export const activityTypeSchema = z.enum(["NOTE", "CALL", "EMAIL", "MEETING", "T
 // modelo en schema.prisma), pero nunca se agregaron acá. Se corrigen antes
 // de conectar el timeline de Candidate/Worker Detail, no después de un 400
 // real en el navegador.
+// F5.4: "assignment" agregado proactivamente antes de conectar su
+// timeline — el mismo tipo de gap ("jobOrder" en F5.1, "candidate"/
+// "worker" en F5.2) ya se repitió dos veces; se corrige de antemano acá.
 export const activityEntityTypeSchema = z.enum([
   "company",
   "lead",
@@ -23,6 +26,7 @@ export const activityEntityTypeSchema = z.enum([
   "jobOrder",
   "candidate",
   "worker",
+  "assignment",
 ]);
 
 export const activityQuerySchema = z.object({

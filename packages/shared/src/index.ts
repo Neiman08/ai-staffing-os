@@ -5,6 +5,7 @@ export * from "./schemas/dashboard";
 export * from "./schemas/crm";
 export * from "./schemas/jobs";
 export * from "./schemas/talent";
+export * from "./schemas/assignments";
 export * from "./schemas/compliance";
 export * from "./schemas/payroll";
 export * from "./schemas/pricing";
