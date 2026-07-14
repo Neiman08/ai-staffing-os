@@ -488,7 +488,7 @@ No se detectaron modelos duplicados nuevos que F5 introduciría — todo lo dise
 
 - [x] Candidates: CRUD real completo (crear/editar) — **implementado y verificado en F5.2** (ver §17). Sin duplicar tipos frontend/backend (regla ya establecida desde el bug #5 de F0): un único `packages/shared/src/schemas/talent.ts`.
 - [x] Conversión candidate→worker funcional, con `defaultPayRate`/`employmentType` provistos por un humano, nunca por un agente sin aprobación — **implementado y verificado en F5.2** (ver §17). Restringida deliberadamente a roles con `candidates.update` Y `workers.create` a la vez (hoy CEO/Admin), decisión explícita del PO como segunda validación tras el trabajo del Recruiter.
-- [ ] Workers: CRUD completo, disponibilidad calculada (no almacenada), elegibilidad reflejando `complianceStatus` real. F5.2 solo entregó la superficie mínima aprobada (`GET /workers/:id` de solo lectura, sin listado/edición/filtros) — el CRUD completo queda para el bloque siguiente (§5).
+- [x] Workers: CRUD completo — **implementado y verificado en F5.3** (ver §18). Elegibilidad ya refleja `complianceStatus` real (solo lectura desde este módulo, es dominio de Compliance). Disponibilidad calculada (no almacenada) sigue sin implementarse — no fue parte del alcance aprobado de F5.3 (requiere Assignments, todavía inexistente).
 - [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` sigue siendo de solo lectura en esta pasada (aún no hay `Assignment`s reales que lo recalculen — eso es Bloque C, todavía no construido); la UI ya lo muestra explícitamente como "solo lectura" para no sugerir que se edita a mano.
 - [ ] Assignments: ciclo completo funcional (creación bloqueada por compliance no conforme, cierre con motivo en `Activity`, rates snapshot verificados).
 - [ ] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales (no solo con código revisado).
@@ -601,4 +601,40 @@ Projects (CRUD), Workers (CRUD/listado/edición/filtros/disponibilidad), Assignm
 
 ---
 
-**Este documento fue de planificación para F5 completo; §16 y §17 documentan el resultado real de los dos primeros bloques implementados (F5.1, F5.2). El resto de F5 (§5–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
+## 18. F5.3 — Workers CRUD completo — Resultado real (implementado, verificado, cerrado)
+
+**Estado: completo.**
+
+### 18.1 Decisión de arquitectura detectada y resuelta con evidencia (no bloqueante)
+
+`Worker.candidateId` es una FK **única y no nullable** (`schema.prisma`) — no existe "crear un Worker desde cero". Esto significa que `POST /workers` (creación manual pedida por F5.3) es, en la práctica, la **misma operación** que `POST /candidates/:id/convert-to-worker` (F5.2): un Candidate `QUALIFIED` sin Worker todavía, más `employmentType`/`defaultPayRate` provistos por un humano. Resuelto reutilizando el código exacto (`createWorkerFromQualifiedCandidate`, extraído de `talent/service.ts` sin cambiar el comportamiento de F5.2 — verificado con su suite completa antes y después del refactor) en vez de reimplementar una segunda regla de negocio divergente. Diferencia deliberada de UX entre ambos endpoints: la conversión contextual (F5.2) es idempotente (reintento silencioso); la creación desde el listado de Workers (F5.3) devuelve `409` si el Candidate ya tiene Worker, por ser una acción de "crear" más literal. Ambos exigen el mismo par de permisos (`workers.create` + `candidates.update`).
+
+### 18.2 Alcance implementado
+
+- Sin cambios de schema — el CRUD completo de Workers no requirió ninguno.
+- Contratos compartidos: `workerEmploymentTypeSchema` (factorizado, reemplaza 3 enums inline de F5.2), `workerStatusSchema` + `WORKER_STATUS_TRANSITIONS`/`isValidWorkerStatusTransition` (`ASSIGNED` nunca alcanzable a mano — mismo criterio que `JobOrder.PARTIALLY_FILLED`/`FILLED`; `TERMINATED` terminal, sin reapertura pedida), `workerListItemSchema`, `workerQuerySchema` (search/status/employmentType/complianceStatus/categoryId/state/city/sortBy/sortDir), `workerDetailSchema` extendido de forma aditiva (nunca se quitó ningún campo ya consumido desde F5.2), `createWorkerInputSchema`/`updateWorkerInputSchema`/`updateWorkerStatusInputSchema`.
+- Backend: `GET /workers` (listado con filtros completos), `GET /workers/:id` (extendido con contacto/ubicación/idiomas/categorías del Candidate de origen), `POST /workers`, `PATCH /workers/:id` (solo `employmentType`/`defaultPayRate`/`hiredAt` — `complianceStatus` deliberadamente de solo lectura, es dominio de Compliance), `PATCH /workers/:id/status`. Sin `DELETE` — `TERMINATED` es el estado terminal equivalente.
+- Frontend: `Workers.tsx` (nueva: listado, filtros completos, creación real seleccionando un Candidate `QUALIFIED` sin Worker vía el propio `GET /candidates` de F5.2), `WorkerDetail.tsx` (extendido: información general, datos de empleo, transiciones de estado, confirmación para `TERMINATED`, edición, timeline de Activity), nueva entrada "Workers" en el Sidebar.
+
+### 18.3 Bug real encontrado y corregido durante la verificación en navegador (no cosmético)
+
+`candidateQuerySchema.isWorker` (F5.2) usaba `z.coerce.boolean()`, que en JS hace `Boolean(stringCrudo)` — y `Boolean("false")` es `true` (cualquier string no vacío es truthy). Tanto `?isWorker=false` como `?isWorker=true` coercionaban al mismo valor `true`. Invisible en F5.2 porque nada consumía `isWorker=false` todavía; expuesto al construir el selector de "Candidate QUALIFIED sin Worker" de `Workers.tsx` — el desplegable aparecía vacío/con los candidatos equivocados. Sin corrupción de datos (`createWorker` revalida server-side), pero la UX de creación manual estaba genuinamente rota. Corregido aceptando explícitamente `"true"`/`"false"` (o un boolean real) con una transformación explícita — nunca más coerción implícita de JS. Regresión agregada verificando ambas direcciones.
+
+### 18.4 Verificación (evidencia, no autodeclaración)
+
+- **Backend:** 28 tests nuevos (`workers/workers.test.ts`) + 1 test de regresión (`talent/talent.test.ts`, bug de `isWorker`) — RBAC completo, tenancy, CRUD, matriz de estados (incluida la verificación de que un Worker ya sembrado en `ASSIGNED` puede salir pero nunca reentrar a mano, con el fixture restaurado al estado original del seed), validaciones, Activity/AuditLog en ambos lados (Worker y Candidate) de la creación. **Regresión completa: 238/238 tests** (210 preexistentes de F0–F5.2 + 28 nuevos).
+- **Frontend/Playwright, en navegador real, desktop (1440×900) y mobile (iPhone 13, 390×844):** crear Candidate → `QUALIFIED` → crear Worker desde el listado de Workers (no desde Candidate Detail) → aparece en búsqueda/filtro → detalle completo → editar → transición de estado con confirmación para `TERMINATED` → vínculo de vuelta a Candidate Detail confirmado. Cero errores de consola, cero requests fallidos, sin overflow horizontal en mobile. Job Orders (F5.1) verificado sin regresión. Fixtures eliminados sin dejar residuales.
+- `pnpm typecheck`/`lint` limpios en todo el monorepo (solo los 2 warnings preexistentes, sin relación con F5.3).
+- F0–F5.2 intactos: ningún test preexistente modificado ni roto; la suite completa de F5.2 se corrió explícitamente antes y después del refactor de `talent/service.ts`.
+
+### 18.5 Commits (uno por paso pequeño, sin regenerar/resetear la base en ningún momento)
+
+`1b0c6b3` (contratos compartidos) → `764b64f` (refactor + service.ts CRUD) → `e621424` (router) → `5dcad53` (tests backend) → `7dde52f` (frontend) → `5c59f36` (fix bug `isWorker`).
+
+### 18.6 Lo que F5.3 explícitamente no incluye (queda para bloques posteriores de §3.3)
+
+Projects (CRUD), Assignments, Compliance (escritura), Timesheets, Payroll, Billing, Invoices, Matching por IA, disponibilidad calculada de Workers (requiere Assignments) — nada de esto se tocó, tal como se acordó.
+
+---
+
+**Este documento fue de planificación para F5 completo; §16, §17 y §18 documentan el resultado real de los tres primeros bloques implementados (F5.1, F5.2, F5.3). El resto de F5 (§6–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
