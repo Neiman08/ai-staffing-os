@@ -10,7 +10,20 @@ export const activityTypeSchema = z.enum(["NOTE", "CALL", "EMAIL", "MEETING", "T
 // logActivity ya escribía filas jobOrder.created/updated/status_changed
 // sin problema (logActivity no valida contra este enum, solo el query de
 // lectura lo hacía). Se agrega "jobOrder" acá, sin tocar el modelo.
-export const activityEntityTypeSchema = z.enum(["company", "lead", "opportunity", "contact", "jobOrder"]);
+// F5.2: mismo tipo de gap que "jobOrder" en F5.1 — "candidate" y "worker"
+// ya eran valores válidos de Activity.entityType desde F0 (comentario del
+// modelo en schema.prisma), pero nunca se agregaron acá. Se corrigen antes
+// de conectar el timeline de Candidate/Worker Detail, no después de un 400
+// real en el navegador.
+export const activityEntityTypeSchema = z.enum([
+  "company",
+  "lead",
+  "opportunity",
+  "contact",
+  "jobOrder",
+  "candidate",
+  "worker",
+]);
 
 export const activityQuerySchema = z.object({
   entityType: activityEntityTypeSchema,

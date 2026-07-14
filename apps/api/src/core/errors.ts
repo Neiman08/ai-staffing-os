@@ -29,6 +29,12 @@ export class AppError extends Error {
     return new AppError(400, "BAD_REQUEST", message, details);
   }
 
+  // F5.2: primer uso real de un 409 en el proyecto — deduplicación de
+  // Candidate por email/teléfono normalizado dentro del tenant.
+  static conflict(message = "Conflict", details?: unknown) {
+    return new AppError(409, "CONFLICT", message, details);
+  }
+
   static internal(message = "Internal server error", details?: unknown) {
     return new AppError(500, "INTERNAL_ERROR", message, details);
   }

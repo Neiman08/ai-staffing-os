@@ -138,6 +138,19 @@ export const convertCandidateToWorkerResultSchema = z.object({
 });
 export type ConvertCandidateToWorkerResult = z.infer<typeof convertCandidateToWorkerResultSchema>;
 
+// F5.2 §8 (aprobado): un documento nunca se mueve/duplica en la conversión
+// — el detalle de Worker muestra los documentos propios del Worker Y los
+// del Candidate de origen (vía la relación 1:1), identificando de dónde
+// viene cada uno con `source`, sin alterar su dueño real en la DB.
+export const workerDocumentSchema = z.object({
+  id: z.string(),
+  documentTypeName: z.string(),
+  status: z.string(),
+  expirationDate: z.string().nullable(),
+  source: z.enum(["worker", "candidate"]),
+});
+export type WorkerDocument = z.infer<typeof workerDocumentSchema>;
+
 // F5.2: superficie mínima aprobada — solo lo necesario para verificar la
 // conversión desde la UI. Listado completo/edición/filtros de Worker
 // quedan para el bloque siguiente (ver F5_STAFFING_OPERATIONS_PLAN.md §5).
@@ -150,6 +163,7 @@ export const workerDetailSchema = z.object({
   status: z.string(),
   complianceStatus: z.string(),
   hiredAt: z.string().nullable(),
+  documents: z.array(workerDocumentSchema),
   createdAt: z.string(),
 });
 export type WorkerDetail = z.infer<typeof workerDetailSchema>;
