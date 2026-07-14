@@ -15,6 +15,7 @@ import Opportunities from "./pages/Opportunities";
 import FollowUps from "./pages/FollowUps";
 import Revenue from "./pages/Revenue";
 import JobOrders from "./pages/JobOrders";
+import JobOrderDetail from "./pages/JobOrderDetail";
 import Candidates from "./pages/Candidates";
 import Compliance from "./pages/Compliance";
 import Payroll from "./pages/Payroll";
@@ -65,6 +66,7 @@ export const router = createBrowserRouter([
       { path: "discovery", element: <Discovery /> },
       { path: "revenue", element: <Revenue /> },
       { path: "job-orders", element: <JobOrders /> },
+      { path: "job-orders/:id", element: <JobOrderDetail /> },
       { path: "candidates", element: <Candidates /> },
       { path: "compliance", element: <Compliance /> },
       { path: "payroll", element: <Payroll /> },
