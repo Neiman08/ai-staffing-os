@@ -137,6 +137,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "timeEntries.update",
     "timeEntries.delete",
     "payroll.approve",
+    "payrollRuns.view", // F5.7
+    "payrollRuns.create", // F5.7
+    "payrollRuns.update", // F5.7
     "workers.view",
     "assignments.view", // F5.4: payRate/billRate snapshot de la Assignment alimenta el cálculo de nómina
     "jobOrders.view",
@@ -200,7 +203,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "agents.view",
   ],
   HR: ["candidates.view", "workers.view", "documents.view", "documents.create", "documents.update", "agents.view"],
-  Accounting: ["timeEntries.view", "pricingScenarios.view", "companies.view", "agents.view"],
+  Accounting: ["timeEntries.view", "payrollRuns.view", "pricingScenarios.view", "companies.view", "agents.view"],
   Manager: [
     "companies.view",
     "contacts.view",

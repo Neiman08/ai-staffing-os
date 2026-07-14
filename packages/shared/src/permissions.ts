@@ -13,6 +13,7 @@ export const PERMISSION_RESOURCES = [
   "campaigns", // F4
   "missions", // F4
   "assignments", // F5.4
+  "payrollRuns", // F5.7
 ] as const;
 
 export const PERMISSION_ACTIONS = ["view", "create", "update", "delete"] as const;
