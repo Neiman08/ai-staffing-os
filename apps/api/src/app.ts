@@ -11,6 +11,7 @@ import { crmRouter } from "./modules/crm/router";
 import { jobsRouter } from "./modules/jobs/router";
 import { talentRouter } from "./modules/talent/router";
 import { workersRouter } from "./modules/workers/router";
+import { assignmentsRouter } from "./modules/assignments/router";
 import { complianceRouter } from "./modules/compliance/router";
 import { payrollRouter } from "./modules/payroll/router";
 import { pricingRouter } from "./modules/pricing/router";
@@ -104,6 +105,7 @@ export function createApp() {
   app.use("/api/v1", jobsRouter);
   app.use("/api/v1", talentRouter);
   app.use("/api/v1", workersRouter);
+  app.use("/api/v1", assignmentsRouter);
   app.use("/api/v1", complianceRouter);
   app.use("/api/v1", payrollRouter);
   app.use("/api/v1", pricingRouter);
