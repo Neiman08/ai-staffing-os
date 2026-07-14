@@ -488,10 +488,10 @@ No se detectaron modelos duplicados nuevos que F5 introduciría — todo lo dise
 
 - [x] Candidates: CRUD real completo (crear/editar) — **implementado y verificado en F5.2** (ver §17). Sin duplicar tipos frontend/backend (regla ya establecida desde el bug #5 de F0): un único `packages/shared/src/schemas/talent.ts`.
 - [x] Conversión candidate→worker funcional, con `defaultPayRate`/`employmentType` provistos por un humano, nunca por un agente sin aprobación — **implementado y verificado en F5.2** (ver §17). Restringida deliberadamente a roles con `candidates.update` Y `workers.create` a la vez (hoy CEO/Admin), decisión explícita del PO como segunda validación tras el trabajo del Recruiter.
-- [x] Workers: CRUD completo — **implementado y verificado en F5.3** (ver §18). Elegibilidad ya refleja `complianceStatus` real (solo lectura desde este módulo, es dominio de Compliance). `Worker.status` (AVAILABLE↔ASSIGNED) ya se deriva de Assignments reales desde F5.4. Disponibilidad calculada por rango de fechas (§5.3 del plan — `isWorkerAvailable(workerId, dateRange)`) sigue sin implementarse — no fue parte del alcance de F5.4, que solo automatizó el flag binario AVAILABLE/ASSIGNED, no la detección de solapamiento de fechas entre Assignments.
+- [x] Workers: CRUD completo — **implementado y verificado en F5.3** (ver §18). Elegibilidad ya refleja `complianceStatus` real — desde F5.5 ya no es un valor decorativo del seed, se deriva 100% de alertas reales sin resolver. `Worker.status` (AVAILABLE↔ASSIGNED) ya se deriva de Assignments reales desde F5.4. Disponibilidad calculada por rango de fechas (§5.3 del plan — `isWorkerAvailable(workerId, dateRange)`) sigue sin implementarse — no fue parte del alcance de F5.4, que solo automatizó el flag binario AVAILABLE/ASSIGNED, no la detección de solapamiento de fechas entre Assignments.
 - [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` ya se deriva de Assignments reales desde F5.4 — dejó de ser "solo lectura sin fuente real" para pasar a ser un valor genuinamente calculado.
 - [x] Assignments: ciclo completo funcional — **implementado y verificado en F5.4** (ver §19). Creación bloqueada por compliance no conforme (bloqueo duro, sin override — decisión conservadora documentada), cierre con motivo en `Activity`, rates snapshot verificados con un test de rollback real.
-- [ ] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales (no solo con código revisado).
+- [x] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales — **implementado y verificado en F5.5** (ver §20).
 - [ ] Timesheets: carga y aprobación en lote funcionando, `TimeEntry.status` transicionando correctamente a `LOCKED` al entrar a un payroll run.
 - [ ] Payroll: `PayrollRun` completo `DRAFT→PENDING_APPROVAL→APPROVED`, separación de funciones verificada (creador ≠ aprobador) con un test automatizado, sin ningún cálculo de impuestos.
 - [ ] Billing: `Invoice` generada con líneas reales, balance calculado correctamente tras registrar al menos un pago de prueba.
@@ -672,4 +672,40 @@ Projects (CRUD), Compliance (escritura), Timesheets, Payroll, Billing, Invoices,
 
 ---
 
-**Este documento fue de planificación para F5 completo; §16-§19 documentan el resultado real de los cuatro primeros bloques implementados (F5.1-F5.4). El resto de F5 (§7–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
+## 20. F5.5 — Compliance & Documents — Resultado real (implementado, verificado, cerrado)
+
+**Estado: completo.**
+
+### 20.1 Decisiones de arquitectura tomadas con evidencia (no bloqueantes)
+
+- **Cierre del loop `Worker.complianceStatus`:** F5.3 dejó el campo de solo lectura ("es dominio de Compliance") y el plan (§5.4/§7.2) pedía explícitamente que este módulo lo actualizara de verdad. Implementado: `recomputeWorkerComplianceStatus` deriva el campo 100% de `ComplianceAlert` sin resolver — `BLOCKED` si hay `EXPIRED`/`MISSING`/`FAILED_CHECK`, `PENDING` si solo quedan `EXPIRING`, `COMPLIANT` si no hay ninguna. Nunca se edita a mano desde ningún otro endpoint.
+- **Scheduler separado, no dentro de `agents/`:** el plan pidió reutilizar el mecanismo del scheduler in-process existente (F3, `setInterval`, sin Redis/BullMQ) sin reinventarlo. Se creó `compliance/scheduler.ts` como un scheduler propio, en vez de agregar la lógica dentro de `modules/agents/scheduler.ts` — el sweep de compliance es un escaneo determinista de datos, no involucra ningún `AgentTask`/LLM, así que temáticamente no pertenece al módulo de agentes aunque reutilice el mismo patrón técnico.
+- **MISSING se valida contra `JobOrder.requirements`, no contra `JobCategory.requiredCertifications`:** ambas fuentes existen en el schema: se eligió la más específica y editable por operación real (Job Orders, F5.1) en vez de duplicar la misma verificación contra dos fuentes que podrían divergir.
+- **Ventana de `EXPIRING` fija (30 días), sin UI de configuración:** el plan la describía como un ejemplo de setting (`Tenant.settings.complianceAlertWindowDays`), no como un requisito — se mantiene como constante, YAGNI hasta que exista un caso de uso real que la necesite configurable.
+
+### 20.2 Alcance implementado
+
+- Sin cambios de schema — `Document`/`ComplianceAlert`/`DocumentType` ya alcanzaban desde F0.
+- Contratos compartidos: `documentStatusSchema`, `createDocumentInputSchema` (candidateId XOR workerId, `fileUrl` como URL externa — storage real sigue diferido, decisión ya tomada en la auditoría original de F5), `verifyDocumentInputSchema`, `resolveComplianceAlertInputSchema`.
+- Backend: `POST /documents` (`documents.create`), `POST /documents/:id/verify` (`compliance.verify` — un `REJECTED` genera automáticamente una alerta `FAILED_CHECK`, nunca el sweep), `POST /compliance/alerts/:id/resolve` (`compliance.verify`, idempotente). Sweep periódico (`compliance/scheduler.ts`, cada 60 min): `EXPIRING`/`EXPIRED` por vencimiento real de `Document.expirationDate`, `MISSING` comparando `JobOrder.requirements` de las Assignments activas de cada Worker contra sus `Document`s reales.
+- Frontend: `Compliance.tsx` gana "Upload Document" (drawer con selector Worker/Candidate real), botones Verificar/Rechazar por fila (gateados por `compliance.verify`, con confirmación + motivo obligatorio al rechazar), botón Resolver por alerta.
+
+### 20.3 Verificación (evidencia, no autodeclaración)
+
+- **Backend:** 20 tests nuevos (`compliance/compliance.test.ts`) — RBAC, validaciones, ciclo completo de verify/reject con `FAILED_CHECK` automático y bloqueo real de Worker, resolución idempotente, tenancy, y el sweep probado directamente como función de servicio (`EXPIRING`/`EXPIRED`/`MISSING`, cada uno con su caso negativo — idempotencia del sweep, y "no generar MISSING si el Worker ya tiene el documento real"). **Regresión completa: 282/282 tests** (262 preexistentes de F0–F5.4 + 20 nuevos).
+- **Verificación cruzada real, no simulada:** al correr el sweep tenant-wide durante los tests, se confirmó que las 6 alertas preexistentes eran del propio seed (F0) y que el recompute de `complianceStatus` reproducía la distribución original para los Workers respaldados por alertas reales.
+- **Frontend/Playwright, navegador real, desktop (1440×900) y mobile (iPhone 13, 390×844):** subir documento → verificar → subir otro → rechazar con motivo obligatorio → alerta `FAILED_CHECK` visible en la pestaña Alertas → resolver → Worker liberado. Cero errores de consola, cero requests fallidos, sin overflow horizontal en mobile. Efecto real observado y documentado (no un bug): al verificar en vivo un documento de un Worker sembrado (`worker-08`) cuyo `complianceStatus=PENDING` original del seed **no** tenía ninguna alerta real detrás, el recompute lo corrigió a `COMPLIANT` — exactamente el comportamiento correcto que F5.5 vino a construir (el valor decorativo del seed, sin respaldo real, deja de existir en cuanto el módulo real evalúa la situación).
+- `pnpm typecheck`/`lint` limpios en todo el monorepo (solo los 2 warnings preexistentes).
+- F0–F5.4 intactos: ningún test preexistente modificado ni roto.
+
+### 20.4 Commits (uno por paso pequeño, sin regenerar/resetear la base en ningún momento)
+
+`74b7095` (contratos compartidos) → `6a77749` (service + router + scheduler) → `e0d0f31` (tests backend) → `f98f457` (frontend).
+
+### 20.5 Lo que F5.5 explícitamente no incluye (queda para bloques posteriores de §3.3)
+
+Projects (CRUD), Timesheets, Payroll, Billing, Invoices, Matching por IA, storage real de archivos (sigue diferido desde F0), UI de configuración de la ventana de `EXPIRING` — nada de esto se tocó, tal como se acordó.
+
+---
+
+**Este documento fue de planificación para F5 completo; §16-§20 documentan el resultado real de los cinco primeros bloques implementados (F5.1-F5.5). El resto de F5 (§8–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
