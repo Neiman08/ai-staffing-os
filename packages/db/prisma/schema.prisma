@@ -989,6 +989,12 @@ model PayrollItem {
   grossPay     Decimal    @db.Decimal(10, 2)
   billAmount   Decimal    @db.Decimal(10, 2)
   margin       Decimal    @db.Decimal(10, 2)
+  // F5.8: evita doble facturación — una vez que este billAmount ya se
+  // volcó a una InvoiceLine, queda marcado y una nueva generación de
+  // Invoice para el mismo período/empresa no debe volver a incluirlo.
+  // Mismo patrón que TimeEntryStatus.LOCKED (flag de "ya consumido"),
+  // no una relación bidireccional, para no romper el modelo actual.
+  invoiced     Boolean    @default(false)
 
   @@index([tenantId])
 }
