@@ -71,3 +71,72 @@ export const timeEntryListItemSchema = z.object({
   margin: z.string(),
 });
 export type TimeEntryListItem = z.infer<typeof timeEntryListItemSchema>;
+
+// F5.7: enum real (packages/db/prisma/schema.prisma PayrollRunStatus) —
+// no se amplía. Secuencia estrictamente hacia adelante, sin reapertura
+// (plan §9.3): DRAFT → PENDING_APPROVAL → APPROVED → PAID → EXPORTED.
+export const payrollRunStatusSchema = z.enum(["DRAFT", "PENDING_APPROVAL", "APPROVED", "PAID", "EXPORTED"]);
+export type PayrollRunStatusValue = z.infer<typeof payrollRunStatusSchema>;
+
+export const PAYROLL_RUN_STATUS_TRANSITIONS: Record<PayrollRunStatusValue, PayrollRunStatusValue[]> = {
+  DRAFT: ["PENDING_APPROVAL"],
+  PENDING_APPROVAL: ["APPROVED"],
+  APPROVED: ["PAID"],
+  PAID: ["EXPORTED"],
+  EXPORTED: [],
+};
+
+export function isValidPayrollRunStatusTransition(from: PayrollRunStatusValue, to: PayrollRunStatusValue): boolean {
+  if (from === to) return true;
+  return PAYROLL_RUN_STATUS_TRANSITIONS[from].includes(to);
+}
+
+// F5.7 (plan §9.1, aprobado): sin cálculos fiscales — decisión D7 de la
+// arquitectura original, no una restricción nueva de esta fase.
+export const createPayrollRunInputSchema = z
+  .object({
+    periodStart: z.string().min(1),
+    periodEnd: z.string().min(1),
+  })
+  .refine((v) => new Date(v.periodEnd) >= new Date(v.periodStart), {
+    message: "periodEnd cannot be before periodStart",
+    path: ["periodEnd"],
+  });
+export type CreatePayrollRunInput = z.infer<typeof createPayrollRunInputSchema>;
+
+export const payrollItemSchema = z.object({
+  id: z.string(),
+  workerName: z.string(),
+  jobOrderTitle: z.string(),
+  regularHours: z.string(),
+  otHours: z.string(),
+  regularPay: z.string(),
+  otPay: z.string(),
+  perDiem: z.string(),
+  bonus: z.string(),
+  grossPay: z.string(),
+  billAmount: z.string(),
+  margin: z.string(),
+});
+export type PayrollItem = z.infer<typeof payrollItemSchema>;
+
+export const payrollRunListItemSchema = z.object({
+  id: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  status: payrollRunStatusSchema,
+  totalGross: z.string(),
+  totalBill: z.string(),
+  totalMargin: z.string(),
+  itemCount: z.number(),
+  createdByName: z.string().nullable(),
+  approvedByName: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type PayrollRunListItem = z.infer<typeof payrollRunListItemSchema>;
+
+export const payrollRunDetailSchema = payrollRunListItemSchema.extend({
+  items: z.array(payrollItemSchema),
+  updatedAt: z.string(),
+});
+export type PayrollRunDetail = z.infer<typeof payrollRunDetailSchema>;
