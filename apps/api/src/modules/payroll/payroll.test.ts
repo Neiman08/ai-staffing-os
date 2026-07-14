@@ -22,6 +22,7 @@ const createdWorkerIds: string[] = [];
 const createdJobOrderIds: string[] = [];
 const createdAssignmentIds: string[] = [];
 const createdTimeEntryIds: string[] = [];
+const createdPayrollRunIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -34,6 +35,10 @@ before(async () => {
 });
 
 after(async () => {
+  if (createdPayrollRunIds.length > 0) {
+    // onDelete: Cascade en PayrollItem.payrollRunId ya limpia los items.
+    await prisma.payrollRun.deleteMany({ where: { id: { in: createdPayrollRunIds } } });
+  }
   if (createdTimeEntryIds.length > 0) {
     await prisma.timeEntry.deleteMany({ where: { id: { in: createdTimeEntryIds } } });
   }
@@ -349,4 +354,228 @@ test("bulk-approve writes a single AuditLog entry listing all affected ids", asy
   });
   assert.ok(audit);
   assert.deepEqual((audit?.before as { ids: string[] }).ids, [e1.id, e2.id]);
+});
+
+// ================= Payroll Runs (F5.7) =================
+// F5.7: años lejanos (2029) para garantizar aislamiento total frente al
+// seed real (~2026) y frente a los fixtures de TimeEntry de F5.6 (enero
+// 2026) que conviven en el mismo archivo hasta su propio after() global.
+
+async function createApprovedEntry(assignmentId: string, date: string, overrides: Record<string, unknown> = {}) {
+  const res = await fetch(`${baseUrl}/api/v1/time-entries`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ assignmentId, date, regularHours: 8, ...overrides }),
+  });
+  const body = (await res.json()) as { id: string };
+  createdTimeEntryIds.push(body.id);
+  await fetch(`${baseUrl}/api/v1/time-entries/bulk-approve`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ ids: [body.id] }),
+  });
+  return body.id;
+}
+
+test("POST /payroll/runs as sales@titan.dev returns 403 (no payrollRuns.create)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-01-01", periodEnd: "2029-01-07" }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST /payroll/runs with no APPROVED entries in the period is rejected", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-02-01", periodEnd: "2029-02-07" }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("creating a Payroll run aggregates APPROVED entries, computes totals correctly, and locks the TimeEntries", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-03-01", { regularHours: 8, overtimeHours: 2 });
+  await createApprovedEntry(assignmentId, "2029-03-02", { regularHours: 8, overtimeHours: 0 });
+
+  // Una entrada PENDING (nunca aprobada) en el mismo rango — nunca debe
+  // incluirse en el run.
+  const pendingRes = await fetch(`${baseUrl}/api/v1/time-entries`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ assignmentId, date: "2029-03-03", regularHours: 8 }),
+  });
+  const pendingEntry = (await pendingRes.json()) as { id: string };
+  createdTimeEntryIds.push(pendingEntry.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-03-01", periodEnd: "2029-03-07" }),
+  });
+  assert.equal(res.status, 201);
+  const run = (await res.json()) as { id: string; status: string; itemCount: number; totalGross: string };
+  createdPayrollRunIds.push(run.id);
+  assert.equal(run.status, "DRAFT");
+  assert.equal(run.itemCount, 1, "one PayrollItem per Assignment, aggregated across both approved days");
+
+  // regularHours=16, otHours=2 -> payRate=20: regularPay=320, otPay=2*20*1.5=60 -> gross=380
+  assert.equal(Number(run.totalGross), 380);
+
+  const entry1 = await prisma.timeEntry.findFirst({ where: { assignmentId, date: new Date("2029-03-01") } });
+  assert.equal(entry1?.status, "LOCKED", "an entry included in a Payroll run must become LOCKED");
+
+  const pendingCheck = await prisma.timeEntry.findUniqueOrThrow({ where: { id: pendingEntry.id } });
+  assert.equal(pendingCheck.status, "PENDING", "a PENDING entry must never be swept into a Payroll run");
+});
+
+test("GET /payroll/runs/:id returns the full detail with items", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-04-01");
+
+  const createRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-04-01", periodEnd: "2029-04-07" }),
+  });
+  const run = (await createRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  const detailRes = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}`, { headers: PAYROLL_HEADERS });
+  assert.equal(detailRes.status, 200);
+  const detail = (await detailRes.json()) as { items: Array<{ workerName: string }>; createdByName: string | null };
+  assert.equal(detail.items.length, 1);
+  assert.ok(detail.createdByName);
+});
+
+test("full lifecycle: DRAFT -> PENDING_APPROVAL -> APPROVED -> PAID -> EXPORTED, with separation of duties enforced", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-05-01");
+
+  const createRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-05-01", periodEnd: "2029-05-07" }),
+  });
+  const run = (await createRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  const submitRes = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/submit`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+  });
+  assert.equal(submitRes.status, 200);
+  assert.equal(((await submitRes.json()) as { status: string }).status, "PENDING_APPROVAL");
+
+  // El mismo usuario que creó el run (payroll@titan.dev) no puede aprobarlo.
+  const selfApproveRes = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/approve`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+  });
+  assert.equal(selfApproveRes.status, 403, "the creator must never be able to approve their own Payroll run");
+
+  const approveRes = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/approve`, {
+    method: "POST",
+    headers: CEO_HEADERS,
+  });
+  assert.equal(approveRes.status, 200);
+  assert.equal(((await approveRes.json()) as { status: string }).status, "APPROVED");
+
+  const paidRes = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/mark-paid`, {
+    method: "POST",
+    headers: CEO_HEADERS,
+  });
+  assert.equal(paidRes.status, 200);
+  assert.equal(((await paidRes.json()) as { status: string }).status, "PAID");
+
+  const exportRes = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/export`, {
+    method: "POST",
+    headers: CEO_HEADERS,
+  });
+  assert.equal(exportRes.status, 200);
+  assert.equal(exportRes.headers.get("content-type")?.includes("text/csv"), true);
+  const csv = await exportRes.text();
+  assert.match(csv, /"Worker","Job Order"/);
+
+  const finalDetail = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}`, { headers: CEO_HEADERS });
+  assert.equal(((await finalDetail.json()) as { status: string }).status, "EXPORTED");
+});
+
+test("invalid transition DRAFT -> APPROVED (skipping submit) is rejected", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-06-01");
+
+  const createRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-06-01", periodEnd: "2029-06-07" }),
+  });
+  const run = (await createRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/approve`, {
+    method: "POST",
+    headers: CEO_HEADERS,
+  });
+  assert.equal(res.status, 400);
+});
+
+test("exporting before PAID is rejected", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-07-01");
+
+  const createRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-07-01", periodEnd: "2029-07-07" }),
+  });
+  const run = (await createRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/export`, {
+    method: "POST",
+    headers: CEO_HEADERS,
+  });
+  assert.equal(res.status, 400);
+});
+
+test("a Payroll run created under one tenant is invisible under another tenant context", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-08-01");
+
+  const createRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-08-01", periodEnd: "2029-08-07" }),
+  });
+  const run = (await createRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  await runWithTenancyContext(
+    { tenantId: "tenant-does-not-exist", userId: "irrelevant", permissions: [] },
+    async () => {
+      const found = await prisma.payrollRun.findFirst({ where: { id: run.id, tenantId: "tenant-does-not-exist" } });
+      assert.equal(found, null);
+    },
+  );
+});
+
+test("creating a Payroll run writes Activity + AuditLog", async () => {
+  const assignmentId = await createRealAssignment();
+  await createApprovedEntry(assignmentId, "2029-09-01");
+
+  const createRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2029-09-01", periodEnd: "2029-09-07" }),
+  });
+  const run = (await createRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  const activity = await prisma.activity.findFirst({ where: { entityType: "payrollRun", entityId: run.id } });
+  assert.ok(activity);
+  const audit = await prisma.auditLog.findFirst({ where: { entityType: "payrollRun", entityId: run.id, action: "payrollRun.created" } });
+  assert.ok(audit);
 });
