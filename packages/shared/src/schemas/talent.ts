@@ -51,11 +51,26 @@ export type CandidateListItem = z.infer<typeof candidateListItemSchema>;
 
 // F5.2: se mantiene cursor/limit — misma convención ya usada por
 // Companies/Contacts/Leads/JobOrders, no page/pageSize.
+//
+// F5.3: bug real encontrado en vivo (Workers.tsx, selector de "New
+// Worker") — `z.coerce.boolean()` hace `Boolean(valor)` sobre el string
+// crudo del query param, y en JS `Boolean("false")` es `true` (cualquier
+// string no vacío es truthy). Esto significa que `?isWorker=false` y
+// `?isWorker=true` coercionaban AMBOS a `true` — el filtro nunca pudo
+// devolver candidatos sin Worker, solo los que ya tenían uno. Pasó
+// desapercibido en F5.2 porque nada consumía `isWorker=false` todavía;
+// F5.3 lo expuso al usarlo para poblar el selector de "Candidate
+// QUALIFIED sin Worker" del formulario de creación manual de Worker.
+// Corregido aceptando explícitamente los strings "true"/"false" (o un
+// boolean real, para llamadas directas al servicio desde tests).
 export const candidateQuerySchema = paginationQuerySchema.extend({
   search: z.string().optional(), // contains sobre firstName/lastName/email, insensible a mayúsculas
   status: candidateStatusSchema.optional(),
   categoryId: z.string().optional(),
-  isWorker: z.coerce.boolean().optional(),
+  isWorker: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((v) => (typeof v === "boolean" ? v : v === "true"))
+    .optional(),
 });
 export type CandidateQuery = z.infer<typeof candidateQuerySchema>;
 

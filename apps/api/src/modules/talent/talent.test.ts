@@ -196,6 +196,26 @@ test("GET /candidates supports search by name", async () => {
   assert.ok(listBody.items.some((i) => i.id === created.id));
 });
 
+test("GET /candidates?isWorker=false and isWorker=true are interpreted correctly, not both as true (F5.3 regression)", async () => {
+  const { body } = await createValidCandidate({ lastName: `IsWorkerCheck${Date.now()}` });
+  const candidate = body as { id: string };
+
+  const falseRes = await fetch(`${baseUrl}/api/v1/candidates?isWorker=false&limit=100`, { headers: RECRUITER_HEADERS });
+  const falseBody = (await falseRes.json()) as { items: Array<{ id: string }> };
+  assert.equal(falseRes.status, 200, JSON.stringify(falseBody));
+  assert.ok(
+    falseBody.items.some((i) => i.id === candidate.id),
+    "isWorker=false must include a real Candidate that has no Worker",
+  );
+
+  const trueRes = await fetch(`${baseUrl}/api/v1/candidates?isWorker=true&limit=100`, { headers: RECRUITER_HEADERS });
+  const trueBody = (await trueRes.json()) as { items: Array<{ id: string }> };
+  assert.ok(
+    !trueBody.items.some((i) => i.id === candidate.id),
+    "isWorker=true must never include a Candidate that has no Worker",
+  );
+});
+
 // ---- Edición ----
 
 test("PATCH /candidates/:id edits allowed fields", async () => {
