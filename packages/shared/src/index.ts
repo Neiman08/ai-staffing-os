@@ -8,6 +8,7 @@ export * from "./schemas/talent";
 export * from "./schemas/assignments";
 export * from "./schemas/compliance";
 export * from "./schemas/payroll";
+export * from "./schemas/billing";
 export * from "./schemas/pricing";
 export * from "./schemas/agents";
 export * from "./schemas/leads";
