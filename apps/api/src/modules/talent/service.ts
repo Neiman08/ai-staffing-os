@@ -332,13 +332,58 @@ export async function updateCandidateStatus(
   return toListItem(updated);
 }
 
+/**
+ * F5.3: extraído de convertCandidateToWorker (F5.2) sin cambiar su
+ * comportamiento — Worker.candidateId es una FK única y NO nullable
+ * (schema.prisma), así que "crear un Worker" siempre significa esto:
+ * un Candidate QUALIFIED sin Worker todavía, más employmentType/
+ * defaultPayRate provistos por un humano. `POST /workers` (F5.3,
+ * workers/service.ts) reutiliza exactamente esta función — nunca
+ * reimplementa la regla de negocio ni la transacción por su cuenta,
+ * para que no puedan existir dos caminos de creación con reglas
+ * divergentes. Los callers son responsables de la idempotencia (si el
+ * Candidate ya tiene Worker) y del logging de Activity/AuditLog, cada
+ * uno con la semántica que le corresponde a su propio endpoint.
+ */
+export async function createWorkerFromQualifiedCandidate(
+  candidate: { id: string; status: string },
+  input: ConvertCandidateToWorkerInput,
+) {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  if (candidate.status !== "QUALIFIED") {
+    throw AppError.badRequest("Candidate must be QUALIFIED to convert to Worker", {
+      status: candidate.status,
+    });
+  }
+
+  return scopedDb.$transaction(async (tx) => {
+    const createdWorker = await tx.worker.create({
+      data: {
+        tenantId: ctx.tenantId,
+        candidateId: candidate.id,
+        employmentType: input.employmentType,
+        defaultPayRate: input.defaultPayRate,
+        status: "AVAILABLE",
+        complianceStatus: "PENDING",
+      },
+    });
+
+    // F5.2 (aprobado): única transición manual que lleva a PLACED —
+    // ocurre exclusivamente acá, en la misma transacción que crea el
+    // Worker. No se copian nombre/email/teléfono/ubicación/categorías —
+    // siguen viviendo en Candidate, se consultan por la relación 1:1.
+    await tx.candidate.update({ where: { id: candidate.id }, data: { status: "PLACED" } });
+
+    return createdWorker;
+  });
+}
+
 export async function convertCandidateToWorker(
   id: string,
   input: ConvertCandidateToWorkerInput,
 ): Promise<ConvertCandidateToWorkerResult> {
-  const ctx = getTenancyContext();
-  if (!ctx) throw AppError.unauthorized();
-
   const existing = await scopedDb.candidate.findUnique({
     where: { id },
     include: { worker: true },
@@ -376,32 +421,7 @@ export async function convertCandidateToWorker(
     };
   }
 
-  if (existing.status !== "QUALIFIED") {
-    throw AppError.badRequest("Candidate must be QUALIFIED to convert to Worker", {
-      status: existing.status,
-    });
-  }
-
-  const worker = await scopedDb.$transaction(async (tx) => {
-    const createdWorker = await tx.worker.create({
-      data: {
-        tenantId: ctx.tenantId,
-        candidateId: id,
-        employmentType: input.employmentType,
-        defaultPayRate: input.defaultPayRate,
-        status: "AVAILABLE",
-        complianceStatus: "PENDING",
-      },
-    });
-
-    // F5.2 (aprobado): única transición manual que lleva a PLACED —
-    // ocurre exclusivamente acá, en la misma transacción que crea el
-    // Worker. No se copian nombre/email/teléfono/ubicación/categorías —
-    // siguen viviendo en Candidate, se consultan por la relación 1:1.
-    await tx.candidate.update({ where: { id }, data: { status: "PLACED" } });
-
-    return createdWorker;
-  });
+  const worker = await createWorkerFromQualifiedCandidate(existing, input);
 
   await logActivity({
     entityType: "candidate",
