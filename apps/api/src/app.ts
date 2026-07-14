@@ -14,6 +14,7 @@ import { workersRouter } from "./modules/workers/router";
 import { assignmentsRouter } from "./modules/assignments/router";
 import { complianceRouter } from "./modules/compliance/router";
 import { payrollRouter } from "./modules/payroll/router";
+import { billingRouter } from "./modules/billing/router";
 import { pricingRouter } from "./modules/pricing/router";
 import { agentsRouter } from "./modules/agents/router";
 import { leadsRouter } from "./modules/leads/router";
@@ -108,6 +109,7 @@ export function createApp() {
   app.use("/api/v1", assignmentsRouter);
   app.use("/api/v1", complianceRouter);
   app.use("/api/v1", payrollRouter);
+  app.use("/api/v1", billingRouter);
   app.use("/api/v1", pricingRouter);
   app.use("/api/v1", agentsRouter);
   app.use("/api/v1", leadsRouter);
