@@ -57,3 +57,29 @@ export function requireAnyPermission(permissions: PermissionKey[]) {
     next();
   };
 }
+
+/**
+ * F5.2: convert-to-worker requiere DOS permisos a la vez (candidates.update
+ * Y workers.create) — decisión explícita del PO de dejar la conversión
+ * restringida a roles con ambos (hoy CEO/Admin), como segunda validación
+ * después del trabajo del Recruiter (que solo tiene candidates.*). Todas
+ * las claves deben estar presentes, a diferencia de requireAnyPermission.
+ */
+export function requireAllPermissions(permissions: PermissionKey[]) {
+  return (_req: Request, _res: Response, next: NextFunction) => {
+    const ctx = getTenancyContext();
+    if (!ctx) {
+      next(AppError.unauthorized("No authenticated context"));
+      return;
+    }
+    if (!permissions.every((p) => ctx.permissions.includes(p))) {
+      next(AppError.forbidden(`Missing permission(s): all of [${permissions.join(", ")}] are required`));
+      return;
+    }
+    if (ctx.mfaEnforced && !ctx.mfaVerified && permissions.some((p) => MFA_REQUIRED_PERMISSIONS.includes(p))) {
+      next(new AppError(403, "MFA_REQUIRED", `This action requires MFA to be verified`));
+      return;
+    }
+    next();
+  };
+}

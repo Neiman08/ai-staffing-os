@@ -1,18 +1,79 @@
 import { Router } from "express";
-import { paginationQuerySchema } from "@ai-staffing-os/shared";
-import { requirePermission, requireAnyPermission } from "../../core/rbac/require-permission";
+import {
+  candidateQuerySchema,
+  convertCandidateToWorkerInputSchema,
+  createCandidateInputSchema,
+  updateCandidateInputSchema,
+  updateCandidateStatusInputSchema,
+} from "@ai-staffing-os/shared";
+import { requirePermission, requireAllPermissions, requireAnyPermission } from "../../core/rbac/require-permission";
 import * as talentService from "./service";
 
 export const talentRouter = Router();
 
 talentRouter.get("/candidates", requirePermission("candidates.view"), async (req, res, next) => {
   try {
-    const query = paginationQuerySchema.parse(req.query);
+    const query = candidateQuerySchema.parse(req.query);
     res.json(await talentService.listCandidates(query));
   } catch (err) {
     next(err);
   }
 });
+
+talentRouter.get("/candidates/:id", requirePermission("candidates.view"), async (req, res, next) => {
+  try {
+    res.json(await talentService.getCandidateDetail(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+talentRouter.post("/candidates", requirePermission("candidates.create"), async (req, res, next) => {
+  try {
+    const input = createCandidateInputSchema.parse(req.body);
+    res.status(201).json(await talentService.createCandidate(input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F5.2: nunca permite tocar status/createdById/tenantId/aiSummary/aiScore —
+// updateCandidateInputSchema ni siquiera los declara.
+talentRouter.patch("/candidates/:id", requirePermission("candidates.update"), async (req, res, next) => {
+  try {
+    const input = updateCandidateInputSchema.parse(req.body);
+    res.json(await talentService.updateCandidate(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F5.2: único camino para cambiar el estado (incl. reapertura REJECTED/
+// INACTIVE → NEW) — nunca puede establecer PLACED (ver service.ts).
+talentRouter.patch("/candidates/:id/status", requirePermission("candidates.update"), async (req, res, next) => {
+  try {
+    const input = updateCandidateStatusInputSchema.parse(req.body);
+    res.json(await talentService.updateCandidateStatus(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F5.2 (aprobado por el PO): requiere candidates.update Y workers.create a
+// la vez — hoy solo CEO/Admin, deliberadamente distinto de quien puede
+// crear/editar Candidates (Recruiter). Ver auditoría F5.2 punto 2.
+talentRouter.post(
+  "/candidates/:id/convert-to-worker",
+  requireAllPermissions(["candidates.update", "workers.create"]),
+  async (req, res, next) => {
+    try {
+      const input = convertCandidateToWorkerInputSchema.parse(req.body);
+      res.status(201).json(await talentService.convertCandidateToWorker(req.params.id!, input));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // F5.1: catálogos de referencia compartidos (Candidates Y Job Orders los
 // usan) — requireAnyPermission en vez de requirePermission("candidates.view")
