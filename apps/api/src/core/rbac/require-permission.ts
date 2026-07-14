@@ -27,3 +27,33 @@ export function requirePermission(permission: PermissionKey) {
     next();
   };
 }
+
+/**
+ * F5.1: bug real encontrado al conectar el formulario de creación de Job
+ * Order — GET /job-categories y GET /industries (catálogos de referencia
+ * compartidos, packages/talent) solo aceptaban candidates.view. Operations
+ * (el único rol, junto a CEO/Admin, con jobOrders.create) nunca tiene
+ * candidates.view en el seed — el selector de categoría del formulario
+ * habría devuelto 403 para el rol que en teoría puede crear Job Orders.
+ * Esta variante exige AL MENOS UNO de los permisos dados, nunca todos —
+ * no le quita acceso a nadie que ya lo tuviera, solo agrega una vía
+ * alternativa para datos que legítimamente sirven a más de un dominio.
+ */
+export function requireAnyPermission(permissions: PermissionKey[]) {
+  return (_req: Request, _res: Response, next: NextFunction) => {
+    const ctx = getTenancyContext();
+    if (!ctx) {
+      next(AppError.unauthorized("No authenticated context"));
+      return;
+    }
+    if (!permissions.some((p) => ctx.permissions.includes(p))) {
+      next(AppError.forbidden(`Missing permission: one of [${permissions.join(", ")}]`));
+      return;
+    }
+    if (ctx.mfaEnforced && !ctx.mfaVerified && permissions.some((p) => MFA_REQUIRED_PERMISSIONS.includes(p))) {
+      next(new AppError(403, "MFA_REQUIRED", `This action requires MFA to be verified`));
+      return;
+    }
+    next();
+  };
+}
