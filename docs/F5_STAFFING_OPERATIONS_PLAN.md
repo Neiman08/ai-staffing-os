@@ -488,9 +488,9 @@ No se detectaron modelos duplicados nuevos que F5 introduciría — todo lo dise
 
 - [x] Candidates: CRUD real completo (crear/editar) — **implementado y verificado en F5.2** (ver §17). Sin duplicar tipos frontend/backend (regla ya establecida desde el bug #5 de F0): un único `packages/shared/src/schemas/talent.ts`.
 - [x] Conversión candidate→worker funcional, con `defaultPayRate`/`employmentType` provistos por un humano, nunca por un agente sin aprobación — **implementado y verificado en F5.2** (ver §17). Restringida deliberadamente a roles con `candidates.update` Y `workers.create` a la vez (hoy CEO/Admin), decisión explícita del PO como segunda validación tras el trabajo del Recruiter.
-- [x] Workers: CRUD completo — **implementado y verificado en F5.3** (ver §18). Elegibilidad ya refleja `complianceStatus` real (solo lectura desde este módulo, es dominio de Compliance). Disponibilidad calculada (no almacenada) sigue sin implementarse — no fue parte del alcance aprobado de F5.3 (requiere Assignments, todavía inexistente).
-- [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` sigue siendo de solo lectura en esta pasada (aún no hay `Assignment`s reales que lo recalculen — eso es Bloque C, todavía no construido); la UI ya lo muestra explícitamente como "solo lectura" para no sugerir que se edita a mano.
-- [ ] Assignments: ciclo completo funcional (creación bloqueada por compliance no conforme, cierre con motivo en `Activity`, rates snapshot verificados).
+- [x] Workers: CRUD completo — **implementado y verificado en F5.3** (ver §18). Elegibilidad ya refleja `complianceStatus` real (solo lectura desde este módulo, es dominio de Compliance). `Worker.status` (AVAILABLE↔ASSIGNED) ya se deriva de Assignments reales desde F5.4. Disponibilidad calculada por rango de fechas (§5.3 del plan — `isWorkerAvailable(workerId, dateRange)`) sigue sin implementarse — no fue parte del alcance de F5.4, que solo automatizó el flag binario AVAILABLE/ASSIGNED, no la detección de solapamiento de fechas entre Assignments.
+- [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` ya se deriva de Assignments reales desde F5.4 — dejó de ser "solo lectura sin fuente real" para pasar a ser un valor genuinamente calculado.
+- [x] Assignments: ciclo completo funcional — **implementado y verificado en F5.4** (ver §19). Creación bloqueada por compliance no conforme (bloqueo duro, sin override — decisión conservadora documentada), cierre con motivo en `Activity`, rates snapshot verificados con un test de rollback real.
 - [ ] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales (no solo con código revisado).
 - [ ] Timesheets: carga y aprobación en lote funcionando, `TimeEntry.status` transicionando correctamente a `LOCKED` al entrar a un payroll run.
 - [ ] Payroll: `PayrollRun` completo `DRAFT→PENDING_APPROVAL→APPROVED`, separación de funciones verificada (creador ≠ aprobador) con un test automatizado, sin ningún cálculo de impuestos.
@@ -637,4 +637,39 @@ Projects (CRUD), Assignments, Compliance (escritura), Timesheets, Payroll, Billi
 
 ---
 
-**Este documento fue de planificación para F5 completo; §16, §17 y §18 documentan el resultado real de los tres primeros bloques implementados (F5.1, F5.2, F5.3). El resto de F5 (§6–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
+## 19. F5.4 — Assignments (ciclo completo) — Resultado real (implementado, verificado, cerrado)
+
+**Estado: completo.**
+
+### 19.1 Decisiones de arquitectura tomadas con evidencia (no bloqueantes)
+
+- **Gap real de RBAC:** no existía ningún permission key `assignments.*` pese a que el modelo `Assignment` existe desde F0. Se agregó `"assignments"` a `PERMISSION_RESOURCES` (packages/shared) y se otorgaron grants por rol en el seed (Operations: view/create/update; Recruiter/Compliance/Payroll/Manager: view). Aplicado re-corriendo `pnpm seed` — confirmado idempotente de antemano (29 upserts, cero `.create()` planos, cero `deleteMany` global) antes de ejecutarlo; datos existentes verificados intactos después.
+- **Integración JobOrder/Worker ↔ Assignment:** el propio comentario de `JobOrderStatus` (schema.prisma, F5.1) y de `WorkerStatus` (talent.ts, F5.3) ya anticipaban textualmente "se automatiza cuando exista el módulo de Assignments". Resuelto con evidencia: `JobOrder.workersFilled`/`status` (OPEN↔PARTIALLY_FILLED↔FILLED) y `Worker.status` (AVAILABLE↔ASSIGNED) ahora se derivan del conteo real de Assignments `SCHEDULED`/`ACTIVE`, calculados enteramente dentro de `assignments/service.ts` (cero líneas tocadas en `jobs/` o `workers/`). Nunca se pisan los estados terminales/manuales (`DRAFT`/`CLOSED`/`CANCELLED` del Job Order, `ON_LEAVE`/`TERMINATED` del Worker).
+- **Compliance gate sin override:** el plan (§6.3) dejó como pregunta abierta para el PO si debía existir un override auditado al bloqueo de compliance. Sin esa aprobación explícita, se aplicó el default conservador: bloqueo duro, sin excepción.
+- **Sin detección de solapamiento de fechas:** se optó por la regla más simple y segura — un Worker debe estar `AVAILABLE` (no ya `ASSIGNED`) para recibir una Assignment nueva. Evita doble-booking sin construir un validador de rangos de fechas, explícitamente fuera de alcance de esta fase.
+
+### 19.2 Alcance implementado
+
+- Sin cambios de schema — el modelo `Assignment`/`Project`/`Shift` ya alcanzaba desde F0.
+- Contratos compartidos: `assignmentStatusSchema` + `ASSIGNMENT_STATUS_TRANSITIONS`/`isValidAssignmentStatusTransition`, `assignmentListItemSchema`/`assignmentQuerySchema`(con `search`)/`assignmentDetailSchema`, `createAssignmentInputSchema` (rates snapshot, refine de fechas), `updateAssignmentInputSchema`, `updateAssignmentStatusInputSchema` (con `reason` de texto libre para el motivo de cierre, sin inventar un enum nuevo).
+- Backend: `GET /assignments` (filtros completos + búsqueda), `GET /assignments/:id`, `POST /assignments` (gates de compliance/disponibilidad/capacidad), `PATCH /assignments/:id`, `PATCH /assignments/:id/status`. Sin `DELETE` — `COMPLETED`/`TERMINATED` son los estados terminales.
+- Frontend: `Assignments.tsx` (listado, filtros, creación real reutilizando `GET /workers`/`GET /job-orders` existentes sin endpoints nuevos), `AssignmentDetail.tsx` (detalle, edición, transiciones con confirmación+motivo), secciones de solo lectura embebidas en `JobOrderDetail.tsx` (+ botón "Assign Worker") y `WorkerDetail.tsx`, nueva entrada "Assignments" en el Sidebar.
+
+### 19.3 Verificación (evidencia, no autodeclaración)
+
+- **Backend:** 24 tests nuevos (`assignments/assignments.test.ts`) — RBAC, tenancy, creación real con verificación de la integración (Worker→ASSIGNED, JobOrder.workersFilled/status derivados, incluido el caso de llenar el cupo completo → FILLED), los 4 gates de negocio (no-COMPLIANT, ya-ASSIGNED, JobOrder no abierto, sin capacidad), validaciones, edición, transiciones (válida/inválida/idempotente), cierre con `reason` verificando que libera al Worker y reabre cupo del Job Order, Activity+AuditLog en las 3 entidades relacionadas. **Regresión completa: 262/262 tests** (238 preexistentes de F0–F5.3 + 24 nuevos).
+- **Frontend/Playwright, navegador real, desktop (1440×900) y mobile (iPhone 13, 390×844):** ciclo completo end-to-end — Candidate→Worker→Job Order OPEN→Assignment creada desde `/assignments`→Job Order visto en `FILLED`→Worker visto `ASSIGNED`→transición `ACTIVE`→cierre `COMPLETED` con motivo→Job Order reabierto a `OPEN`→Worker liberado a `AVAILABLE`. Cero errores de consola, cero requests fallidos, sin overflow horizontal en mobile. Fixtures eliminados sin dejar residuales.
+- `pnpm typecheck`/`lint` limpios en todo el monorepo (solo los 2 warnings preexistentes).
+- F0–F5.3 intactos: ningún test preexistente modificado ni roto.
+
+### 19.4 Commits (uno por paso pequeño, sin regenerar/resetear la base en ningún momento)
+
+`5d662f3` (permiso `assignments` + seed) → `dc9a6e5` (contratos compartidos) → `9ad00d1` (service + router) → `b2d94ee` (tests backend) → `7a980f5` (filtro de búsqueda) → `453439e` (frontend + integración).
+
+### 19.5 Lo que F5.4 explícitamente no incluye (queda para bloques posteriores de §3.3)
+
+Projects (CRUD), Compliance (escritura), Timesheets, Payroll, Billing, Invoices, Matching por IA, disponibilidad calculada por rango de fechas — nada de esto se tocó, tal como se acordó.
+
+---
+
+**Este documento fue de planificación para F5 completo; §16-§19 documentan el resultado real de los cuatro primeros bloques implementados (F5.1-F5.4). El resto de F5 (§7–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
