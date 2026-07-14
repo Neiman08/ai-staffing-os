@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { createApp } from "../../app";
-import { createCandidate, convertCandidateToWorker, getCandidateDetail } from "./service";
+import { convertCandidateToWorker, getCandidateDetail } from "./service";
 
 let server: Server;
 let baseUrl: string;
