@@ -124,6 +124,13 @@ export async function listAssignments(query: AssignmentQuery): Promise<Paginated
       jobOrderId: query.jobOrderId,
       projectId: query.projectId,
       status: query.status,
+      OR: query.search
+        ? [
+            { worker: { candidate: { firstName: { contains: query.search, mode: "insensitive" } } } },
+            { worker: { candidate: { lastName: { contains: query.search, mode: "insensitive" } } } },
+            { jobOrder: { title: { contains: query.search, mode: "insensitive" } } },
+          ]
+        : undefined,
     },
     orderBy: [{ [sortField]: sortDir }, { id: sortDir }],
     include: ASSIGNMENT_INCLUDE,

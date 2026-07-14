@@ -48,6 +48,7 @@ export type AssignmentListItem = z.infer<typeof assignmentListItemSchema>;
 // F5.4: se mantiene cursor/limit — misma convención de todo el resto del
 // repo (Job Orders/Candidates/Workers), no page/pageSize.
 export const assignmentQuerySchema = paginationQuerySchema.extend({
+  search: z.string().optional(), // contains sobre worker.candidate.firstName/lastName y jobOrder.title
   workerId: z.string().optional(),
   jobOrderId: z.string().optional(),
   projectId: z.string().optional(),
