@@ -107,6 +107,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "candidates.delete",
     "workers.view",
     "workers.update",
+    "assignments.view", // F5.4: visibilidad de las colocaciones de sus candidatos
     "contacts.view",
     "companies.view",
     "jobOrders.view",
@@ -124,6 +125,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "compliance.block",
     "workers.view",
     "workers.update",
+    "assignments.view", // F5.4: necesita ver a quién está asignado un worker para evaluar compliance
     "companies.view",
     "contacts.view",
     "jobOrders.view",
@@ -136,6 +138,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "timeEntries.delete",
     "payroll.approve",
     "workers.view",
+    "assignments.view", // F5.4: payRate/billRate snapshot de la Assignment alimenta el cálculo de nómina
     "jobOrders.view",
     "companies.view",
     "pricingScenarios.view",
@@ -180,6 +183,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "jobOrders.update",
     "workers.view",
     "workers.update",
+    "assignments.view", // F5.4: Operations ejecuta el ciclo completo de asignación
+    "assignments.create",
+    "assignments.update",
     "companies.view",
     "contacts.view",
     "timeEntries.view",
@@ -201,6 +207,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "candidates.view",
     "workers.view",
     "jobOrders.view",
+    "assignments.view", // F5.4
     "documents.view",
     "timeEntries.view",
     "pricingScenarios.view",
