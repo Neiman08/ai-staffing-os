@@ -203,7 +203,17 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "agents.view",
   ],
   HR: ["candidates.view", "workers.view", "documents.view", "documents.create", "documents.update", "agents.view"],
-  Accounting: ["timeEntries.view", "payrollRuns.view", "pricingScenarios.view", "companies.view", "agents.view"],
+  Accounting: [
+    "timeEntries.view",
+    "payrollRuns.view",
+    "pricingScenarios.view",
+    "companies.view",
+    "agents.view",
+    "invoices.view", // F5.8
+    "invoices.create", // F5.8
+    "invoices.update", // F5.8
+    "invoices.send", // F5.8
+  ],
   Manager: [
     "companies.view",
     "contacts.view",
@@ -218,6 +228,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "opportunities.view",
     "followUps.view",
     "agents.view",
+    "invoices.view", // F5.8
   ],
 };
 

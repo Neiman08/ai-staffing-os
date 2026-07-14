@@ -14,6 +14,7 @@ export const PERMISSION_RESOURCES = [
   "missions", // F4
   "assignments", // F5.4
   "payrollRuns", // F5.7
+  "invoices", // F5.8
 ] as const;
 
 export const PERMISSION_ACTIONS = ["view", "create", "update", "delete"] as const;
@@ -28,6 +29,7 @@ const SPECIAL_PERMISSION_KEYS = [
   "approvals.decide",
   "settings.manage",
   "users.manage",
+  "invoices.send", // F5.8: transición DRAFT->SENT, distinta de invoices.update (ver permissions.ts comentario histórico)
 ] as const;
 
 const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number], string> = {
@@ -40,6 +42,7 @@ const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number]
   "approvals.decide": "Approve/reject approval requests",
   "settings.manage": "Manage tenant settings",
   "users.manage": "Manage users and roles",
+  "invoices.send": "Send invoices to clients",
 };
 
 type Resource = (typeof PERMISSION_RESOURCES)[number];
@@ -80,16 +83,15 @@ export const ALL_PERMISSIONS: PermissionDefinition[] = [...CRUD_PERMISSIONS, ...
  * F4.9 §6 (decisión aprobada del PO): permisos que exigen MFA verificado
  * en la sesión actual cuando la política del tenant está activa (ver
  * Tenant.settings.security.mfaEnforced, apps/api/src/core/security-settings.ts).
- * El PO pidió también "invoices.send" — no existe en el vocabulario real
- * de PermissionKey (no hay módulo de invoices/billing todavía, ver
- * PERMISSION_RESOURCES arriba); se omite acá en vez de inventar un
- * permiso que ningún Role/endpoint usa. Agregar cuando exista.
+ * El PO pidió también "invoices.send" — no existía en el vocabulario real
+ * de PermissionKey hasta F5.8 (módulo de billing). Ya agregado arriba.
  */
 export const MFA_REQUIRED_PERMISSIONS: PermissionKey[] = [
   "payroll.approve",
   "agents.configure",
   "settings.manage",
   "users.manage",
+  "invoices.send",
   "approvals.decide",
   "compliance.block",
 ];
