@@ -492,8 +492,8 @@ No se detectaron modelos duplicados nuevos que F5 introduciría — todo lo dise
 - [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` ya se deriva de Assignments reales desde F5.4 — dejó de ser "solo lectura sin fuente real" para pasar a ser un valor genuinamente calculado.
 - [x] Assignments: ciclo completo funcional — **implementado y verificado en F5.4** (ver §19). Creación bloqueada por compliance no conforme (bloqueo duro, sin override — decisión conservadora documentada), cierre con motivo en `Activity`, rates snapshot verificados con un test de rollback real.
 - [x] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales — **implementado y verificado en F5.5** (ver §20).
-- [x] Timesheets: carga y aprobación en lote funcionando — **implementado y verificado en F5.6** (ver §21). `TimeEntry.status` transicionando a `LOCKED` queda pendiente de F5.7 (Payroll) — F5.6 solo produce `PENDING`/`APPROVED`, `LOCKED` se reserva a propósito para cuando exista un `PayrollRun` real.
-- [ ] Payroll: `PayrollRun` completo `DRAFT→PENDING_APPROVAL→APPROVED`, separación de funciones verificada (creador ≠ aprobador) con un test automatizado, sin ningún cálculo de impuestos.
+- [x] Timesheets: carga y aprobación en lote funcionando — **implementado y verificado en F5.6** (ver §21). `TimeEntry.status` transicionando a `LOCKED` ya funciona desde F5.7 — cada entrada incluida en un Payroll run se bloquea en la misma transacción.
+- [x] Payroll: `PayrollRun` completo `DRAFT→PENDING_APPROVAL→APPROVED→PAID→EXPORTED`, separación de funciones verificada (creador ≠ aprobador) con un test automatizado — **implementado y verificado en F5.7** (ver §22). Sin ningún cálculo de impuestos (decisión D7 de la arquitectura original).
 - [ ] Billing: `Invoice` generada con líneas reales, balance calculado correctamente tras registrar al menos un pago de prueba.
 - [ ] Matching por IA: al menos un caso verificado end-to-end (Job Order real + Workers reales del seed) mostrando una lista priorizada con rationale, sin crear ninguna `Assignment` automáticamente.
 - [ ] Dashboards: secciones nuevas visibles en `Dashboard.tsx` según rol, con datos reales (no mockeados) — verificado con al menos 2 roles distintos (`x-dev-user`).
@@ -743,4 +743,40 @@ Projects (CRUD), Payroll (`PayrollRun`/`PayrollItem`, transición a `LOCKED`), B
 
 ---
 
-**Este documento fue de planificación para F5 completo; §16-§21 documentan el resultado real de los seis primeros bloques implementados (F5.1-F5.6). El resto de F5 (§9–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
+## 22. F5.7 — Payroll (PayrollRun) — Resultado real (implementado, verificado, cerrado)
+
+**Estado: completo.**
+
+### 22.1 Decisiones tomadas con evidencia (no bloqueantes)
+
+- **Gap real de RBAC:** no existía ningún permission key `payrollRuns.*`. Se agregó a `PERMISSION_RESOURCES`, otorgando view/create/update a Payroll (y view a Accounting). La aprobación (`approve`/`mark-paid`/`export`) reutiliza `payroll.approve` — el permiso especial ya reservado desde F0 exactamente para esto, nunca `payrollRuns.update` a secas, para que aprobar siga siendo un juicio distinto de simplemente crear/editar.
+- **Limitación real de schema, documentada (no oculta):** `PayrollItem` nunca tuvo una columna propia para horas dobles — solo `regularHours`/`otHours` existen desde F0. `TimeEntry.doubleHours` se suma dentro de `otHours` al agregar, aplicando el mismo multiplicador 1.5x en vez del 2x que correspondería a horas dobles reales. Resolver esto correctamente requeriría una columna nueva en `PayrollItem`, que no se agrega sin aprobación explícita — documentado en el código y acá, no oculto.
+- **`OT_MULTIPLIER = 1.5` hardcodeado**, exactamente como el plan (§9.2) ya autorizó explícitamente como valor provisional hasta que se apruebe un campo/setting real.
+- **Export sin storage real:** el CSV se genera en memoria y se devuelve directo en la respuesta HTTP para descarga — nunca se guarda un archivo, coherente con la decisión ya diferida desde F0/F5.5 sobre storage de archivos.
+
+### 22.2 Alcance implementado
+
+- Sin cambios de schema — `PayrollRun`/`PayrollItem` ya alcanzaban desde F0.
+- Contratos compartidos: `payrollRunStatusSchema` + `PAYROLL_RUN_STATUS_TRANSITIONS` (secuencia estrictamente hacia adelante, sin reapertura), `createPayrollRunInputSchema`, `payrollItemSchema`, `payrollRunListItemSchema`/`payrollRunDetailSchema`.
+- Backend: `GET/POST /payroll/runs`, `GET /payroll/runs/:id`, `POST /payroll/runs/:id/submit` (`payrollRuns.update`), `/approve`/`/mark-paid`/`/export` (`payroll.approve`). `createPayrollRun` agrega `TimeEntry` `APPROVED` (nunca `PENDING`) dentro del período, agrupadas por Assignment/Worker, calcula `regularPay`/`otPay`/`grossPay`/`billAmount`/`margin`, y marca cada `TimeEntry` incluida como `LOCKED` en la misma transacción.
+- Frontend: `Payroll.tsx` gana la pestaña "Payroll Runs" (mismo patrón de tabs que Compliance.tsx) con creación real por rango de fechas; `PayrollRunDetail.tsx` (nueva): totales, detalle por Worker, botones de transición gateados por el permiso real de cada paso, exportación real de CSV (descarga vía `fetch`+`blob`, sin endpoint GET con side-effects).
+
+### 22.3 Verificación (evidencia, no autodeclaración)
+
+- **Backend:** 9 tests nuevos (`payroll/payroll.test.ts`) — RBAC, período sin entradas `APPROVED` rechazado, agregación real con cálculo verificado matemáticamente, entradas `PENDING` nunca incluidas, `TimeEntry` incluida pasa a `LOCKED`, ciclo de vida completo `DRAFT→PENDING_APPROVAL→APPROVED→PAID→EXPORTED` end-to-end, **separación de funciones verificada con un test real** (el mismo usuario que crea el run recibe 403 al intentar aprobarlo — no solo documentado, comprobado), transición inválida rechazada, exportar antes de `PAID` rechazado, CSV real con headers y filas correctas, tenancy. **Regresión completa: 306/306 tests** (297 preexistentes de F0–F5.6 + 9 nuevos).
+- **Frontend/Playwright, navegador real, desktop (1440×900) y mobile (iPhone 13, 390×844):** cargar y aprobar horas reales → crear Payroll Run real por rango de fechas → detalle con el item correcto → enviar a aprobación → **confirmado que el botón "Aprobar" no aparece para el usuario admin de dev-bypass, porque `Admin` excluye deliberadamente `payroll.approve` desde F4.9** — verificación real de que la separación de funciones también se refleja en la UI, no solo en el backend. Cero errores de consola, cero requests fallidos, sin overflow horizontal en mobile. Fixtures eliminados sin dejar residuales.
+- Bug de lint real encontrado y corregido: `Date.now()` llamado directamente dentro del inicializador de `useState` (regla `react-hooks/purity`) — corregido con el inicializador perezoso de función.
+- `pnpm typecheck`/`lint` limpios en todo el monorepo (solo los 2 warnings preexistentes).
+- F0–F5.6 intactos: ningún test preexistente modificado ni roto.
+
+### 22.4 Commits (uno por paso pequeño, sin regenerar/resetear la base en ningún momento)
+
+`d66ed51` (permiso `payrollRuns`) → `c2b7654` (contratos compartidos) → `581dbfc` (service + router) → `a838e38` (tests backend) → `c0ad095` (frontend).
+
+### 22.5 Lo que F5.7 explícitamente no incluye (queda para bloques posteriores de §3.3)
+
+Projects (CRUD), Billing, Invoices, Matching por IA, cálculos fiscales (decisión D7, delegado a un proveedor externo en una fase posterior) — nada de esto se tocó, tal como se acordó.
+
+---
+
+**Este documento fue de planificación para F5 completo; §16-§22 documentan el resultado real de los siete primeros bloques implementados (F5.1-F5.7). El resto de F5 (§10–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
