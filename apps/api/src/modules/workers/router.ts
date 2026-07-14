@@ -1,15 +1,73 @@
 import { Router } from "express";
-import { requirePermission } from "../../core/rbac/require-permission";
+import {
+  createWorkerInputSchema,
+  updateWorkerInputSchema,
+  updateWorkerStatusInputSchema,
+  workerQuerySchema,
+} from "@ai-staffing-os/shared";
+import { requireAllPermissions, requirePermission } from "../../core/rbac/require-permission";
 import * as workersService from "./service";
 
-// F5.2: módulo mínimo aprobado — únicamente GET /workers/:id, para
-// verificar que la conversión desde Candidate funcionó. Listado, edición,
-// filtros y disponibilidad quedan para el bloque siguiente.
+// F5.3: CRUD completo aprobado (docs/F5_STAFFING_OPERATIONS_PLAN.md §5).
+// Sin DELETE físico — TERMINATED (WorkerStatus) es el estado terminal
+// equivalente, mismo patrón ya usado por JobOrder (CLOSED/CANCELLED) y
+// Candidate (INACTIVE/REJECTED): nunca se borra, se transiciona.
 export const workersRouter = Router();
+
+workersRouter.get("/workers", requirePermission("workers.view"), async (req, res, next) => {
+  try {
+    const query = workerQuerySchema.parse(req.query);
+    res.json(await workersService.listWorkers(query));
+  } catch (err) {
+    next(err);
+  }
+});
 
 workersRouter.get("/workers/:id", requirePermission("workers.view"), async (req, res, next) => {
   try {
     res.json(await workersService.getWorkerDetail(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F5.3: Worker.candidateId es una FK única y NO nullable — crear un
+// Worker es siempre, en la práctica, convertir un Candidate QUALIFIED
+// existente. Por eso esta ruta exige el mismo par de permisos que
+// POST /candidates/:id/convert-to-worker (F5.2): candidates.update Y
+// workers.create a la vez (hoy CEO/Admin) — la misma decisión aprobada
+// del PO de restringir esta acción, sin importar por cuál URL se llegue.
+workersRouter.post(
+  "/workers",
+  requireAllPermissions(["workers.create", "candidates.update"]),
+  async (req, res, next) => {
+    try {
+      const input = createWorkerInputSchema.parse(req.body);
+      res.status(201).json(await workersService.createWorker(input));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// F5.3: nunca permite tocar status/complianceStatus/candidateId/tenantId —
+// updateWorkerInputSchema ni siquiera los declara. complianceStatus es
+// dominio de Compliance (fuera de alcance de F5.3).
+workersRouter.patch("/workers/:id", requirePermission("workers.update"), async (req, res, next) => {
+  try {
+    const input = updateWorkerInputSchema.parse(req.body);
+    res.json(await workersService.updateWorker(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F5.3: único camino para cambiar el estado — separado del PATCH general
+// a propósito, mismo patrón que Job Orders/Candidates.
+workersRouter.patch("/workers/:id/status", requirePermission("workers.update"), async (req, res, next) => {
+  try {
+    const input = updateWorkerStatusInputSchema.parse(req.body);
+    res.json(await workersService.updateWorkerStatus(req.params.id!, input));
   } catch (err) {
     next(err);
   }
