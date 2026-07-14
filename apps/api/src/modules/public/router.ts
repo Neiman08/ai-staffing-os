@@ -23,9 +23,22 @@ const readLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-publicRouter.use(readLimiter);
+// F5.2: bug real encontrado al correr la suite de tests de Candidates
+// (>60 requests contra el mismo proceso en menos de un minuto empezaron
+// a recibir 429 en endpoints internos autenticados que nunca deberían
+// tocar este limiter). Causa: `publicRouter.use(readLimiter)` sin path
+// aplicaba a TODO lo que entrara por este router — y como publicRouter
+// se monta en `app.use("/api/v1", publicRouter)` (sin un prefijo propio
+// como /api/v1/public), cualquier request a /api/v1/lo-que-sea consumía
+// un cupo del mismo balde de 60/min pensado únicamente para tráfico
+// anónimo del sitio de marketing, antes de caer al siguiente router
+// (tenancyMiddleware → talentRouter/jobsRouter/etc.) cuando ninguna ruta
+// de acá coincidía. En producción esto habría podido limitar a usuarios
+// internos reales compartiendo IP/NAT con tráfico del sitio público.
+// Corregido aplicando readLimiter por ruta (mismo patrón ya usado por
+// writeLimiter en los POST de abajo), nunca a nivel de router completo.
 
-publicRouter.get("/public/branding", async (_req, res, next) => {
+publicRouter.get("/public/branding", readLimiter, async (_req, res, next) => {
   try {
     res.json(await runInPublicTenantContext(() => publicService.getPublicBranding()));
   } catch (err) {
@@ -33,7 +46,7 @@ publicRouter.get("/public/branding", async (_req, res, next) => {
   }
 });
 
-publicRouter.get("/public/industries", async (_req, res, next) => {
+publicRouter.get("/public/industries", readLimiter, async (_req, res, next) => {
   try {
     res.json(await runInPublicTenantContext(() => publicService.listPublicIndustries()));
   } catch (err) {
@@ -41,7 +54,7 @@ publicRouter.get("/public/industries", async (_req, res, next) => {
   }
 });
 
-publicRouter.get("/public/job-openings", async (_req, res, next) => {
+publicRouter.get("/public/job-openings", readLimiter, async (_req, res, next) => {
   try {
     res.json(await runInPublicTenantContext(() => publicService.listPublicJobOpenings()));
   } catch (err) {
@@ -49,7 +62,7 @@ publicRouter.get("/public/job-openings", async (_req, res, next) => {
   }
 });
 
-publicRouter.get("/public/stats", async (_req, res, next) => {
+publicRouter.get("/public/stats", readLimiter, async (_req, res, next) => {
   try {
     res.json(await runInPublicTenantContext(() => publicService.getPublicStats()));
   } catch (err) {
