@@ -492,7 +492,7 @@ No se detectaron modelos duplicados nuevos que F5 introduciría — todo lo dise
 - [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` ya se deriva de Assignments reales desde F5.4 — dejó de ser "solo lectura sin fuente real" para pasar a ser un valor genuinamente calculado.
 - [x] Assignments: ciclo completo funcional — **implementado y verificado en F5.4** (ver §19). Creación bloqueada por compliance no conforme (bloqueo duro, sin override — decisión conservadora documentada), cierre con motivo en `Activity`, rates snapshot verificados con un test de rollback real.
 - [x] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales — **implementado y verificado en F5.5** (ver §20).
-- [ ] Timesheets: carga y aprobación en lote funcionando, `TimeEntry.status` transicionando correctamente a `LOCKED` al entrar a un payroll run.
+- [x] Timesheets: carga y aprobación en lote funcionando — **implementado y verificado en F5.6** (ver §21). `TimeEntry.status` transicionando a `LOCKED` queda pendiente de F5.7 (Payroll) — F5.6 solo produce `PENDING`/`APPROVED`, `LOCKED` se reserva a propósito para cuando exista un `PayrollRun` real.
 - [ ] Payroll: `PayrollRun` completo `DRAFT→PENDING_APPROVAL→APPROVED`, separación de funciones verificada (creador ≠ aprobador) con un test automatizado, sin ningún cálculo de impuestos.
 - [ ] Billing: `Invoice` generada con líneas reales, balance calculado correctamente tras registrar al menos un pago de prueba.
 - [ ] Matching por IA: al menos un caso verificado end-to-end (Job Order real + Workers reales del seed) mostrando una lista priorizada con rationale, sin crear ninguna `Assignment` automáticamente.
@@ -708,4 +708,39 @@ Projects (CRUD), Timesheets, Payroll, Billing, Invoices, Matching por IA, storag
 
 ---
 
-**Este documento fue de planificación para F5 completo; §16-§20 documentan el resultado real de los cinco primeros bloques implementados (F5.1-F5.5). El resto de F5 (§8–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
+## 21. F5.6 — Timesheets — Resultado real (implementado, verificado, cerrado)
+
+**Estado: completo.**
+
+### 21.1 Decisiones tomadas con evidencia (no bloqueantes)
+
+- **`LOCKED` deliberadamente inalcanzable desde F5.6:** el schema ya reservaba ese estado para cuando una `TimeEntry` entra a un `PayrollRun` (F5.7, todavía no construido) — F5.6 solo produce `PENDING`/`APPROVED`, consistente con la dependencia dura ya documentada en el plan (§3.2: "Payroll depende estrictamente de Timesheets").
+- **Edición bloqueada tras `APPROVED`:** no estaba explícitamente escrito en el plan como regla, pero se dedujo del propio ciclo de vida del modelo (una vez aprobadas, las horas alimentan el cálculo de nómina — permitir edición libre after-the-fact rompería la integridad de un aprobado). Corregir requeriría primero revertir la aprobación, fuera de alcance de F5.6.
+- **Reutilizar `timeEntries.update` para aprobar en lote**, sin inventar `timeEntries.approve` — exactamente la recomendación explícita del plan §8.3.
+- **Duplicado `assignmentId`+`date` verificado con un `findFirst` legible antes del INSERT**, en vez de dejar que el constraint único de Postgres (ya existente desde F0) lo rechace con un error crudo — mismo criterio de UX de error ya aplicado a la deduplicación de Candidates (F5.2).
+
+### 21.2 Alcance implementado
+
+- Sin cambios de schema — `TimeEntry` ya alcanzaba desde F0.
+- Contratos compartidos: `timeEntryStatusSchema`, `timeEntryQuerySchema` (assignmentId/status/rango de fechas), `createTimeEntryInputSchema` (rango 0-24h por categoría de hora), `updateTimeEntryInputSchema` (sin assignmentId/date/status), `bulkApproveTimeEntriesInputSchema`/`Result`.
+- Backend: `POST /time-entries` (`timeEntries.create`), `PATCH /time-entries/:id` (`timeEntries.update`, solo mientras `PENDING`), `POST /time-entries/bulk-approve` (`timeEntries.update`, ignora silenciosamente las entradas que ya no son `PENDING`, una sola `AuditLog` con los IDs afectados).
+- Frontend: `Payroll.tsx` gana "Log Hours" (drawer real, selector de Assignment vía `GET /assignments`) y checkboxes de selección múltiple + "Aprobar seleccionadas" (gateados por permiso vía `useCurrentUser`, mismo patrón que Compliance/Candidates). Deja de decir "solo lectura en F0".
+
+### 21.3 Verificación (evidencia, no autodeclaración)
+
+- **Backend:** 15 tests nuevos (`payroll/payroll.test.ts`) — RBAC, creación real siempre `PENDING`, validación de rango horario, duplicado `assignmentId`+`date` con 409, tenancy, filtros de listado, edición bloqueada tras `APPROVED`, bulk-approve ignorando entradas ya no elegibles sin error, Activity + AuditLog (incluida la única entrada de `AuditLog` con todos los IDs del lote). **Regresión completa: 297/297 tests** (282 preexistentes de F0–F5.5 + 15 nuevos).
+- **Frontend/Playwright, navegador real, desktop (1440×900) y mobile (iPhone 13, 390×844):** cargar horas reales para una Assignment sembrada → aparece `PENDING` → seleccionar vía checkbox → aprobar en lote → confirmado `APPROVED` con `approvedById` real (verificado directo en DB). Cero errores de consola, cero requests fallidos, sin overflow horizontal en mobile. Fixtures eliminados sin dejar residuales.
+- `pnpm typecheck`/`lint` limpios en todo el monorepo (solo los 2 warnings preexistentes).
+- F0–F5.5 intactos: ningún test preexistente modificado ni roto.
+
+### 21.4 Commits (uno por paso pequeño, sin regenerar/resetear la base en ningún momento)
+
+`9c8da50` (contratos compartidos) → `f6ae173` (service + router) → `c7b1fdf` (tests backend) → `96c7e6e` (frontend).
+
+### 21.5 Lo que F5.6 explícitamente no incluye (queda para bloques posteriores de §3.3)
+
+Projects (CRUD), Payroll (`PayrollRun`/`PayrollItem`, transición a `LOCKED`), Billing, Invoices, Matching por IA — nada de esto se tocó, tal como se acordó.
+
+---
+
+**Este documento fue de planificación para F5 completo; §16-§21 documentan el resultado real de los seis primeros bloques implementados (F5.1-F5.6). El resto de F5 (§9–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
