@@ -10,6 +10,7 @@ import {
   ListChecks,
   Briefcase,
   Users,
+  HardHat,
   ShieldCheck,
   Wallet,
   LineChart,
@@ -60,6 +61,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: "/job-orders", label: "Job Orders", icon: Briefcase },
       { to: "/candidates", label: "Candidates", icon: Users },
+      { to: "/workers", label: "Workers", icon: HardHat },
       { to: "/compliance", label: "Compliance", icon: ShieldCheck },
       { to: "/payroll", label: "Payroll", icon: Wallet },
       { to: "/pricing", label: "Pricing", icon: LineChart },

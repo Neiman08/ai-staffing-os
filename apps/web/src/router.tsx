@@ -18,6 +18,7 @@ import JobOrders from "./pages/JobOrders";
 import JobOrderDetail from "./pages/JobOrderDetail";
 import Candidates from "./pages/Candidates";
 import CandidateDetail from "./pages/CandidateDetail";
+import Workers from "./pages/Workers";
 import WorkerDetail from "./pages/WorkerDetail";
 import Compliance from "./pages/Compliance";
 import Payroll from "./pages/Payroll";
@@ -71,6 +72,7 @@ export const router = createBrowserRouter([
       { path: "job-orders/:id", element: <JobOrderDetail /> },
       { path: "candidates", element: <Candidates /> },
       { path: "candidates/:id", element: <CandidateDetail /> },
+      { path: "workers", element: <Workers /> },
       { path: "workers/:id", element: <WorkerDetail /> },
       { path: "compliance", element: <Compliance /> },
       { path: "payroll", element: <Payroll /> },
