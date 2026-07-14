@@ -175,7 +175,15 @@ enum ComplianceStatus {
   BLOCKED
 }
 
+// F5.1: DRAFT agregado — un Job Order recién creado desde la UI arranca
+// acá, nunca directamente en OPEN (no debe considerarse activo ni
+// disponible para Assignments mientras esté en DRAFT). Pasar a OPEN es
+// una acción explícita y auditable (PATCH /job-orders/:id/status), nunca
+// automática. ON_HOLD queda deliberadamente fuera — decisión explícita
+// del PO (2026-07-13), se evalúa como cambio independiente cuando exista
+// un caso operativo real; CANCELLED nunca debe usarse como sustituto.
 enum JobOrderStatus {
+  DRAFT
   OPEN
   PARTIALLY_FILLED
   FILLED
@@ -774,6 +782,7 @@ model JobOrder {
   categoryId       String
   category         JobCategory       @relation(fields: [categoryId], references: [id])
   title            String
+  description      String? // F5.1: descripción operativa general — distinta de scheduleNotes (específico de horario)
   workersNeeded    Int
   workersFilled    Int               @default(0)
   billRate         Decimal           @db.Decimal(10, 2)
@@ -783,9 +792,15 @@ model JobOrder {
   scheduleNotes    String?
   startDate        DateTime
   endDate          DateTime?
-  status           JobOrderStatus    @default(OPEN)
+  status           JobOrderStatus    @default(DRAFT) // F5.1: arranca en DRAFT, nunca directo en OPEN
   requirements     Json              @default("[]") // keys de DocumentType requeridos
   urgency          RiskLevel         @default(MEDIUM)
+  // F5.1: referencia de actor sin @relation — mismo patrón que
+  // PayrollRun.createdById (decisión #2 del header del schema). Se
+  // completa desde el contexto de tenancy en el service, nunca desde el
+  // body del cliente. Nullable para compatibilidad con registros ya
+  // existentes (seed de F0), que no tienen un creador humano real.
+  createdById      String?
   assignments      Assignment[]
   pricingScenarios PricingScenario[]
   createdAt        DateTime          @default(now())
