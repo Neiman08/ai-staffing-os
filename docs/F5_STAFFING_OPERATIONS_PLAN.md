@@ -486,9 +486,9 @@ No se detectaron modelos duplicados nuevos que F5 introduciría — todo lo dise
 
 *(Criterio para cuando la implementación real de F5 —una vez aprobada— se dé por terminada; este documento en sí mismo no tiene DoD porque no produce código.)*
 
-- [ ] Candidates: CRUD real completo (crear/editar), sin duplicar tipos frontend/backend (regla ya establecida desde el bug #5 de F0).
-- [ ] Conversión candidate→worker funcional, con `defaultPayRate`/`employmentType` provistos por un humano, nunca por un agente sin aprobación.
-- [ ] Workers: CRUD completo, disponibilidad calculada (no almacenada), elegibilidad reflejando `complianceStatus` real.
+- [x] Candidates: CRUD real completo (crear/editar) — **implementado y verificado en F5.2** (ver §17). Sin duplicar tipos frontend/backend (regla ya establecida desde el bug #5 de F0): un único `packages/shared/src/schemas/talent.ts`.
+- [x] Conversión candidate→worker funcional, con `defaultPayRate`/`employmentType` provistos por un humano, nunca por un agente sin aprobación — **implementado y verificado en F5.2** (ver §17). Restringida deliberadamente a roles con `candidates.update` Y `workers.create` a la vez (hoy CEO/Admin), decisión explícita del PO como segunda validación tras el trabajo del Recruiter.
+- [ ] Workers: CRUD completo, disponibilidad calculada (no almacenada), elegibilidad reflejando `complianceStatus` real. F5.2 solo entregó la superficie mínima aprobada (`GET /workers/:id` de solo lectura, sin listado/edición/filtros) — el CRUD completo queda para el bloque siguiente (§5).
 - [x] Job Orders: CRUD completo + cierre — **implementado y verificado en F5.1** (ver §16). `workersFilled` sigue siendo de solo lectura en esta pasada (aún no hay `Assignment`s reales que lo recalculen — eso es Bloque C, todavía no construido); la UI ya lo muestra explícitamente como "solo lectura" para no sugerir que se edita a mano.
 - [ ] Assignments: ciclo completo funcional (creación bloqueada por compliance no conforme, cierre con motivo en `Activity`, rates snapshot verificados).
 - [ ] Compliance: upload/verificación real, alertas `EXPIRING`/`EXPIRED`/`MISSING` generadas automáticamente por un job periódico verificado con datos reales (no solo con código revisado).
@@ -554,4 +554,51 @@ Projects (CRUD), Workers, Assignments, Compliance (escritura), Timesheets, Payro
 
 ---
 
-**Este documento fue de planificación para F5 completo; §16 documenta el resultado real del primer bloque implementado (F5.1). El resto de F5 (§5–§12) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
+## 17. F5.2 — Candidates CRUD real + conversión controlada a Worker — Resultado real (implementado, verificado, cerrado)
+
+**Estado: completo.**
+
+### 17.1 Cambio de schema aplicado (aprobado explícitamente antes de migrar)
+
+- `Candidate.createdById String?` (nuevo, sin `@relation` — mismo patrón que `JobOrder.createdById` de F5.1) — se resuelve siempre desde el contexto autenticado, nunca del body. Sin backfill.
+- Migración única `20260714120000_f5_2_add_candidate_created_by`, aplicada con `prisma migrate deploy`, verificada tras aplicar (columna nullable sin default, 40/40 Candidates de seed con `createdById=NULL`, regresión completa F5.1 intacta). Commit `1e98854`.
+- **No se agregó ningún otro campo** de los diferidos en la auditoría (`preferredShift`, `willingToTravel`, `transportation`, disponibilidad estructurada, dirección completa, `expectedPayRate`, notas internas, fecha de nacimiento, SSN) — quedan sin fecha, tal como se aprobó.
+- **El enum `CandidateStatus` no se amplió** — se mantiene `NEW/SCREENING/QUALIFIED/PLACED/REJECTED/INACTIVE`, con el mapeo aprobado (INTERVIEW/OFFERED → QUALIFIED, WITHDRAWN/ARCHIVED → INACTIVE, HIRED → PLACED).
+- **El vínculo Candidate↔Worker no requirió ningún cambio de schema** — `Worker.candidateId @unique` ya existía desde F0.
+
+### 17.2 Alcance implementado
+
+- Contratos compartidos (`packages/shared/src/schemas/talent.ts`): `candidateStatusSchema`, `CANDIDATE_STATUS_TRANSITIONS` + `isValidCandidateStatusTransition` (matriz aprobada, PLACED nunca alcanzable manualmente, REJECTED/INACTIVE reabren únicamente a NEW), `candidateListItemSchema`/`candidateQuerySchema`/`candidateDetailSchema`, `createCandidateInputSchema`/`updateCandidateInputSchema`/`updateCandidateStatusInputSchema`, `convertCandidateToWorkerInputSchema`/`convertCandidateToWorkerResultSchema`, `workerDetailSchema` (con `documents` identificados por procedencia).
+- Backend: `talent/service.ts` extendido con CRUD completo de Candidate (dedup por email normalizado insensible a mayúsculas + teléfono normalizado dentro del tenant, sin cruzar tenants), matriz de estados con reapertura auditada distinta ("reabierto"), y `convertCandidateToWorker` (transacción real vía `scopedDb.$transaction`, idempotente, nunca crea `Assignment`/`PayrollItem`). Módulo nuevo `workers/` con únicamente `GET /workers/:id` (superficie mínima aprobada).
+- RBAC: `requireAllPermissions` (nueva, AND) — la conversión exige `candidates.update` Y `workers.create` a la vez, restringida hoy a CEO/Admin por decisión explícita del PO (Recruiter puede crear/editar/mover candidatos hasta QUALIFIED, pero no ejecutar la conversión final).
+- Frontend: `Candidates.tsx` (creación real, filtros, búsqueda), `CandidateDetail.tsx` (nueva: edición, transiciones de estado, acción separada "Convert to Worker" con diálogo propio — gateada por permiso, con fallback de solo-texto para Recruiter), `WorkerDetail.tsx` (nueva, mínima: datos de empleo, vínculo de vuelta, documentos combinados con procedencia).
+
+### 17.3 Desviaciones explícitas frente al pedido original (documentadas, no silenciosas)
+
+- Paginación: se mantuvo cursor/`limit` (misma convención del resto del repo), no `page`/`pageSize`.
+- Deduplicación: implementada 100% a nivel de servicio (sin índice único en DB sobre `email`/`phone`) — **riesgo de carrera concurrente documentado y aceptado explícitamente por el PO**, no resuelto en esta pasada.
+- Workers: solo `GET /workers/:id` — listado completo, edición, filtros, disponibilidad y Assignments quedan para el bloque siguiente, tal como se aprobó.
+
+### 17.4 Bugs reales encontrados y corregidos durante la implementación (no cosméticos)
+
+1. **`activityEntityTypeSchema`** nunca incluía `"candidate"` ni `"worker"` (mismo tipo de gap que `"jobOrder"` en F5.1) — corregido proactivamente antes de conectar el timeline, no después de un 400 en el navegador.
+2. **Rate limiter de `/public/*` filtrándose a toda la API real**: `publicRouter.use(readLimiter)` se aplicaba sin restricción de path, y como `publicRouter` se monta en `app.use("/api/v1", publicRouter)`, cualquier request a `/api/v1/lo-que-sea` (incluyendo `/candidates`, `/workers`, cualquier endpoint autenticado) consumía un cupo del mismo balde de 60/min pensado únicamente para tráfico anónimo del sitio de marketing. Encontrado al correr la propia suite de tests de F5.2 (>60 requests en <60s empezaron a recibir 429 en endpoints internos). En producción esto habría podido throttlear usuarios internos reales. Corregido aplicando `readLimiter` por ruta (mismo patrón que `writeLimiter`), nunca a nivel de router completo — sin cambiar el comportamiento del sitio público en sí.
+
+### 17.5 Verificación (evidencia, no autodeclaración)
+
+- **Backend:** 32 tests nuevos (`talent/talent.test.ts` 29 + `workers/workers.test.ts` 3) cubriendo CRUD, dedup (email case-insensitive, teléfono con formato/código de país distintos), tenancy, matriz de estados completa (incl. `PLACED` nunca alcanzable vía `PATCH /status`, reapertura auditada, salto directo `REJECTED→QUALIFIED` rechazado), conversión a Worker (RBAC combinado, no-QUALIFIED rechazado, idempotencia real con conteo de filas, **rollback real de transacción verificado con un overflow numérico genuino en `defaultPayRate` — sin mockear nada**, cero `Assignment`/`PayrollItem` creados), Activity + AuditLog (sin PII en metadata, intento de conversión duplicado también auditado). **Regresión completa: 212/212 tests** (180 preexistentes de F0–F5.1 + 32 nuevos).
+- **Frontend/Playwright, en navegador real:** listado → crear Candidate real → aparece en búsqueda → detalle → editar → `NEW→SCREENING→QUALIFIED` → Convert to Worker con diálogo de confirmación real → `PLACED` → link "Ver Worker" → detalle de Worker correcto (sin duplicado). Corrida dos veces, ambas limpias tras el fix del rate limiter — cero errores de consola, cero requests fallidos. Fixtures eliminados sin dejar residuales (verificado con conteo directo en DB).
+- `pnpm typecheck` y `pnpm lint` limpios en todo el monorepo (solo los 2 warnings preexistentes de F4.8/F4.9, sin relación con F5.2).
+- F0–F5.1 intactos: ningún test preexistente modificado ni roto.
+
+### 17.6 Commits (uno por paso pequeño, sin regenerar/resetear la base en ningún momento)
+
+`1e98854` (migración) → `05ef7c1` (contratos compartidos) → `dd08826` (service.ts + `GET /workers/:id`) → `72403ff` (router + RBAC combinado + módulo workers) → `a518170` (fix rate limiter, encontrado corriendo la suite) → `b0e7cce` (tests backend) → `e2681fd` (frontend).
+
+### 17.7 Lo que F5.2 explícitamente no incluye (queda para bloques posteriores de §3.3)
+
+Projects (CRUD), Workers (CRUD/listado/edición/filtros/disponibilidad), Assignments, Compliance (escritura), Timesheets, Payroll, Billing, Invoices, Matching por IA, portal de candidatos, onboarding electrónico, notificaciones externas — nada de esto se tocó, tal como se acordó.
+
+---
+
+**Este documento fue de planificación para F5 completo; §16 y §17 documentan el resultado real de los dos primeros bloques implementados (F5.1, F5.2). El resto de F5 (§5–§12, salvo lo ya cerrado) sigue siendo planificación pendiente de aprobación bloque por bloque, empezando por el siguiente que se apruebe explícitamente.**
