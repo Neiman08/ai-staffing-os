@@ -41,7 +41,7 @@ const DANGER = new Set([
   "MISSING",
 ]);
 
-const INFO = new Set(["LEAD", "NEW", "OPEN", "DRAFT", "SCHEDULED", "MANUAL", "FULL_AUTO"]);
+const INFO = new Set(["LEAD", "NEW", "OPEN", "DRAFT", "SCHEDULED", "MANUAL", "FULL_AUTO", "SENT"]);
 
 export function statusVariant(status: string): NonNullable<BadgeProps["variant"]> {
   const s = status.toUpperCase();
