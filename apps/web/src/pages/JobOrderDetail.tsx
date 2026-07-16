@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
+import { MatchingPanel } from "@/components/matching/MatchingPanel";
 import { ArrowLeft } from "lucide-react";
 
 const SHIFT_TYPES = ["DAY", "NIGHT", "WEEKEND", "ROTATING"];
@@ -435,6 +436,8 @@ export default function JobOrderDetailPage() {
             )}
           </CardContent>
         </Card>
+
+        <MatchingPanel jobOrderId={jobOrder.id} />
 
         <Card className="lg:col-span-2">
           <CardHeader>

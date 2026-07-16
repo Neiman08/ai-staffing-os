@@ -12,6 +12,9 @@ const SUCCESS = new Set([
   "ACTIVE",
   "COMPLETED",
   "PAID",
+  // F6.7: matching (eligibility/availability de WorkerMatchResult)
+  "ELIGIBLE",
+  "AVAILABLE",
 ]);
 
 const WARNING = new Set([
@@ -25,6 +28,9 @@ const WARNING = new Set([
   "EXPIRING",
   "AWAITING_APPROVAL",
   "ASSISTED",
+  // F6.7
+  "REVIEW_REQUIRED",
+  "DATE_CONFLICT",
 ]);
 
 const DANGER = new Set([
@@ -39,6 +45,9 @@ const DANGER = new Set([
   "OVERDUE",
   "VOID",
   "MISSING",
+  // F6.7
+  "INELIGIBLE",
+  "WORKER_UNAVAILABLE",
 ]);
 
 const INFO = new Set(["LEAD", "NEW", "OPEN", "DRAFT", "SCHEDULED", "MANUAL", "FULL_AUTO", "SENT"]);
