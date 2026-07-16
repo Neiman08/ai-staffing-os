@@ -22,6 +22,7 @@ import { createConversationTools } from "./tools/conversation-tools.impl";
 import { createCeoTools } from "./tools/ceo-tools.impl";
 import { createDiscoveryTools } from "./tools/discovery-tools.impl";
 import { createContactIntelligenceTools } from "./tools/contact-intelligence-tools.impl";
+import { createRecruiterTools } from "./tools/recruiter-tools.impl";
 import { UsageAccumulator } from "./usage";
 import { getMonthlyBudgetStatus } from "./budget";
 import { registerAbortController, clearAbortController, getAbortSignal } from "./cancellation";
@@ -57,6 +58,7 @@ const TASK_TYPE_TO_TOOL_NAME: Record<string, string> = {
   discover_companies: "discoverCompanies", // F4.5A
   find_contacts: "findContacts", // F4.6
   find_email: "findEmail", // F4.7
+  match_workers_to_job_order: "matchWorkersToJobOrder", // F6.5
 };
 
 class MissingApiKeyProvider implements LLMProvider {
@@ -148,6 +150,8 @@ function buildToolRegistry(
     tools = createDiscoveryTools({ ...common, abortSignal: getAbortSignal(common.taskId) });
   } else if (agentKey === "contact_intelligence") {
     tools = createContactIntelligenceTools({ ...common, abortSignal: getAbortSignal(common.taskId) });
+  } else if (agentKey === "recruiter") {
+    tools = createRecruiterTools(common);
   } else {
     throw new Error(`buildToolRegistry: no tool factory registered for agent key "${agentKey}"`);
   }

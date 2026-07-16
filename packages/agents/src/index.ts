@@ -20,6 +20,7 @@ export * from "./tools/ceo-tools";
 export * from "./tools/mission-restrictions";
 export * from "./tools/discovery-tools";
 export * from "./tools/contact-intelligence-tools";
+export * from "./tools/recruiter-tools";
 
 export * from "./definitions/recruiter.agent";
 export * from "./definitions/compliance.agent";
