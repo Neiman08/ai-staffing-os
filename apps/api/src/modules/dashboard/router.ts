@@ -1,10 +1,12 @@
 import { Router } from "express";
 import * as dashboardService from "./service";
 
-// Dashboard summary is visible to every authenticated role (per Arquitectura
-// §4.2 "Dashboard completo" row: every role sees at least a partial view;
-// F0 does not implement per-widget filtering, so it is gated only by
-// authentication, not by a specific resource permission).
+// Dashboard summary is reachable by every authenticated role (per
+// Arquitectura §4.2 "Dashboard completo" row: every role sees at least a
+// partial view) — the route itself only requires authentication, but
+// F6.8 made getDashboardSummary() omit each field the caller's real
+// resource permission doesn't already cover (see dashboard/service.ts),
+// so RBAC now applies per metric instead of per endpoint.
 export const dashboardRouter = Router();
 
 dashboardRouter.get("/summary", async (_req, res, next) => {

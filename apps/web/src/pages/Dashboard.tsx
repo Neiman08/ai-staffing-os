@@ -14,9 +14,11 @@ import {
   Bot,
   Briefcase,
   CheckSquare,
+  ClipboardList,
   DollarSign,
   Mail,
   Rocket,
+  ShieldCheck,
   Sparkles,
   Trophy,
   Users,
@@ -49,6 +51,46 @@ const AGENT_ACTION_LABELS: Record<string, string> = {
 
 function formatAgentAction(action: string): string {
   return AGENT_ACTION_LABELS[action] ?? action.replace(/_/g, " ");
+}
+
+// F6.8: breakdown por estado (candidatos/compliance/assignments) — el
+// mismo campo de DashboardSummary solo llega si el permiso del caller lo
+// habilita (ver dashboard/service.ts), así que "undefined" ya implica
+// "ocultar la tarjeta", nunca hay que decidirlo de nuevo acá.
+function StatusBreakdownCard({
+  icon: Icon,
+  title,
+  data,
+}: {
+  icon: typeof Users;
+  title: string;
+  data: Record<string, number>;
+}) {
+  const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
+  return (
+    <Card className="card-hover">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Icon className="h-4 w-4" />
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {entries.length ? (
+          <ul className="space-y-2">
+            {entries.map(([status, count]) => (
+              <li key={status} className="flex items-center justify-between gap-2 text-sm">
+                <Badge variant={statusVariant(status)}>{formatStatusLabel(status)}</Badge>
+                <span className="font-medium">{count}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">Sin datos todavía.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function Dashboard() {
@@ -250,98 +292,133 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <StatCard icon={Users} label="Trabajadores activos" value={summary.activeWorkers.toString()} />
-            <StatCard
-              icon={Briefcase}
-              label="Job orders abiertas"
-              value={summary.openJobOrders.toString()}
-              hint={`Fill rate: ${(summary.fillRate * 100).toFixed(0)}%`}
-            />
-            <StatCard
-              icon={AlertTriangle}
-              label="Alertas de compliance"
-              value={summary.unresolvedComplianceAlerts.toString()}
-              hint="Sin resolver"
-              accent={summary.unresolvedComplianceAlerts > 0 ? "amber" : "primary"}
-            />
-            <StatCard
-              icon={DollarSign}
-              label="Margen bruto (7 días)"
-              value={`$${summary.weeklyGrossMargin.toLocaleString()}`}
-              hint={`${summary.weeklyHours}h · $${summary.billableRevenuePeriod.toLocaleString()} facturable`}
-              accent="emerald"
-            />
+            {/* F6.8: cada tarjeta solo se renderiza si el backend incluyó
+                ese campo — un campo ausente significa que el permiso real
+                que lo respalda (workers.view/jobOrders.view/documents.view/
+                payrollRuns.view|invoices.view) no está en el rol actual,
+                nunca "el dato es cero". Ver dashboard/service.ts. */}
+            {summary.activeWorkers !== undefined && (
+              <StatCard icon={Users} label="Trabajadores activos" value={summary.activeWorkers.toString()} />
+            )}
+            {summary.openJobOrders !== undefined && (
+              <StatCard
+                icon={Briefcase}
+                label="Job orders abiertas"
+                value={summary.openJobOrders.toString()}
+                hint={summary.fillRate !== undefined ? `Fill rate: ${(summary.fillRate * 100).toFixed(0)}%` : undefined}
+              />
+            )}
+            {summary.unresolvedComplianceAlerts !== undefined && (
+              <StatCard
+                icon={AlertTriangle}
+                label="Alertas de compliance"
+                value={summary.unresolvedComplianceAlerts.toString()}
+                hint="Sin resolver"
+                accent={summary.unresolvedComplianceAlerts > 0 ? "amber" : "primary"}
+              />
+            )}
+            {summary.weeklyGrossMargin !== undefined && (
+              <StatCard
+                icon={DollarSign}
+                label="Margen bruto (7 días)"
+                value={`$${summary.weeklyGrossMargin.toLocaleString()}`}
+                hint={`${summary.weeklyHours}h · $${summary.billableRevenuePeriod?.toLocaleString()} facturable`}
+                accent="emerald"
+              />
+            )}
+          </div>
+        )}
+
+        {summary && (summary.candidatesByStatus || summary.workersByComplianceStatus || summary.assignmentsByStatus) && (
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {summary.candidatesByStatus && (
+              <StatusBreakdownCard icon={Users} title="Candidatos por estado" data={summary.candidatesByStatus} />
+            )}
+            {summary.workersByComplianceStatus && (
+              <StatusBreakdownCard
+                icon={ShieldCheck}
+                title="Workers por compliance"
+                data={summary.workersByComplianceStatus}
+              />
+            )}
+            {summary.assignmentsByStatus && (
+              <StatusBreakdownCard icon={ClipboardList} title="Assignments por estado" data={summary.assignmentsByStatus} />
+            )}
           </div>
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="card-hover lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Horas y margen — últimos 14 días</CardTitle>
-          </CardHeader>
-          <CardContent className="h-72 pt-2">
-            {summary && (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={summary.dailySeries}>
-                  <defs>
-                    <linearGradient id="marginGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(255 92% 62%)" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="hsl(255 92% 62%)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    tickFormatter={(v: string) => v.slice(5)}
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis fontSize={11} tickLine={false} axisLine={false} width={36} />
-                  <RechartsTooltip
-                    contentStyle={{
-                      background: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="margin"
-                    name="Margen ($)"
-                    stroke="hsl(255 92% 62%)"
-                    fill="url(#marginGradient)"
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
+      {summary && (summary.dailySeries || summary.recentAlerts) && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {summary.dailySeries && (
+            <Card className="card-hover lg:col-span-2">
+              <CardHeader>
+                <CardTitle>Horas y margen — últimos 14 días</CardTitle>
+              </CardHeader>
+              <CardContent className="h-72 pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={summary.dailySeries}>
+                    <defs>
+                      <linearGradient id="marginGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="hsl(255 92% 62%)" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="hsl(255 92% 62%)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(v: string) => v.slice(5)}
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis fontSize={11} tickLine={false} axisLine={false} width={36} />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: 8,
+                        fontSize: 12,
+                      }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="margin"
+                      name="Margen ($)"
+                      stroke="hsl(255 92% 62%)"
+                      fill="url(#marginGradient)"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
 
-        <Card className="card-hover">
-          <CardHeader>
-            <CardTitle>Alertas recientes</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {summary?.recentAlerts.length ? (
-              summary.recentAlerts.map((alert) => (
-                <div key={alert.id} className="flex items-start justify-between gap-2 text-sm">
-                  <div>
-                    <div className="font-medium">{formatStatusLabel(alert.type)}</div>
-                    <div className="text-xs text-muted-foreground">{alert.message}</div>
-                  </div>
-                  <Badge variant={statusVariant(alert.severity)}>{formatStatusLabel(alert.severity)}</Badge>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground">Sin alertas pendientes.</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+          {summary.recentAlerts && (
+            <Card className="card-hover">
+              <CardHeader>
+                <CardTitle>Alertas recientes</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {summary.recentAlerts.length ? (
+                  summary.recentAlerts.map((alert) => (
+                    <div key={alert.id} className="flex items-start justify-between gap-2 text-sm">
+                      <div>
+                        <div className="font-medium">{formatStatusLabel(alert.type)}</div>
+                        <div className="text-xs text-muted-foreground">{alert.message}</div>
+                      </div>
+                      <Badge variant={statusVariant(alert.severity)}>{formatStatusLabel(alert.severity)}</Badge>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">Sin alertas pendientes.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
 
       <Card className="card-hover">
         <CardHeader>

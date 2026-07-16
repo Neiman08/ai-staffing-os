@@ -19,7 +19,31 @@ function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+// F6.8: cada bloque de métricas se calcula solo si el caller trae el
+// permiso real que ya gatea ese recurso en su propio módulo — mismo
+// principio que requirePermission(), aplicado campo por campo en vez de
+// endpoint por endpoint. Nunca se calcula un agregado que el response no
+// va a poder incluir (evita trabajo innecesario, no solo evita filtrar
+// el JSON después).
 export async function getDashboardSummary(): Promise<DashboardSummary> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+  const has = (permission: string) => ctx.permissions.includes(permission);
+
+  const canViewWorkers = has("workers.view");
+  const canViewCandidates = has("candidates.view");
+  const canViewJobOrders = has("jobOrders.view");
+  // documents.view: mismo permiso que ya gatea GET /compliance/documents
+  // (apps/api/src/modules/compliance/router.ts) — las alertas de
+  // compliance son parte de esa misma superficie, nunca un permiso nuevo.
+  const canViewCompliance = has("documents.view");
+  const canViewAssignments = has("assignments.view");
+  // Visibilidad financiera real: los únicos permisos existentes que ya
+  // exponen billRate/payRate/margen agregado en otros módulos
+  // (payrollRuns, invoices) — nunca un permiso "dashboard.financial"
+  // inventado para esta feature.
+  const canViewFinancials = has("payrollRuns.view") || has("invoices.view");
+
   const since14 = daysAgo(13);
   const since7 = daysAgo(6);
 
@@ -29,89 +53,114 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     jobOrderAggregates,
     openJobOrders,
     unresolvedComplianceAlerts,
-    timeEntries14d,
     recentAlerts,
+    workerComplianceGroups,
+    assignmentGroups,
+    timeEntries14d,
   ] = await Promise.all([
-    scopedDb.worker.count({ where: { status: { not: "TERMINATED" } } }),
-    scopedDb.candidate.groupBy({ by: ["status"], _count: { _all: true } }),
-    scopedDb.jobOrder.aggregate({
-      _sum: { workersNeeded: true, workersFilled: true },
-      _count: { _all: true },
-      where: { status: { not: "CANCELLED" } },
-    }),
-    scopedDb.jobOrder.count({ where: { status: { in: ["OPEN", "PARTIALLY_FILLED"] } } }),
-    scopedDb.complianceAlert.count({ where: { resolvedAt: null } }),
-    scopedDb.timeEntry.findMany({
-      where: { date: { gte: since14 } },
-      include: { assignment: true },
-    }),
-    scopedDb.complianceAlert.findMany({
-      where: { resolvedAt: null },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    }),
+    canViewWorkers ? scopedDb.worker.count({ where: { status: { not: "TERMINATED" } } }) : Promise.resolve(null),
+    canViewCandidates ? scopedDb.candidate.groupBy({ by: ["status"], _count: { _all: true } }) : Promise.resolve(null),
+    canViewJobOrders
+      ? scopedDb.jobOrder.aggregate({
+          _sum: { workersNeeded: true, workersFilled: true },
+          _count: { _all: true },
+          where: { status: { not: "CANCELLED" } },
+        })
+      : Promise.resolve(null),
+    canViewJobOrders
+      ? scopedDb.jobOrder.count({ where: { status: { in: ["OPEN", "PARTIALLY_FILLED"] } } })
+      : Promise.resolve(null),
+    canViewCompliance ? scopedDb.complianceAlert.count({ where: { resolvedAt: null } }) : Promise.resolve(null),
+    canViewCompliance
+      ? scopedDb.complianceAlert.findMany({ where: { resolvedAt: null }, orderBy: { createdAt: "desc" }, take: 5 })
+      : Promise.resolve(null),
+    canViewCompliance ? scopedDb.worker.groupBy({ by: ["complianceStatus"], _count: { _all: true } }) : Promise.resolve(null),
+    canViewAssignments ? scopedDb.assignment.groupBy({ by: ["status"], _count: { _all: true } }) : Promise.resolve(null),
+    canViewFinancials
+      ? scopedDb.timeEntry.findMany({ where: { date: { gte: since14 } }, include: { assignment: true } })
+      : Promise.resolve(null),
   ]);
 
-  const candidatesByStatus: Record<string, number> = {};
-  for (const group of candidateGroups) {
-    candidatesByStatus[group.status] = group._count._all;
+  const summary: DashboardSummary = {};
+
+  if (activeWorkers !== null) summary.activeWorkers = activeWorkers;
+
+  if (candidateGroups !== null) {
+    const candidatesByStatus: Record<string, number> = {};
+    for (const group of candidateGroups) candidatesByStatus[group.status] = group._count._all;
+    summary.candidatesByStatus = candidatesByStatus;
   }
 
-  const needed = jobOrderAggregates._sum.workersNeeded ?? 0;
-  const filled = jobOrderAggregates._sum.workersFilled ?? 0;
-  const fillRate = needed > 0 ? filled / needed : 0;
-
-  const dailyBuckets = new Map<string, { hours: number; margin: number }>();
-  for (let i = 0; i < 14; i++) {
-    dailyBuckets.set(dateKey(daysAgo(13 - i)), { hours: 0, margin: 0 });
+  if (openJobOrders !== null) summary.openJobOrders = openJobOrders;
+  if (jobOrderAggregates !== null) {
+    const needed = jobOrderAggregates._sum.workersNeeded ?? 0;
+    const filled = jobOrderAggregates._sum.workersFilled ?? 0;
+    summary.fillRate = Number((needed > 0 ? filled / needed : 0).toFixed(4));
   }
 
-  let weeklyHours = 0;
-  let weeklyGrossMargin = 0;
-  let billableRevenuePeriod = 0;
-
-  for (const entry of timeEntries14d) {
-    const totalHours = Number(entry.regularHours) + Number(entry.overtimeHours) + Number(entry.doubleHours);
-    const billRate = Number(entry.assignment.billRate);
-    const payRate = Number(entry.assignment.payRate);
-    const margin = totalHours * (billRate - payRate);
-    const key = dateKey(startOfDay(entry.date));
-
-    const bucket = dailyBuckets.get(key);
-    if (bucket) {
-      bucket.hours += totalHours;
-      bucket.margin += margin;
-    }
-
-    if (entry.date >= since7) {
-      weeklyHours += totalHours;
-      weeklyGrossMargin += margin;
-      billableRevenuePeriod += totalHours * billRate;
-    }
-  }
-
-  return {
-    activeWorkers,
-    candidatesByStatus,
-    openJobOrders,
-    fillRate: Number(fillRate.toFixed(4)),
-    unresolvedComplianceAlerts,
-    weeklyHours: Number(weeklyHours.toFixed(2)),
-    weeklyGrossMargin: Number(weeklyGrossMargin.toFixed(2)),
-    billableRevenuePeriod: Number(billableRevenuePeriod.toFixed(2)),
-    dailySeries: Array.from(dailyBuckets.entries()).map(([date, v]) => ({
-      date,
-      hours: Number(v.hours.toFixed(2)),
-      margin: Number(v.margin.toFixed(2)),
-    })),
-    recentAlerts: recentAlerts.map((alert) => ({
+  if (unresolvedComplianceAlerts !== null) summary.unresolvedComplianceAlerts = unresolvedComplianceAlerts;
+  if (recentAlerts !== null) {
+    summary.recentAlerts = recentAlerts.map((alert) => ({
       id: alert.id,
       type: alert.type,
       severity: alert.severity,
       message: alert.message,
       createdAt: alert.createdAt.toISOString(),
-    })),
-  };
+    }));
+  }
+  if (workerComplianceGroups !== null) {
+    const workersByComplianceStatus: Record<string, number> = {};
+    for (const group of workerComplianceGroups) workersByComplianceStatus[group.complianceStatus] = group._count._all;
+    summary.workersByComplianceStatus = workersByComplianceStatus;
+  }
+
+  if (assignmentGroups !== null) {
+    const assignmentsByStatus: Record<string, number> = {};
+    for (const group of assignmentGroups) assignmentsByStatus[group.status] = group._count._all;
+    summary.assignmentsByStatus = assignmentsByStatus;
+  }
+
+  if (timeEntries14d !== null) {
+    const dailyBuckets = new Map<string, { hours: number; margin: number }>();
+    for (let i = 0; i < 14; i++) {
+      dailyBuckets.set(dateKey(daysAgo(13 - i)), { hours: 0, margin: 0 });
+    }
+
+    let weeklyHours = 0;
+    let weeklyGrossMargin = 0;
+    let billableRevenuePeriod = 0;
+
+    for (const entry of timeEntries14d) {
+      const totalHours = Number(entry.regularHours) + Number(entry.overtimeHours) + Number(entry.doubleHours);
+      const billRate = Number(entry.assignment.billRate);
+      const payRate = Number(entry.assignment.payRate);
+      const margin = totalHours * (billRate - payRate);
+      const key = dateKey(startOfDay(entry.date));
+
+      const bucket = dailyBuckets.get(key);
+      if (bucket) {
+        bucket.hours += totalHours;
+        bucket.margin += margin;
+      }
+
+      if (entry.date >= since7) {
+        weeklyHours += totalHours;
+        weeklyGrossMargin += margin;
+        billableRevenuePeriod += totalHours * billRate;
+      }
+    }
+
+    summary.weeklyHours = Number(weeklyHours.toFixed(2));
+    summary.weeklyGrossMargin = Number(weeklyGrossMargin.toFixed(2));
+    summary.billableRevenuePeriod = Number(billableRevenuePeriod.toFixed(2));
+    summary.dailySeries = Array.from(dailyBuckets.entries()).map(([date, v]) => ({
+      date,
+      hours: Number(v.hours.toFixed(2)),
+      margin: Number(v.margin.toFixed(2)),
+    }));
+  }
+
+  return summary;
 }
 
 export async function getRecentAuditLog(limit = 15): Promise<AuditLogItem[]> {
