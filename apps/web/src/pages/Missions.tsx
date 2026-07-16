@@ -26,6 +26,9 @@ const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   // debe verse como un COMPLETED verde silencioso — badge de advertencia.
   PARTIAL: "warning",
   FAILED: "danger",
+  // F7.2: un plan generado no es ni un éxito ni una ejecución en curso —
+  // badge propio, nunca confundido con COMPLETED/RUNNING.
+  PLANNED: "info",
 };
 
 function LaunchMissionForm() {
@@ -48,6 +51,26 @@ function LaunchMissionForm() {
     onError: (err) => toast({ title: "No se pudo lanzar la misión", description: String(err), variant: "error" }),
   });
 
+  // F7.2: modo solo-planificación — interpreta + arma el Mission Plan,
+  // nunca ejecuta discovery/contactos/campañas. Mismo formulario, un
+  // endpoint distinto (ver mission-planning.ts).
+  const planMutation = useMutation({
+    mutationFn: (text: string) =>
+      apiFetch<MissionListItem>("/missions/plan", { method: "POST", body: JSON.stringify({ instruction: text }) }),
+    onSuccess: (mission) => {
+      toast({
+        title: "Plan generado — todavía no ejecutado",
+        description: `Interpretado: ${mission.industryNames.join(", ") || "sin industria real de bucket"}${mission.state ? ` · ${mission.state}` : ""}`,
+        variant: "success",
+      });
+      setInstruction("");
+      queryClient.invalidateQueries({ queryKey: ["missions"] });
+    },
+    onError: (err) => toast({ title: "No se pudo generar el plan", description: String(err), variant: "error" }),
+  });
+
+  const isBusy = mutation.isPending || planMutation.isPending;
+
   return (
     <Card className="card-hover border-primary/20 bg-gradient-to-br from-primary/5 via-transparent to-transparent">
       <CardHeader>
@@ -63,12 +86,24 @@ function LaunchMissionForm() {
           onChange={(e) => setInstruction(e.target.value)}
           rows={3}
         />
-        <Button disabled={!instruction.trim() || mutation.isPending} onClick={() => mutation.mutate(instruction)}>
-          {mutation.isPending ? "Interpretando…" : "Lanzar misión"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={!instruction.trim() || isBusy} onClick={() => mutation.mutate(instruction)}>
+            {mutation.isPending ? "Interpretando…" : "Lanzar misión"}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!instruction.trim() || isBusy}
+            onClick={() => planMutation.mutate(instruction)}
+            title="Interpreta la instrucción y arma el plan, pero no busca empresas ni contacta a nadie todavía"
+          >
+            {planMutation.isPending ? "Planificando…" : "Solo planificar (sin ejecutar)"}
+          </Button>
+        </div>
         <p className="text-xs text-muted-foreground">
           El CEO Agent interpreta la instrucción y delega a Campaign, Sales, Outreach y Market Intelligence Agent en
           una secuencia fija — nunca envía nada sin aprobación humana. Solo una misión activa por día.
+          "Solo planificar" usa el intérprete determinista nuevo y se detiene después de guardar el plan — cero
+          búsquedas, cero contactos, cero campañas.
         </p>
       </CardContent>
     </Card>
@@ -114,7 +149,11 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
     mission.missionState === "COMPLETED" ||
     mission.missionState === "PARTIAL" ||
     mission.missionState === "CANCELLED" ||
-    mission.missionState === "FAILED";
+    mission.missionState === "FAILED" ||
+    // F7.2: un plan generado no tiene nada corriendo que pausar/cancelar
+    // — la única forma de "ejecutarlo" de verdad todavía no existe
+    // (fuera de alcance de F7.2, ver plan §API).
+    mission.missionState === "PLANNED";
   if (isTerminal) return null;
 
   return (
@@ -149,6 +188,162 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
   );
 }
 
+function TagList({ label, items, variant = "neutral" }: { label: string; items: string[]; variant?: "neutral" | "info" | "warning" | "danger" | "success" }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
+      <div className="mt-1 flex flex-wrap gap-1">
+        {items.map((item) => (
+          <Badge key={item} variant={variant}>
+            {item}
+          </Badge>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * F7.2: "Interpretación del CEO" — muestra el StructuredIntent
+ * determinista (F7.1), nunca los resultados de una ejecución (todavía
+ * no corrió ninguna). Presente únicamente cuando la misión pasó por
+ * planMissionOnly (detail.ceoIntent !== null).
+ */
+function CeoIntentSection({ intent }: { intent: NonNullable<MissionDetail["ceoIntent"]> }) {
+  return (
+    <div className="space-y-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-primary">Interpretación del CEO</p>
+        <Badge variant={intent.confidence >= 0.7 ? "success" : intent.confidence >= 0.4 ? "warning" : "danger"}>
+          Confianza {Math.round(intent.confidence * 100)}%
+        </Badge>
+      </div>
+      <p className="text-sm">
+        <span className="text-muted-foreground">Objetivo: </span>
+        {formatStatusLabel(intent.objective.type)}
+        {intent.objective.targetCompanyCount ? ` · ${intent.objective.targetCompanyCount} empresas` : ""}
+      </p>
+      <TagList label="Tipos de empresa" items={intent.companyTypes} />
+      <TagList label="Industrias (CRM)" items={intent.industries} variant="info" />
+      <TagList label="Actividades de negocio" items={intent.businessActivities} />
+      <TagList label="Puestos objetivo" items={intent.targetJobTitles} />
+      <TagList label="Señales de contratación" items={intent.hiringSignals} />
+      <TagList label="Decisores" items={intent.decisionRoles} />
+      <TagList label="Ciudades" items={intent.preferredCities} />
+      <TagList label="Estados" items={intent.states} />
+      <TagList label="Exclusiones" items={intent.exclusions} variant="danger" />
+      <div className="flex flex-wrap gap-1.5 text-xs">
+        <Badge variant={intent.restrictions.allowCampaignCreation ? "neutral" : "warning"}>
+          Campañas: {intent.restrictions.allowCampaignCreation ? "permitidas" : "bloqueadas"}
+        </Badge>
+        <Badge variant={intent.restrictions.allowOpportunityCreation ? "neutral" : "warning"}>
+          Oportunidades: {intent.restrictions.allowOpportunityCreation ? "permitidas" : "bloqueadas"}
+        </Badge>
+        <Badge variant={intent.restrictions.allowOutreach ? "neutral" : "warning"}>
+          Outreach: {intent.restrictions.allowOutreach ? "permitido" : "bloqueado"}
+        </Badge>
+        <Badge variant={intent.restrictions.allowMessageSending ? "neutral" : "warning"}>
+          Mensajes: {intent.restrictions.allowMessageSending ? "permitidos" : "bloqueados"}
+        </Badge>
+      </div>
+      {intent.ambiguities.length > 0 && (
+        <div>
+          <p className="text-xs uppercase tracking-wide text-amber-600 dark:text-amber-400">Ambigüedades</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
+            {intent.ambiguities.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {intent.unsupportedCapabilities.length > 0 && (
+        <div>
+          <p className="text-xs uppercase tracking-wide text-red-600 dark:text-red-400">Capacidades no soportadas</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
+            {intent.unsupportedCapabilities.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** F7.2: "Plan de misión" — el MissionPlan (F7.1), declarativo, nunca ejecutado en esta fase. */
+function MissionPlanSection({
+  plan,
+  warnings,
+}: {
+  plan: NonNullable<MissionDetail["missionPlan"]>;
+  warnings: string[];
+}) {
+  const providers = Array.from(new Set(plan.fallbackStrategy.map((f) => f.provider)));
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Plan de misión</p>
+      <p className="text-sm">{plan.rationale}</p>
+      <div>
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Pasos (en orden)</p>
+        <ol className="mt-1 list-inside list-decimal space-y-0.5 text-sm">
+          {plan.steps.map((step) => (
+            <li key={step}>
+              {formatStatusLabel(step)}
+              {plan.requiredSteps.includes(step) ? (
+                <span className="ml-1 text-[11px] text-muted-foreground">(obligatorio)</span>
+              ) : (
+                <span className="ml-1 text-[11px] text-muted-foreground">(opcional)</span>
+              )}
+            </li>
+          ))}
+        </ol>
+      </div>
+      {plan.searchQueries.length > 0 && (
+        <div>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Queries previstas</p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {plan.searchQueries.map((q, i) => (
+              <Badge key={i} variant="neutral">
+                {q.searchTerm}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+      <TagList label="Proveedores previstos" items={providers} variant="info" />
+      <TagList label="Estrategia de deduplicación" items={plan.dedupStrategy.map(formatStatusLabel)} />
+      {plan.fallbackStrategy.length > 0 && (
+        <div>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Fallback</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
+            {plan.fallbackStrategy.map((f, i) => (
+              <li key={i}>
+                <span className="font-medium text-foreground">{f.provider}:</span> {f.whenUnavailable}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        <span>Máx. empresas: {plan.stopConditions.maxCompanies}</span>
+        <span>Máx. costo: ${plan.stopConditions.maxCostUsd.toFixed(2)}</span>
+        <span>Máx. duración: {plan.stopConditions.maxDurationMinutes} min</span>
+      </div>
+      {warnings.length > 0 && (
+        <div>
+          <p className="text-xs uppercase tracking-wide text-amber-600 dark:text-amber-400">Warnings</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
+            {warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null; onClose: () => void }) {
   const { data: detail } = useQuery({
     queryKey: ["mission", missionId],
@@ -164,6 +359,15 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Instrucción original</p>
             <p className="text-sm">{detail.rawInstruction}</p>
           </div>
+          {detail.missionPhase === "PLANNED" && (
+            <Badge variant="info" className="w-fit">
+              Plan generado — todavía no ejecutado
+            </Badge>
+          )}
+          {detail.ceoIntent && <CeoIntentSection intent={detail.ceoIntent} />}
+          {detail.missionPlan && (
+            <MissionPlanSection plan={detail.missionPlan} warnings={detail.ceoIntentMeta?.warnings ?? []} />
+          )}
           {detail.unrecognizedTerms.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Términos no reconocidos</p>
@@ -201,6 +405,12 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               </ul>
             </div>
           )}
+          {/* F7.2: una misión PLANNED no ejecutó nada — nunca se muestran
+              empresas/contactos/costo de proveedores, aunque estos
+              arreglos existan vacíos igual (serían 0 de todas formas,
+              pero ocultarlos es la señal honesta pedida explícitamente). */}
+          {detail.missionPhase !== "PLANNED" && (
+          <>
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
               Empresas seleccionadas ({detail.selectedCompanies.length})
@@ -345,6 +555,8 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               ))}
             </div>
           </div>
+          </>
+          )}
         </div>
       )}
     </Drawer>

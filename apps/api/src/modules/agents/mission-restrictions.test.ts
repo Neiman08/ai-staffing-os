@@ -87,6 +87,36 @@ test("mergeMissionRestrictions: parseo nulo/parcial del LLM se completa con el d
   assert.equal(merged.allowCampaignCreation, true);
 });
 
+// F7.2 — bug confirmado: "no crear campañas ni oportunidades" no
+// bloqueaba allowOpportunityCreation (el verbo "crear" nunca quedaba
+// adyacente a "oportunidad(es)" en esa construcción con conector "ni"/
+// "o"). Regresión mínima: exactamente las expresiones confirmadas por
+// el PO, nada más.
+
+test("detectMissionRestrictionsFromText: 'no crear campañas ni oportunidades' bloquea AMBOS flags (bug F7.2)", () => {
+  const r = detectMissionRestrictionsFromText("Busca hoteles en Illinois. No crear campañas ni oportunidades.");
+  assert.equal(r.allowCampaignCreation, false);
+  assert.equal(r.allowOpportunityCreation, false);
+});
+
+test("detectMissionRestrictionsFromText: 'no crear campañas o oportunidades' bloquea AMBOS flags (bug F7.2)", () => {
+  const r = detectMissionRestrictionsFromText("Busca hoteles en Illinois. No crear campañas o oportunidades.");
+  assert.equal(r.allowCampaignCreation, false);
+  assert.equal(r.allowOpportunityCreation, false);
+});
+
+test("detectMissionRestrictionsFromText: 'no preparar mensajes' bloquea allowMessageSending/allowOutreach (bug F7.2)", () => {
+  const r = detectMissionRestrictionsFromText("Encuentra contactos. No preparar mensajes.");
+  assert.equal(r.allowMessageSending, false);
+  assert.equal(r.allowOutreach, false);
+});
+
+test("detectMissionRestrictionsFromText: 'no crear campañas ni oportunidades' no afecta outreach (aislamiento del fix)", () => {
+  const r = detectMissionRestrictionsFromText("Busca hoteles en Illinois. No crear campañas ni oportunidades.");
+  assert.equal(r.allowOutreach, true);
+  assert.equal(r.allowMessageSending, true);
+});
+
 // ---- provider-health.ts: distingue "sin datos para esta empresa" de
 // "la cuenta del proveedor no puede responder nada ahora" ----
 

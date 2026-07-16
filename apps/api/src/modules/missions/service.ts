@@ -2,6 +2,7 @@ import type { AgentTaskDetail, MissionActionInput, MissionDetail, MissionListIte
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
 import { applyMissionAction, launchMission } from "../agents/mission-orchestrator";
+import { planMissionOnly } from "../agents/mission-planning";
 import { toAgentTaskDetail } from "../agents/task-executor";
 
 function toListItem(task: AgentTaskDetail): MissionListItem {
@@ -54,12 +55,27 @@ function toListItem(task: AgentTaskDetail): MissionListItem {
     appliedRestrictions:
       (output as { appliedRestrictions?: MissionListItem["appliedRestrictions"] }).appliedRestrictions ?? null,
     restrictionNotes: (output as { restrictionNotes?: string[] }).restrictionNotes ?? [],
+    // F7.2: null en toda misión que no pasó por planMissionOnly (todas
+    // las anteriores, y cualquier misión real vieja) — se interpreta
+    // como "EXECUTING" por compatibilidad, nunca inferido a la fuerza.
+    missionPhase: (output as { missionPhase?: MissionListItem["missionPhase"] }).missionPhase ?? null,
   };
 }
 
 /** POST /missions — lanza una Daily Revenue Mission a partir de una instrucción en lenguaje natural. */
 export async function createMission(instruction: string): Promise<MissionListItem> {
   const task = await launchMission(instruction);
+  return toListItem(task);
+}
+
+/**
+ * F7.2: POST /missions/plan — crea una misión en modo SOLO
+ * PLANIFICACIÓN (interpreta + arma el Mission Plan, nunca ejecuta nada).
+ * Camino separado de createMission/launchMission — ver la estrategia de
+ * coexistencia documentada en mission-planning.ts.
+ */
+export async function createMissionPlan(instruction: string): Promise<MissionListItem> {
+  const task = await planMissionOnly(instruction);
   return toListItem(task);
 }
 
@@ -86,7 +102,13 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
   ]);
 
   const listItem = toListItem(detail);
-  const output = (detail.output ?? {}) as { report?: string | null; contactCoverage?: MissionDetail["contactCoverage"] };
+  const output = (detail.output ?? {}) as {
+    report?: string | null;
+    contactCoverage?: MissionDetail["contactCoverage"];
+    ceoIntent?: MissionDetail["ceoIntent"];
+    missionPlan?: MissionDetail["missionPlan"];
+    ceoIntentMeta?: MissionDetail["ceoIntentMeta"];
+  };
   const input = detail.input as { unrecognizedTerms?: string[] };
 
   // F4.5: las empresas "seleccionadas" por la misión son las CampaignCompany
@@ -218,6 +240,10 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
       durationMs,
     },
     contactCoverage: output.contactCoverage ?? null,
+    // F7.2: null en toda misión que no pasó por planMissionOnly.
+    ceoIntent: output.ceoIntent ?? null,
+    missionPlan: output.missionPlan ?? null,
+    ceoIntentMeta: output.ceoIntentMeta ?? null,
   };
 }
 

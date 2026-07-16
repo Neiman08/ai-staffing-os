@@ -44,9 +44,18 @@ function normalize(text: string): string {
 // disparó este fix ("no crear campañas; no crear oportunidades; no
 // enviar correos; no contactar a nadie") más variantes razonables.
 const NO_CAMPAIGN_RE = /\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|generes|abrir|abras|lanzar|lances)\s+campa(n|ñ)as?\b|\bno\s+campaigns?\b/;
-const NO_OPPORTUNITY_RE = /\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|generes|abrir|abras)\s+oportunidad(es)?\b|\bno\s+opportunit(y|ies)\b/;
+// F7.2 (bug confirmado): "no crear campañas ni/o oportunidades" no
+// disparaba esta regex porque el verbo "crear" nunca queda adyacente a
+// "oportunidad(es)" en esa construcción — la 3ra alternativa cubre
+// EXACTAMENTE ese caso confirmado (conector "ni"/"o"), sin ampliar el
+// alcance a ninguna otra expresión no confirmada.
+const NO_OPPORTUNITY_RE =
+  /\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|generes|abrir|abras)\s+oportunidad(es)?\b|\bno\s+opportunit(y|ies)\b|\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|generes|abrir|abras|lanzar|lances)\s+campa(?:n|ñ)as?\s+(?:ni|o)\s+oportunidad(?:es)?\b/;
+// F7.2: agrega "preparar/prepares" al verbo de NO_OUTREACH_RE — "no
+// preparar mensajes" es una de las expresiones confirmadas y no
+// matcheaba (el verbo antes solo cubría enviar/mandar).
 const NO_OUTREACH_RE =
-  /\b(no|sin|nunca)\s+(enviar|envies|env[ií]e|mandar|mandes)\s+(correos?|emails?|mensajes?|mails?)\b|\bno\s+contactar\s+a?\s*nadie\b|\bno\s+contact(ar)?\b|\bno\s+outreach\b|\bno\s+send(ing)?\s+(emails?|messages?)\b/;
+  /\b(no|sin|nunca)\s+(enviar|envies|env[ií]e|mandar|mandes|preparar|prepares)\s+(correos?|emails?|mensajes?|mails?)\b|\bno\s+contactar\s+a?\s*nadie\b|\bno\s+contact(ar)?\b|\bno\s+outreach\b|\bno\s+send(ing)?\s+(emails?|messages?)\b|\bno\s+prepar(e|ing)\s+(emails?|messages?)\b/;
 
 /**
  * Detector determinista — cero LLM, cero ambigüedad. Solo puede resultar

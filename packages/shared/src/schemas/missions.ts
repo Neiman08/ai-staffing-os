@@ -67,6 +67,13 @@ export type ObjectiveProgress = z.infer<typeof objectiveProgressSchema>;
 // resultado incompleto como si fuera un éxito total. Ver
 // contactCoverage en missionDetailSchema para el detalle honesto de qué
 // faltó y por qué.
+// F7.2: "PLANNED" -- una misión que solo interpretó y planificó (F7.1's
+// interpretBusinessIntent + buildMissionPlan), sin ejecutar ninguna
+// herramienta externa todavía. Extensión segura de este enum (vive
+// dentro de AgentTask.output, un campo Json -- nunca un enum real de
+// Postgres) -- cero migración, cero cambio de AgentTaskStatus (ese sigue
+// siendo "DONE", ver missionPhaseSchema abajo para la señal explícita
+// adicional que lo distingue de una ejecución real terminada).
 export const missionStateSchema = z.enum([
   "RUNNING",
   "PAUSED_BY_USER",
@@ -75,8 +82,20 @@ export const missionStateSchema = z.enum([
   "COMPLETED",
   "PARTIAL",
   "FAILED",
+  "PLANNED",
 ]);
 export type MissionState = z.infer<typeof missionStateSchema>;
+
+// F7.2: señal explícita y redundante a propósito -- "PLANNED" en
+// missionState ya lo dice, pero AgentTask.status sigue siendo "DONE"
+// (no existe un valor "PLANNED" en ese enum real y no se cambia sin
+// aprobación), así que missionPhase existe para que ninguna lectura de
+// la UI/API tenga que inferirlo indirectamente. "EXECUTING" es el
+// default implícito de toda misión real (F4/F4.5A) — nunca se escribe
+// para esas, missionPhase queda null/ausente y se interpreta como
+// "EXECUTING" por compatibilidad con misiones ya existentes.
+export const missionPhaseSchema = z.enum(["PLANNED", "EXECUTING"]);
+export type MissionPhase = z.infer<typeof missionPhaseSchema>;
 
 export const launchMissionInputSchema = z.object({
   instruction: z.string().min(1).max(2000),
@@ -92,6 +111,129 @@ export const missionActionInputSchema = z.object({
   action: z.enum(["pause", "resume", "cancel", "close_now", "recover"]),
 });
 export type MissionActionInput = z.infer<typeof missionActionInputSchema>;
+
+// ============================================================
+// F7.2: CEO Intelligence — espejo de contratos de
+// apps/api/src/modules/ceo-intelligence/contracts.ts. packages/shared
+// no puede importar de apps/api (ni de packages/agents, ver
+// missionRestrictionsSchema arriba) — mismo criterio de "duplicar la
+// forma, no la dependencia" ya establecido en este archivo. La fuente
+// de verdad determinista del intérprete/planner/taxonomía sigue
+// viviendo exclusivamente en apps/api/src/modules/ceo-intelligence/
+// (F7.1, sin tocar en F7.2).
+// ============================================================
+
+export const CEO_INTENT_SCHEMA_VERSION = 1;
+export const BUSINESS_TAXONOMY_VERSION = 1;
+export const MISSION_PLANNER_VERSION = 1;
+
+export const ceoMissionObjectiveTypeSchema = z.enum([
+  "find_companies",
+  "find_contacts",
+  "find_hiring_signals",
+  "custom",
+]);
+export type CeoMissionObjectiveType = z.infer<typeof ceoMissionObjectiveTypeSchema>;
+
+export const ceoMissionObjectiveSchema = z.object({
+  type: ceoMissionObjectiveTypeSchema,
+  targetCompanyCount: z.number().int().positive().nullable(),
+  rawText: z.string(),
+});
+export type CeoMissionObjective = z.infer<typeof ceoMissionObjectiveSchema>;
+
+export const ceoMissionPlanStepSchema = z.enum([
+  "discover_companies",
+  "validate_business_type",
+  "find_hiring_signals",
+  "find_contacts",
+  "find_organizational_emails",
+  "verify_emails",
+]);
+export type CeoMissionPlanStep = z.infer<typeof ceoMissionPlanStepSchema>;
+
+export const ceoStructuredIntentSchema = z.object({
+  schemaVersion: z.literal(1),
+  rawInstruction: z.string(),
+  objective: ceoMissionObjectiveSchema,
+  companyTypes: z.array(z.string()),
+  industries: z.array(z.string()),
+  businessActivities: z.array(z.string()),
+  searchTerms: z.array(z.string()),
+  hiringSignals: z.array(z.string()),
+  decisionRoles: z.array(z.string()),
+  targetJobTitles: z.array(z.string()),
+  exclusions: z.array(z.string()),
+  preferredCities: z.array(z.string()),
+  states: z.array(z.string()),
+  providersRequested: z.array(z.string()),
+  restrictions: missionRestrictionsSchema,
+  plannedSteps: z.array(ceoMissionPlanStepSchema),
+  confidence: z.number().min(0).max(1),
+  ambiguities: z.array(z.string()),
+  unsupportedCapabilities: z.array(z.string()),
+  matchedTaxonomyKeys: z.array(z.string()),
+});
+export type CeoStructuredIntent = z.infer<typeof ceoStructuredIntentSchema>;
+
+export const ceoMissionPlanSearchQuerySchema = z.object({
+  searchTerm: z.string(),
+  crmIndustryBucket: z.string().nullable(),
+  taxonomyKey: z.string(),
+});
+export type CeoMissionPlanSearchQuery = z.infer<typeof ceoMissionPlanSearchQuerySchema>;
+
+export const ceoMissionPlanStopConditionsSchema = z.object({
+  maxCompanies: z.number().int().positive(),
+  maxCostUsd: z.number().positive(),
+  maxDurationMinutes: z.number().positive(),
+});
+export type CeoMissionPlanStopConditions = z.infer<typeof ceoMissionPlanStopConditionsSchema>;
+
+export const ceoMissionPlanFallbackSchema = z.object({
+  provider: z.string(),
+  whenUnavailable: z.string(),
+});
+export type CeoMissionPlanFallback = z.infer<typeof ceoMissionPlanFallbackSchema>;
+
+export const ceoDedupStrategyKeySchema = z.enum([
+  "providerPlaceId",
+  "canonicalDomain",
+  "normalizedPhone",
+  "normalizedNameCityState",
+]);
+export type CeoDedupStrategyKey = z.infer<typeof ceoDedupStrategyKeySchema>;
+
+export const ceoMissionPlanSchema = z.object({
+  schemaVersion: z.literal(1),
+  objective: ceoMissionObjectiveSchema,
+  searchQueries: z.array(ceoMissionPlanSearchQuerySchema),
+  exclusions: z.array(z.string()),
+  cities: z.array(z.string()),
+  states: z.array(z.string()),
+  steps: z.array(ceoMissionPlanStepSchema),
+  requiredSteps: z.array(ceoMissionPlanStepSchema),
+  optionalSteps: z.array(ceoMissionPlanStepSchema),
+  stopConditions: ceoMissionPlanStopConditionsSchema,
+  dedupStrategy: z.array(ceoDedupStrategyKeySchema),
+  fallbackStrategy: z.array(ceoMissionPlanFallbackSchema),
+  restrictions: missionRestrictionsSchema,
+  rationale: z.string(),
+});
+export type CeoMissionPlan = z.infer<typeof ceoMissionPlanSchema>;
+
+// Metadata de versionado persistida junto al intent/plan — nunca se
+// mezcla con MATCH_SCHEMA_VERSION/MATCH_ALGORITHM_VERSION (F6), cada
+// integración versiona la suya (ver docs/F7_CEO_INTELLIGENCE_AND_
+// AUTONOMOUS_CLIENT_ACQUISITION_PLAN.md, sección de versionado).
+export const ceoIntentMetaSchema = z.object({
+  schemaVersion: z.literal(CEO_INTENT_SCHEMA_VERSION),
+  taxonomyVersion: z.literal(BUSINESS_TAXONOMY_VERSION),
+  plannerVersion: z.literal(MISSION_PLANNER_VERSION),
+  createdAt: z.string(),
+  warnings: z.array(z.string()),
+});
+export type CeoIntentMeta = z.infer<typeof ceoIntentMetaSchema>;
 
 export const missionListItemSchema = z.object({
   id: z.string(),
@@ -125,6 +267,10 @@ export const missionListItemSchema = z.object({
   // en misiones lanzadas antes de este fix (no tenían este campo).
   appliedRestrictions: missionRestrictionsSchema.nullable(),
   restrictionNotes: z.array(z.string()),
+  // F7.2: null en toda misión lanzada antes de este fix (ejecución real
+  // directa, sin fase de planificación separada) — se interpreta como
+  // "EXECUTING" por compatibilidad, nunca se hace backfill retroactivo.
+  missionPhase: missionPhaseSchema.nullable(),
 });
 export type MissionListItem = z.infer<typeof missionListItemSchema>;
 
@@ -203,5 +349,12 @@ export const missionDetailSchema = missionListItemSchema.extend({
   contacts: z.array(missionContactSchema),
   contactStats: missionContactStatsSchema,
   contactCoverage: missionContactCoverageSchema.nullable(),
+  // F7.2: interpretación + plan del CEO Intelligence — null en toda
+  // misión que no pasó por la fase de planificación nueva (todas las
+  // anteriores a F7.2, y cualquier misión lanzada por el flujo real
+  // viejo de interpretDailyDirective, que sigue coexistiendo).
+  ceoIntent: ceoStructuredIntentSchema.nullable(),
+  missionPlan: ceoMissionPlanSchema.nullable(),
+  ceoIntentMeta: ceoIntentMetaSchema.nullable(),
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;
