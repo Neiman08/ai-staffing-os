@@ -219,3 +219,11 @@ export const workerAvailabilityResultSchema = z.object({
   warnings: z.array(z.string()),
 });
 export type WorkerAvailabilityResult = z.infer<typeof workerAvailabilityResultSchema>;
+
+// ---------- F6.6: body de POST /job-orders/:id/matching/run ----------
+// jobOrderId viene de la URL, nunca del body — este schema solo cubre
+// las opciones mínimas de la corrida (plan §14).
+export const runMatchingInputSchema = z.object({
+  withLlm: z.boolean().optional(),
+});
+export type RunMatchingInput = z.infer<typeof runMatchingInputSchema>;
