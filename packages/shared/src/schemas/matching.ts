@@ -157,3 +157,28 @@ export const matchHistoryEntrySchema = z.object({
   topScore: scoreSchema.nullable(),
 });
 export type MatchHistoryEntry = z.infer<typeof matchHistoryEntrySchema>;
+
+// ---------- F6.2: resultado de disponibilidad real de un Worker ----------
+//
+// Extensión aditiva — solo cubre el factor de disponibilidad (Worker.status
+// + Assignments + fechas), sin scoring ni compliance ni categoría (F6.3).
+// `eligibility` acá es deliberadamente parcial: representa únicamente si
+// la disponibilidad por sí sola descalifica al Worker (INELIGIBLE cuando
+// sí), nunca una elegibilidad final — esa combina todos los factores en
+// WorkerMatchResult (F6.3). Nunca se sube de INELIGIBLE a ELIGIBLE en un
+// paso posterior por este mismo factor; los demás factores solo pueden
+// agregar más razones de exclusión, nunca revertir esta.
+export const workerAvailabilityResultSchema = z.object({
+  workerId: z.string(),
+  availabilityStatus: availabilityStatusSchema,
+  eligibility: matchEligibilitySchema,
+  hasDateConflict: z.boolean(),
+  // Ids de Assignment (SCHEDULED|ACTIVE únicamente — COMPLETED/TERMINATED
+  // nunca bloquean) cuyo rango de fechas solapa con el Job Order evaluado.
+  conflictingAssignmentIds: z.array(z.string()),
+  evaluatedJobOrderStart: z.string(),
+  evaluatedJobOrderEnd: z.string().nullable(),
+  reason: z.string().min(1),
+  warnings: z.array(z.string()),
+});
+export type WorkerAvailabilityResult = z.infer<typeof workerAvailabilityResultSchema>;
