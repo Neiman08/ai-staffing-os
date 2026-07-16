@@ -114,6 +114,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "documents.view",
     "documents.create",
     "agents.view",
+    "matching.view", // F6.1
+    "matching.run", // F6.1
   ],
   Compliance: [
     "candidates.view",
@@ -130,6 +132,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "contacts.view",
     "jobOrders.view",
     "agents.view",
+    "matching.view", // F6.1: solo vista — nunca matching.run
   ],
   Payroll: [
     "timeEntries.view",
@@ -193,6 +196,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "contacts.view",
     "timeEntries.view",
     "agents.view",
+    "matching.view", // F6.1: solo vista — nunca matching.run
   ],
   Marketing: [
     "companies.view",
@@ -229,6 +233,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "followUps.view",
     "agents.view",
     "invoices.view", // F5.8
+    "matching.view", // F6.1: solo vista — nunca matching.run
   ],
 };
 

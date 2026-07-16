@@ -9,7 +9,7 @@
     "start:deploy": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "dotenv -e ../../.env -- node --import tsx --test --test-concurrency=1 src/**/*.test.ts"
+    "test": "dotenv -e ../../.env -- node --import tsx --test --test-concurrency=1 $(find src -name '*.test.ts' | sort)"
   },
   "dependencies": {
     "@ai-staffing-os/agents": "workspace:*",

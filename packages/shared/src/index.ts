@@ -23,3 +23,4 @@ export * from "./schemas/discovery";
 export * from "./schemas/branding";
 export * from "./schemas/production-readiness";
 export * from "./schemas/public";
+export * from "./schemas/matching";

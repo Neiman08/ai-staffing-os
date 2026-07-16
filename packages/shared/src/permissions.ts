@@ -30,6 +30,8 @@ const SPECIAL_PERMISSION_KEYS = [
   "settings.manage",
   "users.manage",
   "invoices.send", // F5.8: transición DRAFT->SENT, distinta de invoices.update (ver permissions.ts comentario histórico)
+  "matching.view", // F6.1: ver resultados de matching Job Order <-> Worker
+  "matching.run", // F6.1: disparar una corrida de matching — nunca crea Assignments, solo propone
 ] as const;
 
 const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number], string> = {
@@ -43,6 +45,8 @@ const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number]
   "settings.manage": "Manage tenant settings",
   "users.manage": "Manage users and roles",
   "invoices.send": "Send invoices to clients",
+  "matching.view": "View AI matching results",
+  "matching.run": "Run AI matching",
 };
 
 type Resource = (typeof PERMISSION_RESOURCES)[number];
