@@ -490,7 +490,21 @@ model Company {
   verificationStatus      CompanyVerificationStatus @default(UNVERIFIED)
   confidenceScore         Float? // 0–1, solo cuando verificationStatus != UNVERIFIED
   lastVerifiedAt          DateTime?
+  // Evidencia estructurada del descubrimiento/clasificación de esta
+  // Company — nunca reemplaza industryId (FK real, sigue siendo la
+  // fuente de verdad de la industria). Estructura versionada
+  // (schemaVersion), generada exclusivamente en backend, nunca se
+  // confía en un valor enviado por el frontend. Shape: { schemaVersion,
+  // searchTermsMatched: string[], providerBusinessTypes: string[],
+  // detectedBusinessType, detectedSector, crmIndustryId, crmIndustryName,
+  // classificationMode: "EXACT"|"APPROXIMATE"|"FALLBACK"|"UNCLASSIFIED",
+  // classificationConfidence, classificationReason, providerPlaceId,
+  // canonicalDomain, originalWebsite, canonicalWebsite, originalPhone,
+  // normalizedPhone, discoveredAt, lastUpdatedAt — ver
+  // docs/ILLINOIS_COMPANY_BACKFILL_PLAN.md §5 y §14.
+  discoveryMetadata       Json?
   contacts                Contact[]
+  contactPoints           CompanyContactPoint[]
   leads                   Lead[]
   opportunities           Opportunity[]
   jobOrders               JobOrder[]
@@ -570,6 +584,60 @@ model Contact {
   @@index([tenantId])
   @@index([companyId])
   @@index([tenantId, emailVerificationStatus])
+}
+
+// Tipo de punto de contacto organizacional — nunca un nombre de
+// persona. Vocabulario cerrado, aprobado por el PO.
+enum CompanyContactPointType {
+  INFO
+  SALES
+  HR
+  RECRUITING
+  CAREERS
+  SUPPORT
+  PRESS
+  BILLING
+  PROCUREMENT
+  OTHER
+}
+
+// Representa honestamente un punto de contacto público de la empresa
+// (info@, sales@, hr@...) que NO tiene un dueño
+// humano identificado — nunca se convierte en Contact, nunca se le
+// asigna un nombre inventado. Mismo nivel de trazabilidad que Contact ya
+// tiene para personas (fuente, proveedor, verificación, confianza), pero
+// en un modelo separado para no contaminar "Contact = persona real".
+model CompanyContactPoint {
+  id                   String                  @id @default(cuid())
+  tenantId             String
+  companyId            String
+  company              Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // Siempre ya normalizado (trim + decodeURIComponent seguro + lowercase
+  // + validado) antes de llegar acá — la normalización vive en el
+  // servicio, nunca en este modelo.
+  email                String
+  type                 CompanyContactPointType @default(OTHER)
+  sourceUrl            String? // URL exacta de la página que lo reveló — obligatorio en la práctica cuando discoveryProvider = "Website Intelligence" (verificado en servicio, no en schema)
+  discoveryProvider    String? // "Website Intelligence" | "Hunter.io" | null si es manual
+  verificationProvider String?
+  // Reutiliza el enum ya existente de Contact.emailVerificationStatus —
+  // mismo vocabulario, mismo significado (INVALID nunca disponible para
+  // outreach, VERIFIED es el único estado que algún día lo habilitaría,
+  // RISKY/UNKNOWN quedan visibles pero no disponibles) — no se inventa
+  // un enum paralelo para el mismo concepto.
+  verificationStatus   EmailVerificationStatus @default(NOT_VERIFIED)
+  confidenceScore      Float?
+  discoveredAt         DateTime?
+  verifiedAt           DateTime?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  // Dedup por empresa+email normalizado — misma empresa puede tener
+  // varios puntos de contacto (info@ Y sales@ a la vez), pero nunca el
+  // mismo email dos veces.
+  @@unique([companyId, email])
+  @@index([tenantId])
+  @@index([tenantId, verificationStatus])
 }
 
 model Lead {

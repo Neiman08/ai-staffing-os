@@ -1,0 +1,2523 @@
+{
+  "snapshotHash": "4a82bb1a5c477090cd783c97042da2993bcca1c2dd0f6f4a6803277e9d2222d6",
+  "missionTaskId": "cmrljuyp5001ls7pqgql8lfh4",
+  "discoverTaskIds": [
+    "cmrljv2ef001ns7pqtcb1zf03",
+    "cmrljxah100e0s7pqhym7zwyp",
+    "cmrljzr5y00qds7pq70d47uw6"
+  ],
+  "groups": [
+    {
+      "providerPlaceId": "11373079146704515028",
+      "canonicalCompanyId": "cmrljv2tw001ps7pqgt8bsql0",
+      "duplicateCompanyIds": [],
+      "survivingLeadId": "cmrljwmyq0078s7pqe3g5rqth",
+      "leadIdsToRemove": [],
+      "leadActivityIdsToReassign": [],
+      "companyActivityIdsToReassign": [],
+      "contactPointProposals": [
+        {
+          "email": "precisionelectricgroup@gmail.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=11373079146704515028&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "11373079146704515028",
+        "canonicalDomain": "precisionelectricgroup.net",
+        "originalWebsite": "https://www.precisionelectricgroup.net/?utm_source=google&utm_medium=wix_google_business_profile&utm_campaign=3584818988083392025",
+        "canonicalWebsite": "https://www.precisionelectricgroup.net",
+        "originalPhone": "+1 224-295-9085",
+        "normalizedPhone": "+12242959085",
+        "discoveredAt": "2026-07-15T03:58:05.588Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.297Z",
+        "mergedFromCompanyIds": [],
+        "originalIndustryIds": [
+          "industry-construction"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "2846956597653772225",
+      "canonicalCompanyId": "cmrljv2u3001ss7pqw6w5lkrd",
+      "duplicateCompanyIds": [
+        "cmrljxavv00e8s7pqtxheiw4t",
+        "cmrljzrh100qls7pqjehxyqgu"
+      ],
+      "survivingLeadId": "cmrljwnyc007is7pq5laf4srx",
+      "leadIdsToRemove": [
+        "cmrljywsb00k5s7pqgsdk30dk",
+        "cmrlk1d8a00wis7pqq3frbqqa"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljywsd00k6s7pqgkebkyzq",
+        "cmrlk1d8d00wjs7pqcxuwd6vq"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljywr900k0s7pqmhvgq5g6",
+        "cmrlk1d7g00wds7pqxhi99lq0"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "office@be60010.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=2846956597653772225&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "2846956597653772225",
+        "canonicalDomain": "barringtonelectric.co",
+        "originalWebsite": "https://www.barringtonelectric.co/",
+        "canonicalWebsite": "https://www.barringtonelectric.co",
+        "originalPhone": "+1 847-737-3142",
+        "normalizedPhone": "+18477373142",
+        "discoveredAt": "2026-07-15T03:58:05.594Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.297Z",
+        "mergedFromCompanyIds": [
+          "cmrljxavv00e8s7pqtxheiw4t",
+          "cmrljzrh100qls7pqjehxyqgu"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "4170288434281438949",
+      "canonicalCompanyId": "cmrljv2u6001vs7pqkkiijjj3",
+      "duplicateCompanyIds": [],
+      "survivingLeadId": "cmrljwoz2007ss7pqbg41iogu",
+      "leadIdsToRemove": [],
+      "leadActivityIdsToReassign": [],
+      "companyActivityIdsToReassign": [],
+      "contactPointProposals": [
+        {
+          "email": "vandpelectric@gmail.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=4170288434281438949&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "4170288434281438949",
+        "canonicalDomain": "vpelectricservice.com",
+        "originalWebsite": "http://vpelectricservice.com/",
+        "canonicalWebsite": "http://vpelectricservice.com",
+        "originalPhone": "+1 773-494-1700",
+        "normalizedPhone": "+17734941700",
+        "discoveredAt": "2026-07-15T03:58:05.598Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [],
+        "originalIndustryIds": [
+          "industry-construction"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "12352311065291319249",
+      "canonicalCompanyId": "cmrljv2u9001ys7pqy8j5zvp7",
+      "duplicateCompanyIds": [
+        "cmrljxavm00e5s7pqfc9849sz",
+        "cmrljzrgx00qis7pqqmzp1n71"
+      ],
+      "survivingLeadId": "cmrljwq6t0082s7pqt54x0bcl",
+      "leadIdsToRemove": [
+        "cmrljyvjx00jvs7pqoxe8jzsv",
+        "cmrlk1c2n00w8s7pqcn2pus2a"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljyvk000jws7pqtmkse2k6",
+        "cmrlk1c2p00w9s7pqn3htzk2p"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljyvin00jqs7pqtaad9cah",
+        "cmrlk1c1j00w3s7pqwpzgao0g"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@illinoisstateelectricllc.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=12352311065291319249&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "12352311065291319249",
+        "canonicalDomain": "illinoisstateelectricllc.com",
+        "originalWebsite": "http://illinoisstateelectricllc.com/",
+        "canonicalWebsite": "http://illinoisstateelectricllc.com",
+        "originalPhone": "+1 224-548-5548",
+        "normalizedPhone": "+12245485548",
+        "discoveredAt": "2026-07-15T03:58:05.601Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxavm00e5s7pqfc9849sz",
+          "cmrljzrgx00qis7pqqmzp1n71"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "4961521478557895245",
+      "canonicalCompanyId": "cmrljv2uc0021s7pqargc68cf",
+      "duplicateCompanyIds": [],
+      "survivingLeadId": "cmrljwr7v008cs7pqzne1yvva",
+      "leadIdsToRemove": [],
+      "leadActivityIdsToReassign": [],
+      "companyActivityIdsToReassign": [],
+      "contactPointProposals": [
+        {
+          "email": "ifxconstruction@gmail.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=4961521478557895245&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "4961521478557895245",
+        "canonicalDomain": "ifxconstruction.com",
+        "originalWebsite": "http://ifxconstruction.com/",
+        "canonicalWebsite": "http://ifxconstruction.com",
+        "originalPhone": "+1 224-829-4599",
+        "normalizedPhone": "+12248294599",
+        "discoveredAt": "2026-07-15T03:58:05.604Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [],
+        "originalIndustryIds": [
+          "industry-construction"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "14941829917970105967",
+      "canonicalCompanyId": "cmrljv35g0024s7pqc8x4xml5",
+      "duplicateCompanyIds": [],
+      "survivingLeadId": "cmrljwsf1008ms7pqzloeu6tj",
+      "leadIdsToRemove": [],
+      "leadActivityIdsToReassign": [],
+      "companyActivityIdsToReassign": [],
+      "contactPointProposals": [
+        {
+          "email": "automationtechinc@yahoo.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=14941829917970105967&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "14941829917970105967",
+        "canonicalDomain": "automationtechnologiesinc.com",
+        "originalWebsite": "http://www.automationtechnologiesinc.com/",
+        "canonicalWebsite": "http://www.automationtechnologiesinc.com",
+        "originalPhone": "+1 847-984-0882",
+        "normalizedPhone": "+18479840882",
+        "discoveredAt": "2026-07-15T03:58:06.003Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [],
+        "originalIndustryIds": [
+          "industry-construction"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "10954719678406652448",
+      "canonicalCompanyId": "cmrljv35o0027s7pqptusrgpm",
+      "duplicateCompanyIds": [
+        "cmrljxb4500ehs7pqjhgco5mq",
+        "cmrljzrnd00qus7pql5h0e36k"
+      ],
+      "survivingLeadId": "cmrljwtev008ws7pqn4jhqrnd",
+      "leadIdsToRemove": [
+        "cmrljz00800kzs7pqet6x1nvg",
+        "cmrlk1g9900xcs7pqp45j21ne"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz00a00l0s7pqn77yf69g",
+        "cmrlk1g9b00xds7pqk4tgenst"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljyzyy00kus7pqqxylc9p2",
+        "cmrlk1g8e00x7s7pq0jrbf9m1"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "10954719678406652448",
+        "canonicalDomain": "br-automation.com",
+        "originalWebsite": "http://www.br-automation.com/",
+        "canonicalWebsite": "http://www.br-automation.com",
+        "originalPhone": "+1 630-629-1100",
+        "normalizedPhone": "+16306291100",
+        "discoveredAt": "2026-07-15T03:58:06.012Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxb4500ehs7pqjhgco5mq",
+          "cmrljzrnd00qus7pql5h0e36k"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "13618664849965182804",
+      "canonicalCompanyId": "cmrljv35x002as7pqnx3q0kjo",
+      "duplicateCompanyIds": [
+        "cmrljxb4a00eks7pqlnnswes9",
+        "cmrljzrnj00qxs7pqovhmyh3y"
+      ],
+      "survivingLeadId": "cmrljwujp0096s7pqp6q4qqxt",
+      "leadIdsToRemove": [
+        "cmrljz0xz00l9s7pqd07mv3kd",
+        "cmrlk1hfa00xms7pqh38cpkg5"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz0y200las7pqfdkd4owq",
+        "cmrlk1hfb00xns7pq653b7sqq"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz0wq00l4s7pqpoy1sovm",
+        "cmrlk1hea00xhs7pq6fqjs0yl"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "13618664849965182804",
+        "canonicalDomain": "us.mitsubishielectric.com",
+        "originalWebsite": "https://us.mitsubishielectric.com/fa/en/",
+        "canonicalWebsite": "https://us.mitsubishielectric.com/fa/en",
+        "originalPhone": "+1 847-478-2100",
+        "normalizedPhone": "+18474782100",
+        "discoveredAt": "2026-07-15T03:58:06.020Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxb4a00eks7pqlnnswes9",
+          "cmrljzrnj00qxs7pqovhmyh3y"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "3242067883281530976",
+      "canonicalCompanyId": "cmrljv366002ds7pqkp3hh5j0",
+      "duplicateCompanyIds": [
+        "cmrljxb4e00ens7pq7od61ip0",
+        "cmrljzrnp00r0s7pqxgmvxu4p"
+      ],
+      "survivingLeadId": "cmrljwvfa009gs7pq6k2vkagz",
+      "leadIdsToRemove": [
+        "cmrljz1t000ljs7pq3wd8a4ep",
+        "cmrlk1i9y00xws7pq4cm87r5o"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz1t200lks7pqmnvohq2t",
+        "cmrlk1i9z00xxs7pq0y6ziybe"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz1ru00les7pq5edttayo",
+        "cmrlk1i9500xrs7pqvc9afhhm"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "mail@swissautomation.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=3242067883281530976&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "3242067883281530976",
+        "canonicalDomain": "swissautomation.com",
+        "originalWebsite": "http://www.swissautomation.com/",
+        "canonicalWebsite": "http://www.swissautomation.com",
+        "originalPhone": "+1 847-381-4405",
+        "normalizedPhone": "+18473814405",
+        "discoveredAt": "2026-07-15T03:58:06.029Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxb4e00ens7pq7od61ip0",
+          "cmrljzrnp00r0s7pqxgmvxu4p"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "16273400014072176748",
+      "canonicalCompanyId": "cmrljv36d002gs7pq65fcducj",
+      "duplicateCompanyIds": [
+        "cmrljxb4k00eqs7pq3g1ei2ii",
+        "cmrljzrnt00r3s7pqsbl509bm"
+      ],
+      "survivingLeadId": "cmrljwwg8009qs7pqv9akzh4a",
+      "leadIdsToRemove": [
+        "cmrljz2sj00lts7pqzb7l5nd3",
+        "cmrlk1j8n00y6s7pqwoet1yy5"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz2sm00lus7pqoph3x9yp",
+        "cmrlk1j8p00y7s7pqtsst2e18"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz2r700los7pqmvbu540u",
+        "cmrlk1j7p00y1s7pqeu3atug7"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "sales@ipautomationinc.com",
+          "wasUrlEncoded": false,
+          "type": "SALES",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=16273400014072176748&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "16273400014072176748",
+        "canonicalDomain": "ipautomationinc.com",
+        "originalWebsite": "https://ipautomationinc.com/",
+        "canonicalWebsite": "https://ipautomationinc.com",
+        "originalPhone": "+1 630-656-1215",
+        "normalizedPhone": "+16306561215",
+        "discoveredAt": "2026-07-15T03:58:06.036Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxb4k00eqs7pq3g1ei2ii",
+          "cmrljzrnt00r3s7pqsbl509bm"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "12264740206898831831",
+      "canonicalCompanyId": "cmrljv3gr002js7pqbc5phtl3",
+      "duplicateCompanyIds": [
+        "cmrljxbbu00ews7pqvmxa6yli",
+        "cmrljzrvw00r9s7pqfjio5lba"
+      ],
+      "survivingLeadId": "cmrljwxba00a0s7pqamkl4z5z",
+      "leadIdsToRemove": [
+        "cmrljz54a00mds7pqt2h8p2w3",
+        "cmrlk1l1z00yqs7pq7in1fxhw"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz54c00mes7pqynaa024p",
+        "cmrlk1l2100yrs7pq21o9wd4i"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz52y00m8s7pqgp4frjrs",
+        "cmrlk1l1400yls7pqih9njupe"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "12264740206898831831",
+        "canonicalDomain": "fourseasonsheatingcooling.com",
+        "originalWebsite": "https://www.fourseasonsheatingcooling.com/?utm_source=gbp&utm_medium=organic&utm_campaign=gbp-chicago",
+        "canonicalWebsite": "https://www.fourseasonsheatingcooling.com",
+        "originalPhone": "+1 773-219-2190",
+        "normalizedPhone": "+17732192190",
+        "discoveredAt": "2026-07-15T03:58:06.411Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbbu00ews7pqvmxa6yli",
+          "cmrljzrvw00r9s7pqfjio5lba"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "1588736697443636104",
+      "canonicalCompanyId": "cmrljv3gz002ms7pq2owrlaiq",
+      "duplicateCompanyIds": [
+        "cmrljxbc100ezs7pqlfeb0ztg",
+        "cmrljzrw400rcs7pqx3snhw1v"
+      ],
+      "survivingLeadId": "cmrljwy6u00aas7pq6adyr41f",
+      "leadIdsToRemove": [
+        "cmrljz66500mns7pqpzenm5bd",
+        "cmrlk1m0100z0s7pqnc7qzudo"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz66600mos7pqrt96fpdh",
+        "cmrlk1m0200z1s7pq4m9upnho"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz65800mis7pqdatfvdou",
+        "cmrlk1lz700yvs7pq6t91bjf9"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@bescoair.net",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=1588736697443636104&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "1588736697443636104",
+        "canonicalDomain": "bescoair.net",
+        "originalWebsite": "https://www.bescoair.net/service-area/chicago-il/?utm_source=google&utm_medium=organic&utm_campaign=GBPListing-Chicago-IL",
+        "canonicalWebsite": "https://www.bescoair.net/service-area/chicago-il",
+        "originalPhone": "+1 312-809-2695",
+        "normalizedPhone": "+13128092695",
+        "discoveredAt": "2026-07-15T03:58:06.418Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.298Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbc100ezs7pqlfeb0ztg",
+          "cmrljzrw400rcs7pqx3snhw1v"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "4854606050074415987",
+      "canonicalCompanyId": "cmrljv3h6002ps7pqx20dmqmq",
+      "duplicateCompanyIds": [
+        "cmrljxbca00f2s7pqmekxs5yo",
+        "cmrljzrw800rfs7pqcgv8o75y"
+      ],
+      "survivingLeadId": "cmrljwyz200aks7pq5bh73mug",
+      "leadIdsToRemove": [
+        "cmrljz7c700mxs7pqf06x5t67",
+        "cmrlk1n3y00zas7pqyx3ck3pb"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz7cc00mys7pq7ss8gfqw",
+        "cmrlk1n4000zbs7pq5k4dapou"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz7av00mss7pqm7thjrv6",
+        "cmrlk1n3200z5s7pqnseuxu9e"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@nghvac.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=4854606050074415987&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "4854606050074415987",
+        "canonicalDomain": "nghvac.com",
+        "originalWebsite": "https://www.nghvac.com/?utm_campaign=gmb",
+        "canonicalWebsite": "https://www.nghvac.com",
+        "originalPhone": "+1 847-943-9999",
+        "normalizedPhone": "+18479439999",
+        "discoveredAt": "2026-07-15T03:58:06.425Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbca00f2s7pqmekxs5yo",
+          "cmrljzrw800rfs7pqcgv8o75y"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "10658324638591931749",
+      "canonicalCompanyId": "cmrljv3he002ss7pqubv11g3b",
+      "duplicateCompanyIds": [
+        "cmrljxbci00f5s7pq24x4klh9",
+        "cmrljzrwd00ris7pq02bkmdgz"
+      ],
+      "survivingLeadId": "cmrljwzy200aus7pqna27qar8",
+      "leadIdsToRemove": [
+        "cmrljz8cz00n7s7pqkvyqae9i",
+        "cmrlk1o2700zks7pqkf8o7v5e"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz8d100n8s7pqaif3qw29",
+        "cmrlk1o2900zls7pqbsh3ixq8"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz8by00n2s7pqu61iualw",
+        "cmrlk1o1d00zfs7pq1d3evp69"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@ecotemphvac.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=10658324638591931749&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "10658324638591931749",
+        "canonicalDomain": "ecotemphvac.com",
+        "originalWebsite": "https://ecotemphvac.com/service-areas/palatine-il/",
+        "canonicalWebsite": "https://ecotemphvac.com/service-areas/palatine-il",
+        "originalPhone": "+1 224-253-8131",
+        "normalizedPhone": "+12242538131",
+        "discoveredAt": "2026-07-15T03:58:06.433Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbci00f5s7pq24x4klh9",
+          "cmrljzrwd00ris7pq02bkmdgz"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "6987797815099514921",
+      "canonicalCompanyId": "cmrljv3hk002vs7pqrt7ycx0c",
+      "duplicateCompanyIds": [
+        "cmrljxbcq00f8s7pqbbczeh43",
+        "cmrljzrwh00rls7pqmixkauew"
+      ],
+      "survivingLeadId": "cmrljx0s800b4s7pqq1odqate",
+      "leadIdsToRemove": [
+        "cmrljz99p00nhs7pqzlkzny4g",
+        "cmrlk1p3y00zus7pqrharm4jj"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljz99q00nis7pqvviipjms",
+        "cmrlk1p4000zvs7pq42uv08bw"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljz98q00ncs7pq60z9gxid",
+        "cmrlk1p3400zps7pqsyx44wwu"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "eric@residentialheatingcooling.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=6987797815099514921&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "6987797815099514921",
+        "canonicalDomain": "residentialheatingcooling.com",
+        "originalWebsite": "https://www.residentialheatingcooling.com/",
+        "canonicalWebsite": "https://www.residentialheatingcooling.com",
+        "originalPhone": "+1 847-637-5331",
+        "normalizedPhone": "+18476375331",
+        "discoveredAt": "2026-07-15T03:58:06.439Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbcq00f8s7pqbbczeh43",
+          "cmrljzrwh00rls7pqmixkauew"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "8433982743299418491",
+      "canonicalCompanyId": "cmrljv3qo002ys7pqxqimsdl0",
+      "duplicateCompanyIds": [
+        "cmrljxbjq00fbs7pqoz98chyi",
+        "cmrljzs3900ros7pqjkphozce"
+      ],
+      "survivingLeadId": "cmrljx1qc00bes7pqc75r5d6x",
+      "leadIdsToRemove": [
+        "cmrljzc5i00nrs7pqr4gevsau",
+        "cmrlk1pyd0104s7pqxguesvbr"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzc5k00nss7pqd6uo059v",
+        "cmrlk1pye0105s7pq9vjw6s2m"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzc4g00nms7pqoezifnhn",
+        "cmrlk1pxd00zzs7pqqtsv372k"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "8433982743299418491",
+        "canonicalDomain": "aligneddc.com",
+        "originalWebsite": "https://www.aligneddc.com/",
+        "canonicalWebsite": "https://www.aligneddc.com",
+        "originalPhone": "+1 469-213-6697",
+        "normalizedPhone": "+14692136697",
+        "discoveredAt": "2026-07-15T03:58:06.768Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbjq00fbs7pqoz98chyi",
+          "cmrljzs3900ros7pqjkphozce"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "11364895635232300269",
+      "canonicalCompanyId": "cmrljv3qx0031s7pqab3r6svq",
+      "duplicateCompanyIds": [
+        "cmrljxbjw00fes7pqbbn0oocw",
+        "cmrljzs3g00rrs7pqqcruxckk"
+      ],
+      "survivingLeadId": "cmrljx2xs00bos7pqzdmp9eli",
+      "leadIdsToRemove": [
+        "cmrljzdkb00o1s7pqzux36s2c",
+        "cmrlk1qyr010es7pqvfcyrf66"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzdkc00o2s7pqinxvhsgf",
+        "cmrlk1qyu010fs7pqv79ulky1"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzdjj00nws7pq947sagwv",
+        "cmrlk1qxw0109s7pqge956aeq"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "11364895635232300269",
+        "canonicalDomain": null,
+        "originalWebsite": null,
+        "canonicalWebsite": null,
+        "originalPhone": "+1 916-286-3000",
+        "normalizedPhone": "+19162863000",
+        "discoveredAt": "2026-07-15T03:58:06.777Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbjw00fes7pqbbn0oocw",
+          "cmrljzs3g00rrs7pqqcruxckk"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "124802527119718327",
+      "canonicalCompanyId": "cmrljv3r40034s7pqchrusar9",
+      "duplicateCompanyIds": [
+        "cmrljxbk200fhs7pqmhde4tg7",
+        "cmrljzs3n00rus7pqb0jyqu7s"
+      ],
+      "survivingLeadId": "cmrljx3ye00bys7pq2eaqtytl",
+      "leadIdsToRemove": [
+        "cmrljzf0l00obs7pqjj8m8h1c",
+        "cmrlk1rvj010os7pqx28zyrwl"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzf0n00ocs7pqeuk6950z",
+        "cmrlk1rvl010ps7pqv5qk5g5d"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzezg00o6s7pq45frq710",
+        "cmrlk1rum010js7pqcd2vvuqh"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@primedatacenters.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=124802527119718327&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "124802527119718327",
+        "canonicalDomain": "primedatacenters.com",
+        "originalWebsite": "https://www.primedatacenters.com/",
+        "canonicalWebsite": "https://www.primedatacenters.com",
+        "originalPhone": "+1 888-774-6330",
+        "normalizedPhone": "+18887746330",
+        "discoveredAt": "2026-07-15T03:58:06.784Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbk200fhs7pqmhde4tg7",
+          "cmrljzs3n00rus7pqb0jyqu7s"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "17781071207152383589",
+      "canonicalCompanyId": "cmrljv3ra0037s7pqih5m0kfg",
+      "duplicateCompanyIds": [
+        "cmrljxbk700fks7pq2r9px3br",
+        "cmrljzs3t00rxs7pq7ex7lzqn"
+      ],
+      "survivingLeadId": "cmrljx4w000c8s7pqtacnij98",
+      "leadIdsToRemove": [
+        "cmrljziy800ols7pq2lfame0l",
+        "cmrlk1sx2010ys7pqm660m72b"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljziyb00oms7pq7r90c9ic",
+        "cmrlk1sx4010zs7pqsytw4ui4"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzix100ogs7pqbxptq3hi",
+        "cmrlk1sw8010ts7pqxn6w1531"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "press@equinix.com",
+          "wasUrlEncoded": true,
+          "type": "PRESS",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=17781071207152383589&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "17781071207152383589",
+        "canonicalDomain": "equinix.com",
+        "originalWebsite": "https://www.equinix.com/data-centers/americas-colocation/united-states-colocation/chicago-data-centers/ch3",
+        "canonicalWebsite": "https://www.equinix.com/data-centers/americas-colocation/united-states-colocation/chicago-data-centers/ch3",
+        "originalPhone": "+1 866-378-4649",
+        "normalizedPhone": "+18663784649",
+        "discoveredAt": "2026-07-15T03:58:06.790Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbk700fks7pq2r9px3br",
+          "cmrljzs3t00rxs7pq7ex7lzqn"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "2806291488738564511",
+      "canonicalCompanyId": "cmrljv3rg003as7pqldbf28hy",
+      "duplicateCompanyIds": [
+        "cmrljxbkd00fns7pqwfbmu1nm",
+        "cmrljzs3y00s0s7pqyzqleeal"
+      ],
+      "survivingLeadId": "cmrljx5qv00cis7pqtivm9tal",
+      "leadIdsToRemove": [
+        "cmrljzkgw00ovs7pqvwdgso0r",
+        "cmrlk1tvr0118s7pq1akzf9ax"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzkh000ows7pq0ruwlhr1",
+        "cmrlk1tvt0119s7pqp2rte225"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzkff00oqs7pqwxs5hueh",
+        "cmrlk1tuw0113s7pqaklwth64"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@t5datacenters.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=2806291488738564511&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "2806291488738564511",
+        "canonicalDomain": "t5datacenters.com",
+        "originalWebsite": "https://t5datacenters.com/",
+        "canonicalWebsite": "https://t5datacenters.com",
+        "originalPhone": "+1 888-239-7133",
+        "normalizedPhone": "+18882397133",
+        "discoveredAt": "2026-07-15T03:58:06.796Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbkd00fns7pqwfbmu1nm",
+          "cmrljzs3y00s0s7pqyzqleeal"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "2656006021938344586",
+      "canonicalCompanyId": "cmrljv3yd003ds7pqengzc2u4",
+      "duplicateCompanyIds": [
+        "cmrljxbpx00fqs7pqqq7let91",
+        "cmrljzs9y00s3s7pqc7ioowed"
+      ],
+      "survivingLeadId": "cmrljx6p900css7pq9gryzs9y",
+      "leadIdsToRemove": [
+        "cmrljzmfm00p5s7pq0e6vtwqp",
+        "cmrlk1uvx011is7pqluj3xw26"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrlk1uvz011js7pqm5vp2v8o",
+        "cmrljzmfq00p6s7pqc6o9pcq7"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzme500p0s7pq4072glsm",
+        "cmrlk1uv0011ds7pq8nrbc9me"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "2656006021938344586",
+        "canonicalDomain": "hudsoncontractors.com",
+        "originalWebsite": "https://hudsoncontractors.com/",
+        "canonicalWebsite": "https://hudsoncontractors.com",
+        "originalPhone": "+1 773-227-5777",
+        "normalizedPhone": "+17732275777",
+        "discoveredAt": "2026-07-15T03:58:07.045Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbpx00fqs7pqqq7let91",
+          "cmrljzs9y00s3s7pqc7ioowed"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "13507967343876431264",
+      "canonicalCompanyId": "cmrljv3yh003gs7pqri3u0l4p",
+      "duplicateCompanyIds": [
+        "cmrljxbq400fts7pqirxb91yu",
+        "cmrljzsa400s6s7pq8ewxopto"
+      ],
+      "survivingLeadId": "cmrljx7k300d2s7pqixvu0u1p",
+      "leadIdsToRemove": [
+        "cmrljzo0900pfs7pqtpztwyfo",
+        "cmrlk1vvj011ss7pqxk9uao7t"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzo0b00pgs7pqwr9cl9p8",
+        "cmrlk1vvl011ts7pqrrpm4wjd"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljznz200pas7pqdde86c8y",
+        "cmrlk1vus011ns7pqa2cn8ith"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "support@elementcritical.com",
+          "wasUrlEncoded": false,
+          "type": "SUPPORT",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=13507967343876431264&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "13507967343876431264",
+        "canonicalDomain": "elementcritical.com",
+        "originalWebsite": "https://elementcritical.com/",
+        "canonicalWebsite": "https://elementcritical.com",
+        "originalPhone": "+1 888-298-5375",
+        "normalizedPhone": "+18882985375",
+        "discoveredAt": "2026-07-15T03:58:07.048Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbq400fts7pqirxb91yu",
+          "cmrljzsa400s6s7pq8ewxopto"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "11684727250083843743",
+      "canonicalCompanyId": "cmrljv3yk003js7pqod98gdhn",
+      "duplicateCompanyIds": [
+        "cmrljxbqc00fws7pqqav7j2yz",
+        "cmrljzsab00s9s7pqcs7eh5cp"
+      ],
+      "survivingLeadId": "cmrljx8jh00dcs7pqpkw21pni",
+      "leadIdsToRemove": [
+        "cmrljzpca00pps7pqt4d7bih3",
+        "cmrlk1wr70122s7pq6jw4nwar"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzpcb00pqs7pqslth1gq8",
+        "cmrlk1wrb0123s7pqqlu3h2re"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzpb000pks7pqw61o8shl",
+        "cmrlk1wq1011xs7pq6xwsbned"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "support@elementcritical.com",
+          "wasUrlEncoded": false,
+          "type": "SUPPORT",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=11684727250083843743&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "11684727250083843743",
+        "canonicalDomain": "elementcritical.com",
+        "originalWebsite": "http://www.elementcritical.com/",
+        "canonicalWebsite": "http://www.elementcritical.com",
+        "originalPhone": "+1 630-686-6492",
+        "normalizedPhone": "+16306866492",
+        "discoveredAt": "2026-07-15T03:58:07.052Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbqc00fws7pqqav7j2yz",
+          "cmrljzsab00s9s7pqcs7eh5cp"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "5206646142845087145",
+      "canonicalCompanyId": "cmrljv3yn003ms7pqgsl6tgij",
+      "duplicateCompanyIds": [
+        "cmrljxbqk00fzs7pq1pfdv0eh",
+        "cmrljzsag00scs7pq2y7uwf9a"
+      ],
+      "survivingLeadId": "cmrljx9k700dms7pqlg55vt69",
+      "leadIdsToRemove": [
+        "cmrljzq8p00pzs7pqhnuvmfzq",
+        "cmrlk1xpw012cs7pq73251j4k"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzq8r00q0s7pq9ju89gxb",
+        "cmrlk1xpx012ds7pq28si77g2"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzq7i00pus7pqfxw5dtog",
+        "cmrlk1xp40127s7pqxf91selj"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "chamano@iceillinois.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=5206646142845087145&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "5206646142845087145",
+        "canonicalDomain": "webapps.dot.illinois.gov",
+        "originalWebsite": "https://webapps.dot.illinois.gov/UCP/ExternalContractor/Index?AutoId=110686",
+        "canonicalWebsite": "https://webapps.dot.illinois.gov/UCP/ExternalContractor/Index?AutoId=110686",
+        "originalPhone": "+1 847-542-7500",
+        "normalizedPhone": "+18475427500",
+        "discoveredAt": "2026-07-15T03:58:07.055Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbqk00fzs7pq1pfdv0eh",
+          "cmrljzsag00scs7pq2y7uwf9a"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "1878062592907716920",
+      "canonicalCompanyId": "cmrljv3yq003ps7pqug8oxvo8",
+      "duplicateCompanyIds": [
+        "cmrljxbqr00g2s7pqu27ufa30",
+        "cmrljzsao00sfs7pqh1mnyka6"
+      ],
+      "survivingLeadId": "cmrljxafh00dws7pq4mqd01pv",
+      "leadIdsToRemove": [
+        "cmrljzr4a00q9s7pqs567yuff",
+        "cmrlk1you012ms7pqagepytjx"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrljzr4d00qas7pq7xdxv4y7",
+        "cmrlk1yov012ns7pq16qsvowu"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrljzr2t00q4s7pq2ev4j0ss",
+        "cmrlk1yo8012hs7pqo64s1drw"
+      ],
+      "contactPointProposals": [],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-construction",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "1878062592907716920",
+        "canonicalDomain": "levelconstruction.net",
+        "originalWebsite": "https://levelconstruction.net/",
+        "canonicalWebsite": "https://levelconstruction.net",
+        "originalPhone": "+1 773-930-4695",
+        "normalizedPhone": "+17739304695",
+        "discoveredAt": "2026-07-15T03:58:07.057Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljxbqr00g2s7pqu27ufa30",
+          "cmrljzsao00sfs7pqh1mnyka6"
+        ],
+        "originalIndustryIds": [
+          "industry-construction",
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "11906480824234982217",
+      "canonicalCompanyId": "cmrljxavf00e2s7pqcrs9nkw4",
+      "duplicateCompanyIds": [
+        "cmrljzrgr00qfs7pq0ldii6vh"
+      ],
+      "survivingLeadId": "cmrljyujg00jls7pqjkiyeovb",
+      "leadIdsToRemove": [
+        "cmrlk1b9700vys7pqmngoujv5"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrlk1b9a00vzs7pqd1jxqkdf"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrlk1b8600vts7pqu8bgtuqc"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@allindustrialelectric.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=11906480824234982217&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-warehouse-logistics",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "11906480824234982217",
+        "canonicalDomain": "allindustrialelectric.com",
+        "originalWebsite": "http://www.allindustrialelectric.com/",
+        "canonicalWebsite": "http://www.allindustrialelectric.com",
+        "originalPhone": "+1 847-885-9600",
+        "normalizedPhone": "+18478859600",
+        "discoveredAt": "2026-07-15T03:59:49.322Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljzrgr00qfs7pq0ldii6vh"
+        ],
+        "originalIndustryIds": [
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "2941287720540737928",
+      "canonicalCompanyId": "cmrljxaw300ebs7pqsn9p1dqg",
+      "duplicateCompanyIds": [
+        "cmrljzrh600qos7pqkpatms98"
+      ],
+      "survivingLeadId": "cmrljyxxp00kfs7pqgu7k9r65",
+      "leadIdsToRemove": [
+        "cmrlk1e2s00wss7pqlibp7dfc"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrlk1e2u00wts7pqz6zcr0ib"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrlk1e1z00wns7pqhz4bd0fm"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "rossincelectric@gmail.com",
+          "wasUrlEncoded": false,
+          "type": "OTHER",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=2941287720540737928&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-warehouse-logistics",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "2941287720540737928",
+        "canonicalDomain": "rossincelectric.com",
+        "originalWebsite": "https://www.rossincelectric.com/",
+        "canonicalWebsite": "https://www.rossincelectric.com",
+        "originalPhone": "+1 773-332-6250",
+        "normalizedPhone": "+17733326250",
+        "discoveredAt": "2026-07-15T03:59:49.346Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljzrh600qos7pqkpatms98"
+        ],
+        "originalIndustryIds": [
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "1290084271891553428",
+      "canonicalCompanyId": "cmrljxb3y00ees7pq28kjokyj",
+      "duplicateCompanyIds": [
+        "cmrljzrn500qrs7pqp33npixn"
+      ],
+      "survivingLeadId": "cmrljyyyd00kps7pqchocdp99",
+      "leadIdsToRemove": [
+        "cmrlk1f3e00x2s7pq1j84x6vz"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrlk1f3g00x3s7pqev5bkzi9"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrlk1f2b00wxs7pqs7dgo5zo"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@bbsautomation.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=1290084271891553428&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-warehouse-logistics",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "1290084271891553428",
+        "canonicalDomain": "bbsautomation.com",
+        "originalWebsite": "http://www.bbsautomation.com/",
+        "canonicalWebsite": "http://www.bbsautomation.com",
+        "originalPhone": "+1 630-351-3000",
+        "normalizedPhone": "+16303513000",
+        "discoveredAt": "2026-07-15T03:59:49.629Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljzrn500qrs7pqp33npixn"
+        ],
+        "originalIndustryIds": [
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    },
+    {
+      "providerPlaceId": "16294945925634604276",
+      "canonicalCompanyId": "cmrljxb4r00ets7pqf871m1rl",
+      "duplicateCompanyIds": [
+        "cmrljzrnz00r6s7pqepgvdeb2"
+      ],
+      "survivingLeadId": "cmrljz3qk00m3s7pqlwj37vli",
+      "leadIdsToRemove": [
+        "cmrlk1k3900ygs7pq7a1e5ndk"
+      ],
+      "leadActivityIdsToReassign": [
+        "cmrlk1k3b00yhs7pqq75poy86"
+      ],
+      "companyActivityIdsToReassign": [
+        "cmrlk1k2900ybs7pqwy4ktscg"
+      ],
+      "contactPointProposals": [
+        {
+          "email": "info@genesisautomation.com",
+          "wasUrlEncoded": false,
+          "type": "INFO",
+          "discoveryProvider": "Website Intelligence (o Hunter.io, no distinguible retroactivamente en Company.email — ver limitación documentada)",
+          "sourceUrl": "https://maps.google.com/?cid=16294945925634604276&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+          "verificationStatus": "NOT_VERIFIED"
+        }
+      ],
+      "proposedDiscoveryMetadata": {
+        "schemaVersion": 1,
+        "searchTermsMatched": [
+          "electrical contractor",
+          "industrial automation",
+          "HVAC contractor",
+          "data center",
+          "mission critical contractor"
+        ],
+        "providerBusinessTypes": [],
+        "detectedBusinessType": null,
+        "detectedSector": null,
+        "crmIndustryId": "industry-warehouse-logistics",
+        "crmIndustryName": null,
+        "classificationMode": "FALLBACK",
+        "classificationConfidence": null,
+        "classificationReason": "Retenida del bug de iteración por industria (mission-orchestrator.ts) — no hay evidencia suficiente para reclasificar con confianza en este backfill retroactivo; la corrección real de clasificación queda para la corrección del pipeline (fuera de alcance de este backfill).",
+        "providerPlaceId": "16294945925634604276",
+        "canonicalDomain": "genesisautomation.com",
+        "originalWebsite": "http://www.genesisautomation.com/?utm_source=google&utm_medium=organic&utm_campaign=gmb",
+        "canonicalWebsite": "http://www.genesisautomation.com",
+        "originalPhone": "+1 630-587-0444",
+        "normalizedPhone": "+16305870444",
+        "discoveredAt": "2026-07-15T03:59:49.659Z",
+        "lastUpdatedAt": "2026-07-15T04:58:12.299Z",
+        "mergedFromCompanyIds": [
+          "cmrljzrnz00r6s7pqepgvdeb2"
+        ],
+        "originalIndustryIds": [
+          "industry-warehouse-logistics",
+          "industry-manufacturing"
+        ]
+      }
+    }
+  ],
+  "companiesSnapshot": [
+    {
+      "id": "cmrljv2tw001ps7pqgt8bsql0",
+      "name": "Precision Electric Group",
+      "website": "https://www.precisionelectricgroup.net/?utm_source=google&utm_medium=wix_google_business_profile&utm_campaign=3584818988083392025",
+      "phone": "+1 224-295-9085",
+      "email": "precisionelectricgroup@gmail.com",
+      "sourceUrl": "https://maps.google.com/?cid=11373079146704515028&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:05.588Z"
+    },
+    {
+      "id": "cmrljv2u3001ss7pqw6w5lkrd",
+      "name": "Barrington Electric",
+      "website": "https://www.barringtonelectric.co/",
+      "phone": "+1 847-737-3142",
+      "email": "office@be60010.com",
+      "sourceUrl": "https://maps.google.com/?cid=2846956597653772225&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:05.595Z"
+    },
+    {
+      "id": "cmrljv2u6001vs7pqkkiijjj3",
+      "name": "VP Electric Service",
+      "website": "http://vpelectricservice.com/",
+      "phone": "+1 773-494-1700",
+      "email": "vandpelectric@gmail.com",
+      "sourceUrl": "https://maps.google.com/?cid=4170288434281438949&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:05.598Z"
+    },
+    {
+      "id": "cmrljv2u9001ys7pqy8j5zvp7",
+      "name": "Illinois State Electric, LLC",
+      "website": "http://illinoisstateelectricllc.com/",
+      "phone": "+1 224-548-5548",
+      "email": "info@illinoisstateelectricllc.com",
+      "sourceUrl": "https://maps.google.com/?cid=12352311065291319249&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:05.601Z"
+    },
+    {
+      "id": "cmrljv2uc0021s7pqargc68cf",
+      "name": "IFX Construction",
+      "website": "http://ifxconstruction.com/",
+      "phone": "+1 224-829-4599",
+      "email": "ifxconstruction@gmail.com",
+      "sourceUrl": "https://maps.google.com/?cid=4961521478557895245&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:05.604Z"
+    },
+    {
+      "id": "cmrljv35g0024s7pqc8x4xml5",
+      "name": "Automation Technology Inc",
+      "website": "http://www.automationtechnologiesinc.com/",
+      "phone": "+1 847-984-0882",
+      "email": "automationtechinc@yahoo.com",
+      "sourceUrl": "https://maps.google.com/?cid=14941829917970105967&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.004Z"
+    },
+    {
+      "id": "cmrljv35o0027s7pqptusrgpm",
+      "name": "B & R Industrial Automation Corporation",
+      "website": "http://www.br-automation.com/",
+      "phone": "+1 630-629-1100",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=10954719678406652448&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.013Z"
+    },
+    {
+      "id": "cmrljv35x002as7pqnx3q0kjo",
+      "name": "Mitsubishi Electric US, Inc., Industrial Automation",
+      "website": "https://us.mitsubishielectric.com/fa/en/",
+      "phone": "+1 847-478-2100",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=13618664849965182804&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.021Z"
+    },
+    {
+      "id": "cmrljv366002ds7pqkp3hh5j0",
+      "name": "Swiss Automation, Inc.",
+      "website": "http://www.swissautomation.com/",
+      "phone": "+1 847-381-4405",
+      "email": "mail@swissautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=3242067883281530976&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.030Z"
+    },
+    {
+      "id": "cmrljv36d002gs7pq65fcducj",
+      "name": "IP Automation Inc",
+      "website": "https://ipautomationinc.com/",
+      "phone": "+1 630-656-1215",
+      "email": "sales@ipautomationinc.com",
+      "sourceUrl": "https://maps.google.com/?cid=16273400014072176748&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.037Z"
+    },
+    {
+      "id": "cmrljv3gr002js7pqbc5phtl3",
+      "name": "Four Seasons Heating, Air Conditioning, Plumbing, Sewer & Electric",
+      "website": "https://www.fourseasonsheatingcooling.com/?utm_source=gbp&utm_medium=organic&utm_campaign=gbp-chicago",
+      "phone": "+1 773-219-2190",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=12264740206898831831&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.411Z"
+    },
+    {
+      "id": "cmrljv3gz002ms7pq2owrlaiq",
+      "name": "Besco Air Inc.",
+      "website": "https://www.bescoair.net/service-area/chicago-il/?utm_source=google&utm_medium=organic&utm_campaign=GBPListing-Chicago-IL",
+      "phone": "+1 312-809-2695",
+      "email": "info@bescoair.net",
+      "sourceUrl": "https://maps.google.com/?cid=1588736697443636104&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.419Z"
+    },
+    {
+      "id": "cmrljv3h6002ps7pqx20dmqmq",
+      "name": "Next Generation Heating & Cooling",
+      "website": "https://www.nghvac.com/?utm_campaign=gmb",
+      "phone": "+1 847-943-9999",
+      "email": "info@nghvac.com",
+      "sourceUrl": "https://maps.google.com/?cid=4854606050074415987&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.426Z"
+    },
+    {
+      "id": "cmrljv3he002ss7pqubv11g3b",
+      "name": "Eco Temp HVAC",
+      "website": "https://ecotemphvac.com/service-areas/palatine-il/",
+      "phone": "+1 224-253-8131",
+      "email": "info@ecotemphvac.com",
+      "sourceUrl": "https://maps.google.com/?cid=10658324638591931749&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.434Z"
+    },
+    {
+      "id": "cmrljv3hk002vs7pqrt7ycx0c",
+      "name": "Residential Heating & Cooling",
+      "website": "https://www.residentialheatingcooling.com/",
+      "phone": "+1 847-637-5331",
+      "email": "eric@residentialheatingcooling.com",
+      "sourceUrl": "https://maps.google.com/?cid=6987797815099514921&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.440Z"
+    },
+    {
+      "id": "cmrljv3qo002ys7pqxqimsdl0",
+      "name": "Aligned Data Center - Chicago ORD-01",
+      "website": "https://www.aligneddc.com/",
+      "phone": "+1 469-213-6697",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=8433982743299418491&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.769Z"
+    },
+    {
+      "id": "cmrljv3qx0031s7pqab3r6svq",
+      "name": "NTT Global Data Centers Americas - CH1",
+      "website": null,
+      "phone": "+1 916-286-3000",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=11364895635232300269&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.777Z"
+    },
+    {
+      "id": "cmrljv3r40034s7pqchrusar9",
+      "name": "Prime Data Centers",
+      "website": "https://www.primedatacenters.com/",
+      "phone": "+1 888-774-6330",
+      "email": "info@primedatacenters.com",
+      "sourceUrl": "https://maps.google.com/?cid=124802527119718327&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.785Z"
+    },
+    {
+      "id": "cmrljv3ra0037s7pqih5m0kfg",
+      "name": "Equinix Data Center - 1905 Elk Grove Village, Chicago",
+      "website": "https://www.equinix.com/data-centers/americas-colocation/united-states-colocation/chicago-data-centers/ch3",
+      "phone": "+1 866-378-4649",
+      "email": "%20press@equinix.com",
+      "sourceUrl": "https://maps.google.com/?cid=17781071207152383589&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.791Z"
+    },
+    {
+      "id": "cmrljv3rg003as7pqldbf28hy",
+      "name": "T5 Data Centers",
+      "website": "https://t5datacenters.com/",
+      "phone": "+1 888-239-7133",
+      "email": "info@t5datacenters.com",
+      "sourceUrl": "https://maps.google.com/?cid=2806291488738564511&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:06.796Z"
+    },
+    {
+      "id": "cmrljv3yd003ds7pqengzc2u4",
+      "name": "Hudson Construction Services Inc.",
+      "website": "https://hudsoncontractors.com/",
+      "phone": "+1 773-227-5777",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=2656006021938344586&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:07.046Z"
+    },
+    {
+      "id": "cmrljv3yh003gs7pqri3u0l4p",
+      "name": "Element Critical Data Center - Chicago Two",
+      "website": "https://elementcritical.com/",
+      "phone": "+1 888-298-5375",
+      "email": "support@elementcritical.com",
+      "sourceUrl": "https://maps.google.com/?cid=13507967343876431264&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:07.049Z"
+    },
+    {
+      "id": "cmrljv3yk003js7pqod98gdhn",
+      "name": "Element Critical Data Center - Chicago One",
+      "website": "http://www.elementcritical.com/",
+      "phone": "+1 630-686-6492",
+      "email": "support@elementcritical.com",
+      "sourceUrl": "https://maps.google.com/?cid=11684727250083843743&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:07.052Z"
+    },
+    {
+      "id": "cmrljv3yn003ms7pqgsl6tgij",
+      "name": "Illinois Construction & Environmental Consulting",
+      "website": "https://webapps.dot.illinois.gov/UCP/ExternalContractor/Index?AutoId=110686",
+      "phone": "+1 847-542-7500",
+      "email": "chamano@iceillinois.com",
+      "sourceUrl": "https://maps.google.com/?cid=5206646142845087145&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:07.055Z"
+    },
+    {
+      "id": "cmrljv3yq003ps7pqug8oxvo8",
+      "name": "Level Construction, Inc.",
+      "website": "https://levelconstruction.net/",
+      "phone": "+1 773-930-4695",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=1878062592907716920&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-construction",
+      "createdAt": "2026-07-15T03:58:07.058Z"
+    },
+    {
+      "id": "cmrljxavf00e2s7pqcrs9nkw4",
+      "name": "All Industrial Electric Inc",
+      "website": "http://www.allindustrialelectric.com/",
+      "phone": "+1 847-885-9600",
+      "email": "info@allindustrialelectric.com",
+      "sourceUrl": "https://maps.google.com/?cid=11906480824234982217&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.323Z"
+    },
+    {
+      "id": "cmrljxavm00e5s7pqfc9849sz",
+      "name": "Illinois State Electric, LLC",
+      "website": "http://illinoisstateelectricllc.com/",
+      "phone": "+1 224-548-5548",
+      "email": "info@illinoisstateelectricllc.com",
+      "sourceUrl": "https://maps.google.com/?cid=12352311065291319249&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.331Z"
+    },
+    {
+      "id": "cmrljxavv00e8s7pqtxheiw4t",
+      "name": "Barrington Electric",
+      "website": "https://www.barringtonelectric.co/",
+      "phone": "+1 847-737-3142",
+      "email": "office@be60010.com",
+      "sourceUrl": "https://maps.google.com/?cid=2846956597653772225&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.339Z"
+    },
+    {
+      "id": "cmrljxaw300ebs7pqsn9p1dqg",
+      "name": "ROSSINC ELECTRIC",
+      "website": "https://www.rossincelectric.com/",
+      "phone": "+1 773-332-6250",
+      "email": "rossincelectric@gmail.com",
+      "sourceUrl": "https://maps.google.com/?cid=2941287720540737928&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.347Z"
+    },
+    {
+      "id": "cmrljxb3y00ees7pq28kjokyj",
+      "name": "BBS Automation Chicago, Inc.",
+      "website": "http://www.bbsautomation.com/",
+      "phone": "+1 630-351-3000",
+      "email": "info@bbsautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=1290084271891553428&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.630Z"
+    },
+    {
+      "id": "cmrljxb4500ehs7pqjhgco5mq",
+      "name": "B & R Industrial Automation Corporation",
+      "website": "http://www.br-automation.com/",
+      "phone": "+1 630-629-1100",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=10954719678406652448&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.637Z"
+    },
+    {
+      "id": "cmrljxb4a00eks7pqlnnswes9",
+      "name": "Mitsubishi Electric US, Inc., Industrial Automation",
+      "website": "https://us.mitsubishielectric.com/fa/en/",
+      "phone": "+1 847-478-2100",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=13618664849965182804&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.642Z"
+    },
+    {
+      "id": "cmrljxb4e00ens7pq7od61ip0",
+      "name": "Swiss Automation, Inc.",
+      "website": "http://www.swissautomation.com/",
+      "phone": "+1 847-381-4405",
+      "email": "mail@swissautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=3242067883281530976&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.646Z"
+    },
+    {
+      "id": "cmrljxb4k00eqs7pq3g1ei2ii",
+      "name": "IP Automation Inc",
+      "website": "https://ipautomationinc.com/",
+      "phone": "+1 630-656-1215",
+      "email": "sales@ipautomationinc.com",
+      "sourceUrl": "https://maps.google.com/?cid=16273400014072176748&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.652Z"
+    },
+    {
+      "id": "cmrljxb4r00ets7pqf871m1rl",
+      "name": "Genesis Automation, LLC",
+      "website": "http://www.genesisautomation.com/?utm_source=google&utm_medium=organic&utm_campaign=gmb",
+      "phone": "+1 630-587-0444",
+      "email": "info@genesisautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=16294945925634604276&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.659Z"
+    },
+    {
+      "id": "cmrljxbbu00ews7pqvmxa6yli",
+      "name": "Four Seasons Heating, Air Conditioning, Plumbing, Sewer & Electric",
+      "website": "https://www.fourseasonsheatingcooling.com/?utm_source=gbp&utm_medium=organic&utm_campaign=gbp-chicago",
+      "phone": "+1 773-219-2190",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=12264740206898831831&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.915Z"
+    },
+    {
+      "id": "cmrljxbc100ezs7pqlfeb0ztg",
+      "name": "Besco Air Inc.",
+      "website": "https://www.bescoair.net/service-area/chicago-il/?utm_source=google&utm_medium=organic&utm_campaign=GBPListing-Chicago-IL",
+      "phone": "+1 312-809-2695",
+      "email": "info@bescoair.net",
+      "sourceUrl": "https://maps.google.com/?cid=1588736697443636104&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.922Z"
+    },
+    {
+      "id": "cmrljxbca00f2s7pqmekxs5yo",
+      "name": "Next Generation Heating & Cooling",
+      "website": "https://www.nghvac.com/?utm_campaign=gmb",
+      "phone": "+1 847-943-9999",
+      "email": "info@nghvac.com",
+      "sourceUrl": "https://maps.google.com/?cid=4854606050074415987&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.930Z"
+    },
+    {
+      "id": "cmrljxbci00f5s7pq24x4klh9",
+      "name": "Eco Temp HVAC",
+      "website": "https://ecotemphvac.com/service-areas/palatine-il/",
+      "phone": "+1 224-253-8131",
+      "email": "info@ecotemphvac.com",
+      "sourceUrl": "https://maps.google.com/?cid=10658324638591931749&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.938Z"
+    },
+    {
+      "id": "cmrljxbcq00f8s7pqbbczeh43",
+      "name": "Residential Heating & Cooling",
+      "website": "https://www.residentialheatingcooling.com/",
+      "phone": "+1 847-637-5331",
+      "email": "eric@residentialheatingcooling.com",
+      "sourceUrl": "https://maps.google.com/?cid=6987797815099514921&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:49.946Z"
+    },
+    {
+      "id": "cmrljxbjq00fbs7pqoz98chyi",
+      "name": "Aligned Data Center - Chicago ORD-01",
+      "website": "https://www.aligneddc.com/",
+      "phone": "+1 469-213-6697",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=8433982743299418491&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.199Z"
+    },
+    {
+      "id": "cmrljxbjw00fes7pqbbn0oocw",
+      "name": "NTT Global Data Centers Americas - CH1",
+      "website": null,
+      "phone": "+1 916-286-3000",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=11364895635232300269&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.204Z"
+    },
+    {
+      "id": "cmrljxbk200fhs7pqmhde4tg7",
+      "name": "Prime Data Centers",
+      "website": "https://www.primedatacenters.com/",
+      "phone": "+1 888-774-6330",
+      "email": "info@primedatacenters.com",
+      "sourceUrl": "https://maps.google.com/?cid=124802527119718327&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.210Z"
+    },
+    {
+      "id": "cmrljxbk700fks7pq2r9px3br",
+      "name": "Equinix Data Center - 1905 Elk Grove Village, Chicago",
+      "website": "https://www.equinix.com/data-centers/americas-colocation/united-states-colocation/chicago-data-centers/ch3",
+      "phone": "+1 866-378-4649",
+      "email": "%20press@equinix.com",
+      "sourceUrl": "https://maps.google.com/?cid=17781071207152383589&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.216Z"
+    },
+    {
+      "id": "cmrljxbkd00fns7pqwfbmu1nm",
+      "name": "T5 Data Centers",
+      "website": "https://t5datacenters.com/",
+      "phone": "+1 888-239-7133",
+      "email": "info@t5datacenters.com",
+      "sourceUrl": "https://maps.google.com/?cid=2806291488738564511&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.222Z"
+    },
+    {
+      "id": "cmrljxbpx00fqs7pqqq7let91",
+      "name": "Hudson Construction Services Inc.",
+      "website": "https://hudsoncontractors.com/",
+      "phone": "+1 773-227-5777",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=2656006021938344586&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.421Z"
+    },
+    {
+      "id": "cmrljxbq400fts7pqirxb91yu",
+      "name": "Element Critical Data Center - Chicago Two",
+      "website": "https://elementcritical.com/",
+      "phone": "+1 888-298-5375",
+      "email": "support@elementcritical.com",
+      "sourceUrl": "https://maps.google.com/?cid=13507967343876431264&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.429Z"
+    },
+    {
+      "id": "cmrljxbqc00fws7pqqav7j2yz",
+      "name": "Element Critical Data Center - Chicago One",
+      "website": "http://www.elementcritical.com/",
+      "phone": "+1 630-686-6492",
+      "email": "support@elementcritical.com",
+      "sourceUrl": "https://maps.google.com/?cid=11684727250083843743&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.437Z"
+    },
+    {
+      "id": "cmrljxbqk00fzs7pq1pfdv0eh",
+      "name": "Illinois Construction & Environmental Consulting",
+      "website": "https://webapps.dot.illinois.gov/UCP/ExternalContractor/Index?AutoId=110686",
+      "phone": "+1 847-542-7500",
+      "email": "chamano@iceillinois.com",
+      "sourceUrl": "https://maps.google.com/?cid=5206646142845087145&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.445Z"
+    },
+    {
+      "id": "cmrljxbqr00g2s7pqu27ufa30",
+      "name": "Level Construction, Inc.",
+      "website": "https://levelconstruction.net/",
+      "phone": "+1 773-930-4695",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=1878062592907716920&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-warehouse-logistics",
+      "createdAt": "2026-07-15T03:59:50.451Z"
+    },
+    {
+      "id": "cmrljzrgr00qfs7pq0ldii6vh",
+      "name": "All Industrial Electric Inc",
+      "website": "http://www.allindustrialelectric.com/",
+      "phone": "+1 847-885-9600",
+      "email": "info@allindustrialelectric.com",
+      "sourceUrl": "https://maps.google.com/?cid=11906480824234982217&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.139Z"
+    },
+    {
+      "id": "cmrljzrgx00qis7pqqmzp1n71",
+      "name": "Illinois State Electric, LLC",
+      "website": "http://illinoisstateelectricllc.com/",
+      "phone": "+1 224-548-5548",
+      "email": "info@illinoisstateelectricllc.com",
+      "sourceUrl": "https://maps.google.com/?cid=12352311065291319249&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.145Z"
+    },
+    {
+      "id": "cmrljzrh100qls7pqjehxyqgu",
+      "name": "Barrington Electric",
+      "website": "https://www.barringtonelectric.co/",
+      "phone": "+1 847-737-3142",
+      "email": "office@be60010.com",
+      "sourceUrl": "https://maps.google.com/?cid=2846956597653772225&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.149Z"
+    },
+    {
+      "id": "cmrljzrh600qos7pqkpatms98",
+      "name": "ROSSINC ELECTRIC",
+      "website": "https://www.rossincelectric.com/",
+      "phone": "+1 773-332-6250",
+      "email": "rossincelectric@gmail.com",
+      "sourceUrl": "https://maps.google.com/?cid=2941287720540737928&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.154Z"
+    },
+    {
+      "id": "cmrljzrn500qrs7pqp33npixn",
+      "name": "BBS Automation Chicago, Inc.",
+      "website": "http://www.bbsautomation.com/",
+      "phone": "+1 630-351-3000",
+      "email": "info@bbsautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=1290084271891553428&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.369Z"
+    },
+    {
+      "id": "cmrljzrnd00qus7pql5h0e36k",
+      "name": "B & R Industrial Automation Corporation",
+      "website": "http://www.br-automation.com/",
+      "phone": "+1 630-629-1100",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=10954719678406652448&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.378Z"
+    },
+    {
+      "id": "cmrljzrnj00qxs7pqovhmyh3y",
+      "name": "Mitsubishi Electric US, Inc., Industrial Automation",
+      "website": "https://us.mitsubishielectric.com/fa/en/",
+      "phone": "+1 847-478-2100",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=13618664849965182804&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.384Z"
+    },
+    {
+      "id": "cmrljzrnp00r0s7pqxgmvxu4p",
+      "name": "Swiss Automation, Inc.",
+      "website": "http://www.swissautomation.com/",
+      "phone": "+1 847-381-4405",
+      "email": "mail@swissautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=3242067883281530976&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.389Z"
+    },
+    {
+      "id": "cmrljzrnt00r3s7pqsbl509bm",
+      "name": "IP Automation Inc",
+      "website": "https://ipautomationinc.com/",
+      "phone": "+1 630-656-1215",
+      "email": "sales@ipautomationinc.com",
+      "sourceUrl": "https://maps.google.com/?cid=16273400014072176748&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.394Z"
+    },
+    {
+      "id": "cmrljzrnz00r6s7pqepgvdeb2",
+      "name": "Genesis Automation, LLC",
+      "website": "http://www.genesisautomation.com/?utm_source=google&utm_medium=organic&utm_campaign=gmb",
+      "phone": "+1 630-587-0444",
+      "email": "info@genesisautomation.com",
+      "sourceUrl": "https://maps.google.com/?cid=16294945925634604276&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.400Z"
+    },
+    {
+      "id": "cmrljzrvw00r9s7pqfjio5lba",
+      "name": "Four Seasons Heating, Air Conditioning, Plumbing, Sewer & Electric",
+      "website": "https://www.fourseasonsheatingcooling.com/?utm_source=gbp&utm_medium=organic&utm_campaign=gbp-chicago",
+      "phone": "+1 773-219-2190",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=12264740206898831831&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.684Z"
+    },
+    {
+      "id": "cmrljzrw400rcs7pqx3snhw1v",
+      "name": "Besco Air Inc.",
+      "website": "https://www.bescoair.net/service-area/chicago-il/?utm_source=google&utm_medium=organic&utm_campaign=GBPListing-Chicago-IL",
+      "phone": "+1 312-809-2695",
+      "email": "info@bescoair.net",
+      "sourceUrl": "https://maps.google.com/?cid=1588736697443636104&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.692Z"
+    },
+    {
+      "id": "cmrljzrw800rfs7pqcgv8o75y",
+      "name": "Next Generation Heating & Cooling",
+      "website": "https://www.nghvac.com/?utm_campaign=gmb",
+      "phone": "+1 847-943-9999",
+      "email": "info@nghvac.com",
+      "sourceUrl": "https://maps.google.com/?cid=4854606050074415987&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.696Z"
+    },
+    {
+      "id": "cmrljzrwd00ris7pq02bkmdgz",
+      "name": "Eco Temp HVAC",
+      "website": "https://ecotemphvac.com/service-areas/palatine-il/",
+      "phone": "+1 224-253-8131",
+      "email": "info@ecotemphvac.com",
+      "sourceUrl": "https://maps.google.com/?cid=10658324638591931749&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.701Z"
+    },
+    {
+      "id": "cmrljzrwh00rls7pqmixkauew",
+      "name": "Residential Heating & Cooling",
+      "website": "https://www.residentialheatingcooling.com/",
+      "phone": "+1 847-637-5331",
+      "email": "eric@residentialheatingcooling.com",
+      "sourceUrl": "https://maps.google.com/?cid=6987797815099514921&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.706Z"
+    },
+    {
+      "id": "cmrljzs3900ros7pqjkphozce",
+      "name": "Aligned Data Center - Chicago ORD-01",
+      "website": "https://www.aligneddc.com/",
+      "phone": "+1 469-213-6697",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=8433982743299418491&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.949Z"
+    },
+    {
+      "id": "cmrljzs3g00rrs7pqqcruxckk",
+      "name": "NTT Global Data Centers Americas - CH1",
+      "website": null,
+      "phone": "+1 916-286-3000",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=11364895635232300269&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.956Z"
+    },
+    {
+      "id": "cmrljzs3n00rus7pqb0jyqu7s",
+      "name": "Prime Data Centers",
+      "website": "https://www.primedatacenters.com/",
+      "phone": "+1 888-774-6330",
+      "email": "info@primedatacenters.com",
+      "sourceUrl": "https://maps.google.com/?cid=124802527119718327&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.963Z"
+    },
+    {
+      "id": "cmrljzs3t00rxs7pq7ex7lzqn",
+      "name": "Equinix Data Center - 1905 Elk Grove Village, Chicago",
+      "website": "https://www.equinix.com/data-centers/americas-colocation/united-states-colocation/chicago-data-centers/ch3",
+      "phone": "+1 866-378-4649",
+      "email": "%20press@equinix.com",
+      "sourceUrl": "https://maps.google.com/?cid=17781071207152383589&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.969Z"
+    },
+    {
+      "id": "cmrljzs3y00s0s7pqyzqleeal",
+      "name": "T5 Data Centers",
+      "website": "https://t5datacenters.com/",
+      "phone": "+1 888-239-7133",
+      "email": "info@t5datacenters.com",
+      "sourceUrl": "https://maps.google.com/?cid=2806291488738564511&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:44.975Z"
+    },
+    {
+      "id": "cmrljzs9y00s3s7pqc7ioowed",
+      "name": "Hudson Construction Services Inc.",
+      "website": "https://hudsoncontractors.com/",
+      "phone": "+1 773-227-5777",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=2656006021938344586&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:45.190Z"
+    },
+    {
+      "id": "cmrljzsa400s6s7pq8ewxopto",
+      "name": "Element Critical Data Center - Chicago Two",
+      "website": "https://elementcritical.com/",
+      "phone": "+1 888-298-5375",
+      "email": "support@elementcritical.com",
+      "sourceUrl": "https://maps.google.com/?cid=13507967343876431264&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:45.197Z"
+    },
+    {
+      "id": "cmrljzsab00s9s7pqcs7eh5cp",
+      "name": "Element Critical Data Center - Chicago One",
+      "website": "http://www.elementcritical.com/",
+      "phone": "+1 630-686-6492",
+      "email": "support@elementcritical.com",
+      "sourceUrl": "https://maps.google.com/?cid=11684727250083843743&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:45.203Z"
+    },
+    {
+      "id": "cmrljzsag00scs7pq2y7uwf9a",
+      "name": "Illinois Construction & Environmental Consulting",
+      "website": "https://webapps.dot.illinois.gov/UCP/ExternalContractor/Index?AutoId=110686",
+      "phone": "+1 847-542-7500",
+      "email": "chamano@iceillinois.com",
+      "sourceUrl": "https://maps.google.com/?cid=5206646142845087145&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:45.208Z"
+    },
+    {
+      "id": "cmrljzsao00sfs7pqh1mnyka6",
+      "name": "Level Construction, Inc.",
+      "website": "https://levelconstruction.net/",
+      "phone": "+1 773-930-4695",
+      "email": null,
+      "sourceUrl": "https://maps.google.com/?cid=1878062592907716920&g_mp=Cidnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLlNlYXJjaFRleHQQAhgEIAA",
+      "industryId": "industry-manufacturing",
+      "createdAt": "2026-07-15T04:01:45.216Z"
+    }
+  ],
+  "tenantId": "tenant-titan"
+}
