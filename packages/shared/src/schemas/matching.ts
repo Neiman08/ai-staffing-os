@@ -42,6 +42,32 @@ const scoreSchema = z.number().min(0).max(100);
 // más abajo, a nivel de resultado completo, no solo por rango numérico).
 const llmAdjustmentSchema = z.number().min(-10).max(10);
 
+// ---------- F6.3: desglose de los 7 factores del scoring determinista ----------
+// (plan §7.4) — cada uno con su peso máximo y su score real, para que el
+// frontend explique "por qué" sin recalcular nada. `evidence` es texto
+// corto ya derivado (nunca datos crudos sensibles, ver §7.5 del plan).
+export const matchFactorSchema = z
+  .object({
+    key: z.enum(["requiredDocuments", "experience", "location", "payRate", "assignmentHistory", "languages", "dataRecency"]),
+    label: z.string(),
+    maxWeight: z.number().positive(),
+    score: z.number().min(0),
+    evidence: z.array(z.string()),
+  })
+  .refine((v) => v.score <= v.maxWeight, { message: "score cannot exceed maxWeight", path: ["score"] });
+export type MatchFactor = z.infer<typeof matchFactorSchema>;
+
+export const matchFactorsSchema = z.object({
+  requiredDocuments: matchFactorSchema,
+  experience: matchFactorSchema,
+  location: matchFactorSchema,
+  payRate: matchFactorSchema,
+  assignmentHistory: matchFactorSchema,
+  languages: matchFactorSchema,
+  dataRecency: matchFactorSchema,
+});
+export type MatchFactors = z.infer<typeof matchFactorsSchema>;
+
 // ---------- Resultado de matching para un Worker ----------
 
 export const workerMatchResultSchema = z
@@ -82,11 +108,22 @@ export const workerMatchResultSchema = z
     payRateAssessment: matchAssessmentSchema,
     complianceAssessment: matchAssessmentSchema,
     availabilityAssessment: matchAssessmentSchema,
+    // F6.3: desglose completo de los 7 factores — vacío/cero en cada uno
+    // cuando el Worker tiene disqualifiers (nunca se puntúa parcialmente
+    // a alguien ya excluido, ver matching/scoring.ts).
+    factors: matchFactorsSchema,
   })
   .refine((v) => v.disqualifiers.length === 0 || v.eligibility !== "ELIGIBLE", {
     message: "A worker with any disqualifier can never be ELIGIBLE",
     path: ["disqualifiers"],
-  });
+  })
+  .refine(
+    (v) => {
+      const sum = Object.values(v.factors).reduce((acc, f) => acc + f.score, 0);
+      return Math.abs(sum - v.deterministicScore) < 0.01;
+    },
+    { message: "deterministicScore must equal the sum of all factor scores", path: ["deterministicScore"] },
+  );
 export type WorkerMatchResult = z.infer<typeof workerMatchResultSchema>;
 
 // ---------- Resultado completo de una corrida ----------

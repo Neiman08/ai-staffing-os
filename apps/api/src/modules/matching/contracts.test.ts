@@ -16,7 +16,21 @@ import {
   matchHistoryEntrySchema,
   type WorkerMatchResult,
   type MatchRunResult,
+  type MatchFactors,
 } from "@ai-staffing-os/shared";
+
+function buildFactors(overrides: Partial<MatchFactors> = {}): MatchFactors {
+  return {
+    requiredDocuments: { key: "requiredDocuments", label: "Documentos requeridos", maxWeight: 25, score: 10, evidence: [] },
+    experience: { key: "experience", label: "Experiencia", maxWeight: 20, score: 10, evidence: [] },
+    location: { key: "location", label: "Ubicación", maxWeight: 15, score: 8, evidence: [] },
+    payRate: { key: "payRate", label: "Tarifa de pago", maxWeight: 15, score: 12, evidence: [] },
+    assignmentHistory: { key: "assignmentHistory", label: "Historial de Assignments", maxWeight: 15, score: 0, evidence: [] },
+    languages: { key: "languages", label: "Idiomas", maxWeight: 5, score: 0, evidence: [] },
+    dataRecency: { key: "dataRecency", label: "Recencia de datos", maxWeight: 5, score: 0, evidence: [] },
+    ...overrides,
+  };
+}
 
 function buildWorker(overrides: Partial<WorkerMatchResult> = {}): WorkerMatchResult {
   return {
@@ -41,6 +55,7 @@ function buildWorker(overrides: Partial<WorkerMatchResult> = {}): WorkerMatchRes
     payRateAssessment: { label: "Compatible" },
     complianceAssessment: { label: "Incompleto", detail: "background_check PENDING_REVIEW" },
     availabilityAssessment: { label: "Disponible" },
+    factors: buildFactors(),
     ...overrides,
   };
 }
@@ -110,13 +125,22 @@ test("un Worker ELIGIBLE sin disqualifiers es válido", () => {
       complianceStatus: "COMPLIANT",
       deterministicScore: 85,
       finalScore: 85,
+      factors: buildFactors({
+        requiredDocuments: { key: "requiredDocuments", label: "Documentos requeridos", maxWeight: 25, score: 25, evidence: [] },
+        experience: { key: "experience", label: "Experiencia", maxWeight: 20, score: 20, evidence: [] },
+        location: { key: "location", label: "Ubicación", maxWeight: 15, score: 15, evidence: [] },
+        payRate: { key: "payRate", label: "Tarifa de pago", maxWeight: 15, score: 15, evidence: [] },
+        assignmentHistory: { key: "assignmentHistory", label: "Historial de Assignments", maxWeight: 15, score: 10, evidence: [] },
+      }),
     }),
   );
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, JSON.stringify(result.success === false ? result.error.issues : null));
 });
 
 test("payload de WorkerMatchResult no expone campos de PII sensible (email/phone/ssn/dirección/documentos completos)", () => {
-  const shape = workerMatchResultSchema._def.schema.shape;
+  // Dos .refine() encadenados envuelven el ZodObject en dos capas de
+  // ZodEffects — hay que bajar ambos niveles para llegar al shape real.
+  const shape = workerMatchResultSchema._def.schema._def.schema.shape;
   const forbiddenKeys = ["email", "phone", "ssn", "address", "documents", "resumeUrl", "linkedinUrl"];
   for (const key of forbiddenKeys) {
     assert.equal(key in shape, false, `WorkerMatchResult no debe tener el campo "${key}"`);
@@ -150,11 +174,19 @@ test("un Worker ELIGIBLE con llmAdjustment=+10 en eligibleWorkers es válido (el
         deterministicScore: 80,
         llmAdjustment: 10,
         finalScore: 90,
+        factors: buildFactors({
+          requiredDocuments: { key: "requiredDocuments", label: "Documentos requeridos", maxWeight: 25, score: 25, evidence: [] },
+          experience: { key: "experience", label: "Experiencia", maxWeight: 20, score: 20, evidence: [] },
+          location: { key: "location", label: "Ubicación", maxWeight: 15, score: 15, evidence: [] },
+          payRate: { key: "payRate", label: "Tarifa de pago", maxWeight: 15, score: 15, evidence: [] },
+          assignmentHistory: { key: "assignmentHistory", label: "Historial de Assignments", maxWeight: 15, score: 5, evidence: [] },
+        }),
       }),
     ],
     ineligibleWorkers: [],
   });
-  assert.equal(matchRunResultSchema.safeParse(valid).success, true);
+  const parsedValid = matchRunResultSchema.safeParse(valid);
+  assert.equal(parsedValid.success, true, JSON.stringify(parsedValid.success === false ? parsedValid.error.issues : null));
 });
 
 test("schemaVersion y algorithmVersion son obligatorios", () => {
@@ -209,6 +241,13 @@ test("un MatchRunResult completo serializa/deserializa dentro de AgentTask.outpu
         deterministicScore: 85,
         llmAdjustment: 5,
         finalScore: 90,
+        factors: buildFactors({
+          requiredDocuments: { key: "requiredDocuments", label: "Documentos requeridos", maxWeight: 25, score: 25, evidence: [] },
+          experience: { key: "experience", label: "Experiencia", maxWeight: 20, score: 20, evidence: [] },
+          location: { key: "location", label: "Ubicación", maxWeight: 15, score: 15, evidence: [] },
+          payRate: { key: "payRate", label: "Tarifa de pago", maxWeight: 15, score: 15, evidence: [] },
+          assignmentHistory: { key: "assignmentHistory", label: "Historial de Assignments", maxWeight: 15, score: 10, evidence: [] },
+        }),
       }),
     ],
   });
