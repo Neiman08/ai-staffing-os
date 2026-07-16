@@ -2,7 +2,7 @@
 
 **Estado: APROBADO por el PO (2026-07-14).** Alcance definitivo aprobado explícitamente: **Matching por IA (Recruiter Agent) + Dashboards Operativos + cierre de la deuda de tests RBAC 403 heredada de F5.** El contenido del roadmap original de "F6" (Marketing Agent, Indeed, LinkedIn, Twilio SMS, WhatsApp, job boards externos, marketing automation externo) queda **explícitamente fuera de alcance y no se considera aprobado** — ver §3. Este documento incorpora las 17 decisiones definitivas dadas por el PO como aprobadas; no hay decisiones abiertas de alcance pendientes de este momento en adelante (ver §27 para el registro histórico de cómo se resolvió cada una).
 
-**Este documento sigue siendo de planificación en cuanto a código: no se ha escrito ninguna línea de implementación.** Sin cambios de schema, sin migraciones, sin endpoints nuevos, sin UI nueva, sin commits de código hasta que el PO apruebe explícitamente el inicio de F6.0.
+**Estado de implementación: F6 CERRADO (F6.0–F6.9 completos).** Ver §32 para el cierre formal — arquitectura final, fórmula de scoring, endpoints, UI, dashboards, tests, costos, límites conocidos, los 9 commits reales y la evidencia end-to-end. Cero cambios de schema/migración en todo el arco, tal como exigía §10.
 
 **Precedente inmediato:** `docs/F5_STAFFING_OPERATIONS_PLAN.md` (aprobado, implementado, cerrado — F5.1–F5.8) y `docs/F6_IMPLEMENTATION_REPORT.md` (auditoría de esa sesión). La primera versión de este documento presentó el alcance como propuesta con 7 decisiones pendientes; el PO las resolvió todas en una sola ronda de aprobación (registrada en §27).
 
@@ -732,4 +732,113 @@ Durante F6.0: no se tocó `schema.prisma`, no se creó ninguna migración, no se
 
 ---
 
-**Este documento refleja el alcance de F6 aprobado explícitamente por el Product Owner.** F6.0 (auditoría y baseline) está completo — ver §31. La siguiente acción es la aprobación explícita del PO para iniciar **F6.1**.
+## 32. Cierre de F6 (F6.1–F6.9) — resultado final
+
+Trabajo autónomo completado de punta a punta, F6.1 a F6.9, con verificación completa (typecheck/lint/suite enumerada/Playwright) antes de cada commit y una sola verificación final de cierre acá. **F6.10 es este mismo documento** (no se creó un `F6_IMPLEMENTATION_REPORT_FINAL.md` separado — todo lo pedido para el cierre cabe en esta sección sin duplicar contenido entre dos archivos).
+
+### 32.1 Arquitectura final
+
+Un solo módulo backend nuevo, `apps/api/src/modules/matching/`, tal como exigía §8:
+
+- `scoring.ts` — motor determinista puro (sin Prisma). `computeDisqualifiers`, 7 funciones `score*`, `scoreWorkerForJobOrder`.
+- `availability.ts` (F6.2, ya existente antes del cierre) — `evaluateWorkerAvailability` + solapamiento de fechas puro.
+- `service.ts` — `runDeterministicMatching` (F6.4, sin AgentTask), `runMatchingForJobOrder`/`getLatestMatchingRun`/`getMatchingHistory` (F6.6, con AgentTask real).
+- `router.ts` — 3 endpoints (`POST run`, `GET latest`, `GET history`), módulo propio (Convención B del plan §12.1), nunca la ruta genérica de agentes.
+
+Graduación del Recruiter Agent sin infraestructura nueva (§8, §11 respetados al pie de la letra): `packages/agents/src/tools/recruiter-tools.ts` (stub declarativo) + `apps/api/src/modules/agents/tools/recruiter-tools.impl.ts` (factory real) + 2 líneas aditivas en `task-executor.ts` (`TASK_TYPE_TO_TOOL_NAME` + una rama en `buildToolRegistry`). `AgentRuntime`/`CostTracker`/`AgentTask` reutilizados sin modificar su forma.
+
+Contratos: `packages/shared/src/schemas/matching.ts` — única fuente de verdad, con invariantes reforzadas en runtime (`deterministicScore === Σfactors`, `llmAdjustment ∈ [-10,10]`, un Worker con `disqualifiers` nunca puede ser `ELIGIBLE`).
+
+### 32.2 Fórmula de scoring (v1, `MATCH_ALGORITHM_VERSION`)
+
+5 disqualificadores duros (§7.2, con una desviación documentada): `worker_terminated`, `worker_on_leave`, `compliance_not_cleared` (≠ COMPLIANT), `category_mismatch`, `date_overlap` — este último se dispara por `availabilityStatus === "DATE_CONFLICT"` (ya calculado por F6.2), no literalmente por `Worker.status === "ASSIGNED"` como una lectura superficial del plan podría sugerir, porque F6.2 ya había probado que un Worker `AVAILABLE` también puede tener un conflicto real de fechas — la lectura más conservadora y correcta, no una invención.
+
+7 factores puntuables (100 pts, ningún factor inventado, todos sobre campos reales de `Worker`/`Candidate`/`JobOrder`/`Assignment`/`Document`): Documentos requeridos (25), Experiencia (20, tope 10 años), Ubicación (15/8/0, sin geocodificación), Pay Rate (15, penaliza ambas direcciones), Historial de Assignments (15), Idiomas (5 — peso reducido a propósito, `JobOrder` no tiene un campo de idioma requerido real, límite conocido documentado desde F6.0 §10, nunca resuelto con un campo inventado), Recencia de datos (5, decae linealmente de 90 a 365 días — el corte de 365 es una interpretación propia documentada, no un número literal del plan).
+
+### 32.3 Capa LLM acotada (F6.5)
+
+`llmAdjustment ∈ [-10,10]`, nunca puede mover a un Worker de `INELIGIBLE` a `ELIGIBLE` (estructural: los inelegibles ni siquiera entran al loop de revisión). `llmStatus`: `NOT_RUN`/`COMPLETED`/`FAILED`/`BUDGET_BLOCKED`/`FALLBACK_DETERMINISTIC`. Doble gate de presupuesto preservado a propósito (el pre-check genérico de `executeTaskById`, más un segundo chequeo específico del tool vía `getMonthlyBudgetStatus`) — documentado como decisión deliberada, no una contradicción a resolver.
+
+### 32.4 Endpoints
+
+```
+POST /api/v1/job-orders/:id/matching/run      (matching.run)
+GET  /api/v1/job-orders/:id/matching/latest   (matching.view)
+GET  /api/v1/job-orders/:id/matching/history  (matching.view, cursor-paginado)
+```
+
+Guardia de concurrencia best-effort (409 si ya hay una corrida QUEUED/RUNNING para el mismo Job Order). Nunca crea Assignment, nunca modifica Worker/JobOrder, nunca envía mensajes. Persistencia 100% en `AgentTask.output` (Json), sin modelo nuevo — confirmado suficiente para el volumen real de este proyecto (§11).
+
+### 32.5 RBAC final de matching — contradicción del F6.0 resuelta
+
+`matching.view`: CEO, Admin, Recruiter, Compliance, Operations, Manager. `matching.run`: CEO, Admin, Recruiter (únicamente — ejecutar un match, aunque sea de solo análisis, es una acción operativa real). **Marketing y HR quedan sin ninguno de los dos permisos** — resuelve la contradicción #2 anotada en F6.0 §31.9 con la interpretación más conservadora ya anticipada ahí mismo ("sin acceso", igual que Payroll/Accounting/Sales), nunca decidida de forma arbitraria.
+
+### 32.6 UI (F6.7)
+
+`apps/web/src/components/matching/MatchingPanel.tsx`, integrado en `JobOrderDetail.tsx` (sin app/página separada). Selector determinista/con-IA, botón de ejecución, tarjetas por Worker con los 15 campos pedidos (nombre enlazado a Worker Detail, ambos scores, ajuste IA, elegibilidad, disponibilidad, compliance, las 4 evaluaciones por factor, fortalezas, brechas, descalificadores, documentos faltantes, racional), historial paginado. Ninguna acción crea Assignment/cambia status/envía mensajes — solo "ejecutar" y "abrir Worker Detail". Verificado en navegador real, luz y oscuro, desktop y viewport móvil (390×844).
+
+### 32.7 Dashboards por rol (F6.8)
+
+Mismo `Dashboard.tsx`/`dashboard/service.ts` de siempre, extendido — nunca un tercer dashboard (resuelve la recomendación de F6.0 §31.6). Cada campo de `DashboardSummary` es ahora opcional y el backend lo omite si el permiso real que lo respalda (el mismo que ya gatea ese recurso en su propio módulo, nunca uno inventado) no está en el caller: `workers.view`, `candidates.view`, `jobOrders.view`, `documents.view` (compliance), `assignments.view`, `payrollRuns.view`/`invoices.view` (financiero). Dos breakdowns nuevos (Workers por compliance, Assignments por estado) más uno que ya se calculaba y nunca se mostraba (Candidatos por estado) — cero métrica inventada.
+
+### 32.8 Deuda RBAC 403 de F5 (F6.9)
+
+Matriz completa (`apps/api/src/core/rbac/rbac-403-matrix.test.ts`) para los 11 roles reales × 9 permisos de vista heredados de F5.1-F5.8 (candidates/workers/jobOrders/documents/timeEntries/pricingScenarios/assignments/payrollRuns/invoices) + matching — derivada directamente de `ROLE_PERMISSIONS` real, sin contradicciones encontradas (los 13 tests nuevos pasaron en el primer intento). Gap real encontrado y cerrado: `pricingScenarios.view` no tenía ningún test, de ningún tipo, antes de F6.9.
+
+### 32.9 Tests — conteo final
+
+- **Backend:** 39 archivos `*.test.ts` enumerados explícitamente (nunca `pnpm test` a secas — el bug del glob `**` documentado en F6.0 §31.9.1 sigue vigente y sin corregir, fuera de alcance). **514 tests, 513 pass, 1 fail** — la misma falla preexistente de `prospecting.test.ts` (llamadas reales a OpenAI) ya documentada en el baseline de F6.0, sin relación con F6, no investigada por estar fuera de alcance.
+- **Playwright:** 5 specs, **19/19 passing** — 2 preexistentes sin tocar (`dashboard.spec.ts`, `navigation.spec.ts`, `settings-users.spec.ts` ya contaban como 3, ahora +`job-order-matching.spec.ts` (7 tests) y `dashboard-roles.spec.ts` (6 tests)).
+- Progresión de tests backend a lo largo de F6: 320 (baseline F6.0) → 422 → 441 → 451 → 490 (F6.6) → 501 (F6.7, sin nuevos backend) → 501 (F6.8: +11) → 514 (F6.9: +13). Nota: el conteo de "422" al inicio de F6.3 ya reflejaba +102 tests de F6.1/F6.2 sobre el baseline de 320.
+
+### 32.10 Costos de IA reales
+
+**$0.00 gastados en llamadas reales a OpenAI durante F6.1–F6.9.** F6.5 se verificó íntegramente con un `LLMProvider` mock (10 tests, cero llamadas reales). Todas las corridas de matching ejecutadas contra datos reales en F6.6/F6.7 (incluida la verificación manual en navegador) se hicieron con `withLlm: false` — `llmStatus: "NOT_RUN"`, `cost.usd: 0` en cada una. El modo "Determinista + revisión IA" del selector de UI (F6.7) quedó implementado y probado con mocks, pero deliberadamente nunca ejercido contra el proveedor real, según la regla de "evitar llamadas reales salvo necesidad estricta" — límite conocido, documentado, no un olvido.
+
+### 32.11 Datos reales — integridad verificada
+
+Conteos de `tenant-titan` verificados por consulta directa al cierre de F6.9, comparados contra el baseline de F6.0/F6.6: Companies 81 (sin cambio), Candidates 40, Workers 10, Job Orders 6 (sin cambio), Assignments 8, Documents 36, ComplianceAlerts 6 — **todos intactos**. `AgentTask` de tipo `match_workers_to_job_order`: 18 filas reales acumuladas por las corridas legítimas de verificación de F6.6/F6.7 (el feature que se estaba verificando, no una fuga). Cero tenants/usuarios/candidatos/empresas de prueba filtrados fuera de sus fixtures (`MATCHING-F64-*`, `RECRUITER-F65-*`, etc. — 0 en todos los conteos); los 4 usuarios `playwright-e2e-invite-*@example.com` son de la suite preexistente `settings-users.spec.ts` (F4.9-11), desactivados por diseño desde antes de F6, no un residuo de este trabajo. `payrollRuns`/`invoices`/`payments` en 0 — así estaban antes de F6, sin relación con este trabajo.
+
+### 32.12 Bugs encontrados y corregidos durante F6 (protocolo: reproducir → causa raíz → test → fix mínimo → regresión → documentar)
+
+1. **Fuga de PII al prompt del LLM (F6.5, real, de seguridad):** `buildWorkerReviewPrompt` reenviaba `strengths`/`gaps` verbatim, que embeben la ciudad real del candidato (`"Misma ciudad (Chicago)."`). Reproducido con un test dedicado, causa raíz identificada (confundir el texto para UI humana con el texto seguro para el LLM), fix con `summarizeFactorsForPrompt` (solo labels, nunca evidence cruda). Regresión: 451/451 tests sin nuevas fallas.
+2. **Contaminación cruzada entre tests (F6.5, dos veces):** `runDeterministicMatching` evalúa TODOS los Workers del tenant, no solo los de un fixture — tests que compartían un `tenantId` veían Workers de tests anteriores. Fix: un `tenantId` único por test.
+3. **Gap de paginación por cursor (F6.6, encontrado por revisión de código antes de enviar):** `toCursorPage` sola no reanuda desde un cursor cuando el filtrado es en memoria. Fix manual (`findIndex` + `slice`).
+4. **Capitalización incorrecta en la UI (F6.7, real):** `formatStatusLabel` asume `UPPER_SNAKE_CASE` (enums de Prisma); `disqualifiers`/`requiredDocumentsMissing` son `lowercase_snake_case` (keys del scoring), así que `"date_overlap"` se mostraba `"date overlap"` en vez de `"Date Overlap"`. Encontrado en la verificación visual en navegador real (captura de pantalla), no por un test automatizado — fix: `formatSnakeKey` (uppercase antes de delegar).
+5. **`pricingScenarios.view` sin ningún test (F6.9, deuda real, no un bug de comportamiento):** cerrado en la matriz nueva.
+
+Ningún bug encontrado requirió cambiar un permiso o el schema — todos fueron de implementación, corregidos con el fix mínimo y una regresión completa después de cada uno.
+
+### 32.13 Límites conocidos (documentados, no resueltos, por estar fuera de alcance o requerir una decisión del PO)
+
+- El bug del glob `**` en `apps/api/package.json` (documentado desde F6.0) sigue sin corregirse — cambiar `package.json` no estaba autorizado en F6.
+- El factor "Idiomas" del scoring usa una señal genérica (5/100) porque `JobOrder` no tiene un campo de idioma requerido real — documentado desde F6.0, no resuelto con un campo inventado.
+- El corte de 365 días de "Recencia de datos" es una interpretación propia razonable, no un número dado literalmente por el plan — si el PO quiere otro valor, es un cambio de una constante, no de arquitectura.
+- El modo "Determinista + revisión IA" del selector de UI nunca se ejerció contra el proveedor real de OpenAI (§32.10) — cuando el PO quiera verificarlo con gasto real, debe ser una decisión explícita y acotada (una sola corrida, con datos sintéticos, costo registrado), no algo que este trabajo autónomo debía decidir por sí mismo.
+- La sección "Actividad de IA" (misiones del CEO Agent, empresas con mayor score) y el log de auditoría de todo el tenant en `Dashboard.tsx` quedaron sin cambios — fuera de alcance de F6 (territorio de F3/F4.9), no evaluados para ocultamiento por rol.
+
+### 32.14 Commits de F6 (9, uno por subfase, sin squash, sin push)
+
+| Subfase | Hash | Mensaje |
+|---|---|---|
+| F6.1 | `20c778a` | feat: F6.1 — matching permissions and shared contracts |
+| F6.2 | `ae8ec1d` | feat: F6.2 — real Worker availability for matching |
+| F6.3 | `041c5ef` | feat: F6.3 — deterministic Worker matching score |
+| F6.4 | `9bc8509` | test: F6.4 — deterministic matching coverage |
+| F6.5 | `baf5cdf` | feat: F6.5 — bounded LLM review for Recruiter Agent |
+| F6.6 | `e9c4e1b` | feat: F6.6 — matching API and AgentTask history |
+| F6.7 | `e9fc2f6` | feat: F6.7 — matching experience in Job Order Detail |
+| F6.8 | `370cd2d` | feat: F6.8 — role-aware operational dashboards |
+| F6.9 | `3388cfe` | test: F6.9 — complete operational RBAC denial coverage |
+
+### 32.15 Evidencia end-to-end
+
+Verificado en un navegador real (Chromium, Playwright), contra datos reales de `tenant-titan` (`joborder-04`, Apprentice Electrician): ejecución de matching como Recruiter con ranking mostrado (0 elegibles / 10 no elegibles, consistente con el hallazgo de F6.0 §31.9.3 de que ningún Worker real es 100% elegible para ningún Job Order abierto de hoy), modo solo-determinista, historial poblado, Operations con vista pero sin botón de ejecución, Payroll sin la sección en absoluto, cero cambio en la ocupación del Job Order tras correr matching, viewport móvil (390×844) funcional, y el Dashboard con tarjetas condicionadas por rol para CEO/Recruiter/Operations/Compliance/Accounting, en modo claro y oscuro.
+
+### 32.16 Próximo paso: F7
+
+Sin decisión de scope pendiente dentro de F6 — el siguiente paso es la auditoría de si existe un plan de F7 explícitamente aprobado en `docs/`, tal como exige la instrucción de gobierno de esta sesión.
+
+---
+
+**F6 queda formalmente cerrado.** F6.0–F6.9 completos, verificados, documentados y commiteados. Sin cambios de schema. Sin llamadas reales a OpenAI. Sin dato real mutado fuera de las corridas legítimas de matching que el propio feature produce. Sin reapertura de Clerk/F4.9, Gmail/F4.7, marketing, Render, el backfill de Illinois, el pipeline de discovery, el scheduler de prospección, las misiones del CEO Agent, ni F0–F5.8.
