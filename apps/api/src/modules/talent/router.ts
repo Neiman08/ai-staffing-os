@@ -363,3 +363,32 @@ talentRouter.patch(
     }
   },
 );
+
+// F8.10: Placement Readiness -- POST calcula Y persiste (upsert),
+// agregando lo YA persistido por F8.5/F8.7/F8.8/F8.9. Nunca crea un
+// Placement/Assignment ni activa un Worker. GET solo lee.
+talentRouter.post(
+  "/candidates/:id/placement-readiness/:jobOrderId",
+  requireAllPermissions(["candidates.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await talentService.computeAndPersistPlacementReadiness(req.params.id!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+talentRouter.get(
+  "/candidates/:id/placement-readiness/:jobOrderId",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      const record = await talentService.getPlacementReadiness(req.params.id!, req.params.jobOrderId!);
+      if (!record) throw AppError.notFound("No persisted placement readiness found for this candidate and job order");
+      res.json(record);
+    } catch (err) {
+      next(err);
+    }
+  },
+);

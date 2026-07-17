@@ -456,3 +456,53 @@ Ninguna en esta subfase -- se surfacea en F8.11, mostrando explícitamente "PREV
 `feat: F8.9 — interview scheduling preview`.
 
 **F8.9 completo.**
+
+## 16. Resultado de F8.10 — Placement Readiness
+
+### 16.1 Arquitectura
+
+- **`recruiting-intelligence/placement-readiness.ts`** (nuevo, puro): `computePlacementReadiness()` agrega el estado YA calculado por F8.5 (qualification), F8.7 (shortlist), F8.8 (screening) y F8.9 (interview preview) -- nunca los recalcula. 8 checks evaluados en orden fijo (qualification, documentos, shortlist, screening, interview, ubicación, fecha de inicio, compensación). Cada check clasifica en `completedChecks`/`pendingChecks`/`blockers`/`warnings`/`missingInformation` según una regla explícita y documentada -- nunca un cálculo oculto.
+- **4 estados con prioridad fija**: `NOT_READY` (bloqueador DURO: NOT_QUALIFIED, documento vencido, o interview CANCELLED -- ninguno recuperable en el corto plazo) > `NEEDS_REVIEW` (bloqueador recuperable: NEEDS_REVIEW de calificación, documento faltante, o removido de shortlist) > `CONDITIONALLY_READY` (solo warnings o checks pendientes) > `READY_FOR_APPROVAL` (todo completo, cero warnings). `requiresApproval` es el tipo literal `true` -- esta función JAMÁS autoriza una acción automática, sin importar el estado.
+- **Compensación**: no existe un campo de expectativa salarial del candidato en el schema -- en vez de inventar un valor o comparación falsa, se documenta SIEMPRE en `missingInformation` la ausencia de ese dato, nunca se penaliza ni se asume.
+- **`nextBestAction`**: una sola acción sugerida, prioridad fija y determinista (mismo criterio que `deduplicateDiscoveryCandidates`, F7.3) -- nunca combina/pesa señales entre sí.
+- **`talent/service.ts` → `computeAndPersistPlacementReadiness()`** (impuro, nuevo): reutiliza `runQualificationEvaluation` + lee (sin recalcular) el `CandidateShortlistEntry`/`ScreeningPlan`/`InterviewPreview` ya persistidos para el par. **`getPlacementReadiness()`** (solo lectura).
+- **Nuevo modelo `PlacementReadiness`** (schema, aditivo, mismo patrón que el resto de F8): un registro por par `(candidateId, jobOrderId)`.
+- **`POST /candidates/:id/placement-readiness/:jobOrderId`** (calcula+persiste, `candidates.update`+`jobOrders.view`) y **`GET /candidates/:id/placement-readiness/:jobOrderId`** (solo lectura, 404 si nunca se evaluó).
+- **Restricciones cumplidas explícitamente**: nunca crea `Placement` (no existe ese modelo todavía en el schema -- ver §16.8), nunca crea `Assignment`, nunca activa un `Worker`, nunca cambia `Candidate.status`.
+
+### 16.2 Archivos modificados
+
+- Nuevo: `placement-readiness.ts`, `placement-readiness.test.ts`, migración `20260717170000_f8_10_placement_readiness`.
+- Modificado: `schema.prisma` (enum `PlacementReadinessStatus` + modelo `PlacementReadiness` + back-relations), `core/tenancy/prisma-extension.ts` (+1 línea), `talent/service.ts`, `talent/router.ts`, `talent/talent.test.ts`.
+
+### 16.3 Contratos
+
+DTOs locales al service. `POST`/`GET` devuelven `PlacementReadinessRecord` (`id/candidateId/jobOrderId/readinessStatus/score/blockers/warnings/completedChecks/pendingChecks/missingInformation/nextBestAction/requiresApproval/evaluatedAt/rulesVersion/evaluatedById/createdAt/updatedAt`).
+
+### 16.4 UI
+
+Ninguna en esta subfase -- se surfacea en F8.11.
+
+### 16.5 Tests — 30 nuevos (todos passing)
+
+`placement-readiness.test.ts` (22): READY_FOR_APPROVAL con todo completo; NOT_READY por NOT_QUALIFIED/documento vencido/interview CANCELLED (los 3 bloqueadores duros); NEEDS_REVIEW por calificación NEEDS_REVIEW/documento faltante/shortlist REMOVED; CONDITIONALLY_READY por gaps blandos, checks pendientes, o mismatch de ubicación; `missingInformation` siempre documenta la ausencia de compensación y de ubicación comparable, nunca inventa un valor; warnings de fecha de inicio (pasada/inminente); `requiresApproval` siempre `true`; `nextBestAction` prioriza correctamente; score proporcional a checks completos; determinismo; shape sin ningún campo que sugiera creación de Placement/Assignment/Worker. `talent.test.ts` (+8): RBAC 403; 404 antes de evaluar; NOT_READY real con blockers, nunca toca Candidate.status; CONDITIONALLY_READY con checks pendientes; **flujo end-to-end completo** (matching->shortlist APPROVED->screening->interview APPROVED_FOR_SEND) llega realmente a READY_FOR_APPROVAL con score 100; idempotencia; GET lee sin recalcular; AuditLog escrito.
+
+### 16.6 Suite completa
+
+977 tests, 971 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 16.7 Migraciones
+
+`20260717170000_f8_10_placement_readiness` -- 100% aditiva: 1 enum nuevo (`PlacementReadinessStatus`), 1 tabla nueva (`PlacementReadiness`) con 2 FKs (`ON DELETE RESTRICT`), 2 índices. Cero columnas nuevas en tablas existentes.
+
+### 16.8 Limitaciones conocidas
+
+- No existe un modelo `Placement` en el schema todavía (fuera de alcance explícito de F8 -- placement activo real es un concepto de fase futura, F9 según el plan histórico); esta subfase solo evalúa disposición, nunca ejecuta la transición.
+- Sin dato de compensación esperada del candidato -- documentado como `missingInformation` permanente hasta que ese campo exista en el schema, si se decide agregarlo en una fase futura.
+- Igual que el resto de F8, las FKs son `ON DELETE RESTRICT`.
+
+### 16.9 Commit
+
+`feat: F8.10 — placement readiness`.
+
+**F8.10 completo.**

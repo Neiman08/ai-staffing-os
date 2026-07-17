@@ -47,6 +47,7 @@ import {
   type ProposedWindow,
   type InterviewParticipant,
 } from "../recruiting-intelligence/interview-preview";
+import { computePlacementReadiness, type PlacementReadinessStatus } from "../recruiting-intelligence/placement-readiness";
 
 // ================= Candidates =================
 
@@ -1335,6 +1336,146 @@ export async function updateInterviewPreviewStatus(
   });
 
   return toInterviewPreviewRecord(updated);
+}
+
+export interface PlacementReadinessRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  readinessStatus: PlacementReadinessStatus;
+  score: number;
+  blockers: string[];
+  warnings: string[];
+  completedChecks: string[];
+  pendingChecks: string[];
+  missingInformation: string[];
+  nextBestAction: string;
+  requiresApproval: boolean;
+  evaluatedAt: string;
+  rulesVersion: number;
+  evaluatedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toPlacementReadinessRecord(record: {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  readinessStatus: string;
+  score: number;
+  blockers: string[];
+  warnings: string[];
+  completedChecks: string[];
+  pendingChecks: string[];
+  missingInformation: string[];
+  nextBestAction: string;
+  requiresApproval: boolean;
+  evaluatedAt: Date;
+  rulesVersion: number;
+  evaluatedById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): PlacementReadinessRecord {
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    readinessStatus: record.readinessStatus as PlacementReadinessStatus,
+    score: record.score,
+    blockers: record.blockers,
+    warnings: record.warnings,
+    completedChecks: record.completedChecks,
+    pendingChecks: record.pendingChecks,
+    missingInformation: record.missingInformation,
+    nextBestAction: record.nextBestAction,
+    requiresApproval: record.requiresApproval,
+    evaluatedAt: record.evaluatedAt.toISOString(),
+    rulesVersion: record.rulesVersion,
+    evaluatedById: record.evaluatedById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F8.10: Placement Readiness -- wiring impuro entre
+ * `recruiting-intelligence/placement-readiness.ts` (puro) y el estado
+ * YA persistido por F8.5/F8.7/F8.8/F8.9 -- reutiliza cada uno tal cual
+ * (nunca los recalcula). Nunca crea Placement/Assignment, nunca activa
+ * un Worker, nunca cambia `Candidate.status`. Upsert por (candidateId,
+ * jobOrderId), mismo workaround de `findFirst`-por-campos-planos ya
+ * documentado en F8.5.
+ */
+export async function computeAndPersistPlacementReadiness(candidateId: string, jobOrderId: string): Promise<PlacementReadinessRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const [candidate, jobOrder] = await Promise.all([
+    scopedDb.candidate.findUnique({ where: { id: candidateId }, select: { id: true, state: true } }),
+    scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, select: { id: true, location: true, startDate: true } }),
+  ]);
+  if (!candidate) throw AppError.notFound("Candidate not found");
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const [evaluation, shortlistEntry, screeningPlan, interviewPreview] = await Promise.all([
+    runQualificationEvaluation(candidateId, jobOrderId),
+    scopedDb.candidateShortlistEntry.findFirst({ where: { candidateId, jobOrderId }, select: { reviewStatus: true } }),
+    scopedDb.screeningPlan.findFirst({ where: { candidateId, jobOrderId }, select: { manualReviewFlags: true } }),
+    scopedDb.interviewPreview.findFirst({ where: { candidateId, jobOrderId }, select: { status: true } }),
+  ]);
+  const derived = deriveQualificationStatus(evaluation);
+  const jobLocation = jobOrder.location as { state?: string | null } | null;
+
+  const readiness = computePlacementReadiness({
+    candidateId,
+    jobOrderId,
+    qualificationStatus: derived.status,
+    qualification: evaluation,
+    shortlistReviewStatus: (shortlistEntry?.reviewStatus as ShortlistReviewStatus | undefined) ?? null,
+    screeningPlanExists: !!screeningPlan,
+    screeningManualReviewFlags: screeningPlan?.manualReviewFlags ?? [],
+    interviewPreviewStatus: (interviewPreview?.status as InterviewPreviewStatus | undefined) ?? null,
+    candidateState: candidate.state,
+    jobOrderState: jobLocation?.state ?? null,
+    jobOrderStartDate: jobOrder.startDate,
+  });
+
+  const existing = await scopedDb.placementReadiness.findFirst({ where: { candidateId, jobOrderId } });
+  const data = {
+    readinessStatus: readiness.readinessStatus,
+    score: readiness.score,
+    blockers: readiness.blockers,
+    warnings: readiness.warnings,
+    completedChecks: readiness.completedChecks,
+    pendingChecks: readiness.pendingChecks,
+    missingInformation: readiness.missingInformation,
+    nextBestAction: readiness.nextBestAction,
+    requiresApproval: readiness.requiresApproval,
+    evaluatedAt: new Date(readiness.evaluatedAt),
+    rulesVersion: readiness.rulesVersion,
+    evaluatedById: ctx.userId,
+  };
+
+  const record = existing
+    ? await scopedDb.placementReadiness.update({ where: { id: existing.id }, data })
+    : await scopedDb.placementReadiness.create({ data: { tenantId: ctx.tenantId, candidateId, jobOrderId, ...data } });
+
+  await logAuditEvent({
+    action: "candidate.placement_readiness_evaluated",
+    entityType: "placement_readiness",
+    entityId: record.id,
+    after: { candidateId, jobOrderId, readinessStatus: record.readinessStatus, score: record.score },
+  });
+
+  return toPlacementReadinessRecord(record);
+}
+
+/** Lee la evaluación de placement readiness YA persistida. Nunca recalcula. */
+export async function getPlacementReadiness(candidateId: string, jobOrderId: string): Promise<PlacementReadinessRecord | null> {
+  const record = await scopedDb.placementReadiness.findFirst({ where: { candidateId, jobOrderId } });
+  if (!record) return null;
+  return toPlacementReadinessRecord(record);
 }
 
 /**

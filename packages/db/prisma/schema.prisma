@@ -844,6 +844,7 @@ model Candidate {
   shortlistEntries CandidateShortlistEntry[]
   screeningPlans  ScreeningPlan[]
   interviewPreviews InterviewPreview[]
+  placementReadiness PlacementReadiness[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -918,6 +919,7 @@ model JobOrder {
   shortlistEntries CandidateShortlistEntry[]
   screeningPlans   ScreeningPlan[]
   interviewPreviews InterviewPreview[]
+  placementReadiness PlacementReadiness[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -1135,6 +1137,49 @@ model InterviewPreview {
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, status])
+}
+
+// F8.10: estado agregado de "listo para placement" -- 4 valores, nunca
+// implica que se creó un Placement/Assignment ni que se activó un
+// Worker (eso sigue siendo 100% acción humana en fases futuras).
+enum PlacementReadinessStatus {
+  NOT_READY
+  NEEDS_REVIEW
+  CONDITIONALLY_READY
+  READY_FOR_APPROVAL
+}
+
+// F8.10: Placement Readiness -- agrega el estado YA calculado por F8.5/
+// F8.7/F8.8/F8.9 para UN Candidate contra UN JobOrder. Un registro por
+// par, mismo patrón de upsert que el resto de F8. `requiresApproval`
+// siempre `true` -- se persiste para dejar auditado que esta tabla
+// NUNCA autoriza una acción automática.
+model PlacementReadiness {
+  id                 String                   @id @default(cuid())
+  tenantId           String
+  candidateId        String
+  candidate          Candidate                @relation(fields: [candidateId], references: [id])
+  jobOrderId         String
+  jobOrder           JobOrder                 @relation(fields: [jobOrderId], references: [id])
+  readinessStatus    PlacementReadinessStatus
+  score              Int
+  blockers           String[]                 @default([])
+  warnings           String[]                 @default([])
+  completedChecks    String[]                 @default([])
+  pendingChecks      String[]                 @default([])
+  missingInformation String[]                 @default([])
+  nextBestAction     String
+  requiresApproval   Boolean                  @default(true)
+  evaluatedAt        DateTime
+  rulesVersion       Int
+  // F8.10: quién disparó la evaluación -- del contexto de tenancy,
+  // nunca del body (mismo patrón que Candidate.createdById, F5.2).
+  evaluatedById      String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId, readinessStatus])
 }
 
 model Project {

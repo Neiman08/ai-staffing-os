@@ -35,13 +35,16 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2/F8.2/F8.5/F8.6/F8.7/F8.8/F8.9: limpieza — todo lo creado por
-  // esta suite queda claramente identificado (nombre/prefijo de test) y
-  // se borra al terminar. CandidateQualification/CandidateMatch/
-  // CandidateShortlistEntry/ScreeningPlan/InterviewPreview tienen FKs ON
-  // DELETE RESTRICT hacia Candidate/JobOrder, así que deben borrarse
-  // primero.
+  // F5.2/F8.2/F8.5/F8.6/F8.7/F8.8/F8.9/F8.10: limpieza — todo lo creado
+  // por esta suite queda claramente identificado (nombre/prefijo de
+  // test) y se borra al terminar. CandidateQualification/CandidateMatch/
+  // CandidateShortlistEntry/ScreeningPlan/InterviewPreview/
+  // PlacementReadiness tienen FKs ON DELETE RESTRICT hacia Candidate/
+  // JobOrder, así que deben borrarse primero.
   if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.placementReadiness.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
     await prisma.interviewPreview.deleteMany({
       where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
     });
@@ -1298,6 +1301,165 @@ test("generating a preview and changing its status write AuditLog entries", asyn
   });
   assert.ok(generatedAudit);
   assert.ok(statusAudit);
+});
+
+// ---------- F8.10: Placement Readiness ----------
+
+test("POST /candidates/:id/placement-readiness/:jobOrderId as sales@titan.dev returns 403 (no candidates.update)", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+  });
+  assert.equal(res.status, 403);
+});
+
+test("GET /candidates/:id/placement-readiness/:jobOrderId returns 404 before any evaluation has been run", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 404);
+});
+
+test("POST evaluates NOT_READY for a NOT_QUALIFIED candidate (wrong category), requiresApproval always true, never changes Candidate.status", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { readinessStatus: string; requiresApproval: boolean; blockers: string[] };
+  assert.equal(body.readinessStatus, "NOT_READY");
+  assert.equal(body.requiresApproval, true);
+  assert.ok(body.blockers.length > 0);
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } });
+  assert.equal(stillNew.status, "NEW", "evaluating placement readiness must never change Candidate.status");
+});
+
+test("POST evaluates CONDITIONALLY_READY for a QUALIFIED candidate with no shortlist/screening/interview yet (pending, not blocked)", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const documentType = await prisma.documentType.findFirstOrThrow({ where: { key: "forklift_cert" } });
+  const document = await prisma.document.create({
+    data: {
+      tenantId: (await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } })).tenantId,
+      candidateId: candidate.id,
+      documentTypeId: documentType.id,
+      status: "VERIFIED",
+    },
+  });
+  createdDocumentIds.push(document.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { readinessStatus: string; pendingChecks: string[] };
+  assert.equal(body.readinessStatus, "CONDITIONALLY_READY");
+  assert.ok(body.pendingChecks.includes("shortlist"));
+});
+
+test("POST reaches READY_FOR_APPROVAL once qualification, shortlist, screening, and interview are all complete", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID], state: "IL" });
+  const jobOrder = await createValidJobOrder({ startDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString() });
+  const documentType = await prisma.documentType.findFirstOrThrow({ where: { key: "forklift_cert" } });
+  const document = await prisma.document.create({
+    data: {
+      tenantId: (await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } })).tenantId,
+      candidateId: candidate.id,
+      documentTypeId: documentType.id,
+      status: "VERIFIED",
+    },
+  });
+  createdDocumentIds.push(document.id);
+
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  const shortlistRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  const shortlistBody = (await shortlistRes.json()) as Array<{ id: string; candidateId: string }>;
+  const entry = shortlistBody.find((e) => e.candidateId === candidate.id);
+  assert.ok(entry);
+  await fetch(`${baseUrl}/api/v1/shortlist/${entry!.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "READY_FOR_REVIEW" }),
+  });
+  await fetch(`${baseUrl}/api/v1/shortlist/${entry!.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "APPROVED" }),
+  });
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({
+      proposedWindows: [{ start: "2026-08-01T15:00:00.000Z", end: "2026-08-01T15:30:00.000Z" }],
+      durationMinutes: 30,
+      timezone: "America/Chicago",
+      modality: "PHONE",
+      participants: [{ role: "recruiter", name: "Recruiter One" }],
+    }),
+  });
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ status: "APPROVED_FOR_SEND" }),
+  });
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { readinessStatus: string; score: number; missingInformation: string[] };
+  assert.equal(body.readinessStatus, "READY_FOR_APPROVAL");
+  assert.equal(body.score, 100);
+  assert.ok(body.missingInformation.some((m) => m.includes("compensación")), "compensation data absence must always be documented, never invented");
+});
+
+test("POST is idempotent: re-running upserts the same PlacementReadiness row instead of creating a second one", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const count = await prisma.placementReadiness.count({ where: { candidateId: candidate.id, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1);
+});
+
+test("GET returns the persisted evaluation without recomputing", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { candidateId: string; jobOrderId: string };
+  assert.equal(body.candidateId, candidate.id);
+  assert.equal(body.jobOrderId, jobOrder.id);
+});
+
+test("evaluating placement readiness writes an AuditLog entry", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/placement-readiness/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  const body = (await res.json()) as { id: string };
+
+  const auditEntry = await prisma.auditLog.findFirst({
+    where: { action: "candidate.placement_readiness_evaluated", entityType: "placement_readiness", entityId: body.id },
+  });
+  assert.ok(auditEntry);
 });
 
 // ---------- F8.3: Candidate Sourcing ----------
