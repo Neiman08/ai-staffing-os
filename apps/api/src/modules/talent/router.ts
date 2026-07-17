@@ -7,6 +7,7 @@ import {
   updateCandidateStatusInputSchema,
 } from "@ai-staffing-os/shared";
 import { requirePermission, requireAllPermissions, requireAnyPermission } from "../../core/rbac/require-permission";
+import { AppError } from "../../core/errors";
 import * as talentService from "./service";
 
 export const talentRouter = Router();
@@ -126,6 +127,36 @@ talentRouter.get(
   async (req, res, next) => {
     try {
       res.json(await talentService.sourceCandidatesForJobOrder(req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// F8.5: Estados de calificación con razones auditables -- POST evalúa Y
+// persiste (upsert) el estado de 4 valores; requiere update (no solo
+// view) porque escribe un registro nuevo. GET solo lee lo ya persistido,
+// sin re-evaluar -- nunca crea nada si no se evaluó antes.
+talentRouter.post(
+  "/candidates/:id/qualification/:jobOrderId",
+  requireAllPermissions(["candidates.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await talentService.persistCandidateQualification(req.params.id!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+talentRouter.get(
+  "/candidates/:id/qualification/:jobOrderId/status",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      const record = await talentService.getCandidateQualification(req.params.id!, req.params.jobOrderId!);
+      if (!record) throw AppError.notFound("No persisted qualification found for this candidate and job order");
+      res.json(record);
     } catch (err) {
       next(err);
     }

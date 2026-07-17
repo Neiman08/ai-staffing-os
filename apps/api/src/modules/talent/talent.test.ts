@@ -35,8 +35,15 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2/F8.2: limpieza — todo lo creado por esta suite queda claramente
-  // identificado (nombre/prefijo de test) y se borra al terminar.
+  // F5.2/F8.2/F8.5: limpieza — todo lo creado por esta suite queda
+  // claramente identificado (nombre/prefijo de test) y se borra al
+  // terminar. CandidateQualification tiene FKs ON DELETE RESTRICT hacia
+  // Candidate/JobOrder, así que debe borrarse primero.
+  if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.candidateQualification.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
+  }
   if (createdDocumentIds.length > 0) {
     await prisma.document.deleteMany({ where: { id: { in: createdDocumentIds } } });
   }
@@ -657,6 +664,135 @@ test("candidato con categoria distinta a la del Job Order -> category_mismatch",
   const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
   const result = (await res.json()) as { hardDisqualifiers: string[] };
   assert.ok(result.hardDisqualifiers.includes("category_mismatch"));
+});
+
+// ---------- F8.5: Estados de calificación con razones auditables ----------
+
+test("POST /candidates/:id/qualification/:jobOrderId as sales@titan.dev returns 403 (no candidates.update)", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST persists NOT_QUALIFIED for a category mismatch, with auditable reasons, and never changes Candidate.status", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    status: string;
+    reasons: string[];
+    hardDisqualifiers: string[];
+    candidateId: string;
+    jobOrderId: string;
+  };
+  assert.equal(body.status, "NOT_QUALIFIED");
+  assert.ok(body.hardDisqualifiers.includes("category_mismatch"));
+  assert.ok(body.reasons.length > 0, "reasons must be auditable, never empty when disqualified");
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } });
+  assert.equal(stillNew.status, "NEW", "persisting a qualification must never change Candidate.status");
+
+  const persisted = await prisma.candidateQualification.findUniqueOrThrow({
+    where: { candidateId_jobOrderId: { candidateId: candidate.id, jobOrderId: jobOrder.id } },
+  });
+  assert.equal(persisted.status, "NOT_QUALIFIED");
+});
+
+test("POST persists NEEDS_REVIEW when the only disqualifier is a missing required document", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { status: string };
+  assert.equal(body.status, "NEEDS_REVIEW");
+});
+
+test("POST persists QUALIFIED when all requirements are met, and re-running upserts the same row instead of creating a second one", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const documentType = await prisma.documentType.findFirstOrThrow({ where: { key: "forklift_cert" } });
+  const document = await prisma.document.create({
+    data: {
+      tenantId: (await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } })).tenantId,
+      candidateId: candidate.id,
+      documentTypeId: documentType.id,
+      status: "VERIFIED",
+    },
+  });
+  createdDocumentIds.push(document.id);
+
+  const firstRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(firstRes.status, 201);
+  const firstBody = (await firstRes.json()) as { id: string; status: string };
+  assert.equal(firstBody.status, "QUALIFIED");
+
+  const secondRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(secondRes.status, 201);
+  const secondBody = (await secondRes.json()) as { id: string; status: string };
+  assert.equal(secondBody.id, firstBody.id, "re-evaluating the same pair must upsert, never create a second row");
+
+  const count = await prisma.candidateQualification.count({
+    where: { candidateId: candidate.id, jobOrderId: jobOrder.id },
+  });
+  assert.equal(count, 1);
+});
+
+test("GET .../status returns the persisted record without re-evaluating, and 404s when nothing was persisted yet", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const notYetRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}/status`, {
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(notYetRes.status, 404);
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+
+  const afterRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}/status`, {
+    headers: RECRUITER_HEADERS,
+  });
+  assert.equal(afterRes.status, 200);
+  const body = (await afterRes.json()) as { candidateId: string; jobOrderId: string; status: string };
+  assert.equal(body.candidateId, candidate.id);
+  assert.equal(body.jobOrderId, jobOrder.id);
+});
+
+test("persisting a qualification writes an AuditLog entry", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+
+  const auditEntry = await prisma.auditLog.findFirst({
+    where: { action: "candidate.qualification_evaluated", entityType: "candidate_qualification" },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.ok(auditEntry);
 });
 
 // ---------- F8.3: Candidate Sourcing ----------

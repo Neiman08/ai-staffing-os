@@ -17,6 +17,7 @@ const STRICT_TENANT_MODELS = new Set([
   "Candidate",
   "Worker",
   "JobOrder",
+  "CandidateQualification",
   "Project",
   "Assignment",
   "Shift",

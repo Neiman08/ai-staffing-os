@@ -19,6 +19,7 @@ import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
 import { evaluateCandidateQualification, type QualificationEvaluationResult } from "../recruiting-intelligence/qualification-rules";
+import { deriveQualificationStatus, type PersistedQualificationStatus } from "../recruiting-intelligence/qualification-status";
 import { sourceCandidatesForJob, type CandidateSourcingResult } from "../recruiting-intelligence/candidate-sourcing";
 import {
   normalizeCandidateEmail as normalizeEmail,
@@ -27,6 +28,19 @@ import {
 } from "../recruiting-intelligence/candidate-identity";
 
 // ================= Candidates =================
+
+export interface CandidateQualificationRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  status: PersistedQualificationStatus;
+  reasons: string[];
+  hardDisqualifiers: string[];
+  rulesVersion: number;
+  evaluatedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /**
  * F5.2 (aprobado), reforzado en F8.4: dedup a nivel de servicio, dentro del
@@ -510,10 +524,7 @@ export async function listJobCategories(): Promise<JobCategoryListItem[]> {
  * schema todavía) -- se evalúan como `null`/`[]` (sin requisito) hasta
  * que exista esa columna, nunca se inventa un valor.
  */
-export async function evaluateCandidateQualificationForJobOrder(
-  candidateId: string,
-  jobOrderId: string,
-): Promise<QualificationEvaluationResult> {
+async function runQualificationEvaluation(candidateId: string, jobOrderId: string): Promise<QualificationEvaluationResult> {
   const [candidate, jobOrder] = await Promise.all([
     scopedDb.candidate.findUnique({ where: { id: candidateId }, include: { categories: true, documents: { include: { documentType: true } } } }),
     scopedDb.jobOrder.findUnique({ where: { id: jobOrderId } }),
@@ -541,6 +552,100 @@ export async function evaluateCandidateQualificationForJobOrder(
       requiredLanguages: [],
     },
   });
+}
+
+export async function evaluateCandidateQualificationForJobOrder(
+  candidateId: string,
+  jobOrderId: string,
+): Promise<QualificationEvaluationResult> {
+  return runQualificationEvaluation(candidateId, jobOrderId);
+}
+
+/**
+ * F8.5: Estados de calificación con razones auditables -- wiring impuro
+ * entre `recruiting-intelligence/qualification-status.ts` (puro) y la
+ * nueva tabla `CandidateQualification`. A diferencia de F8.2 (que solo
+ * evalúa), esta función SÍ persiste: hace upsert de un registro por par
+ * (candidateId, jobOrderId) con el estado de 4 valores derivado y sus
+ * razones auditables. Nunca cambia `Candidate.status` -- son conceptos
+ * distintos (ver comentario del enum `QualificationStatus` en el
+ * schema): esto es el estado de calificación PARA UN JOB ORDER
+ * específico, no el ciclo de vida general del candidato.
+ */
+export async function persistCandidateQualification(
+  candidateId: string,
+  jobOrderId: string,
+): Promise<CandidateQualificationRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const evaluation = await runQualificationEvaluation(candidateId, jobOrderId);
+  const derived = deriveQualificationStatus(evaluation);
+
+  // F8.5: mismo constraint único ya declarado en el schema
+  // (@@unique([candidateId, jobOrderId])) -- se busca con un findFirst
+  // (WhereInput admite candidateId/jobOrderId como campos planos; el
+  // nombre compuesto candidateId_jobOrderId solo existe para
+  // WhereUniqueInput, que scopedDb.findUnique/upsert ya redirige a
+  // findFirst tenant-scoped y no lo reconocería -- mismo criterio que
+  // TimeEntry en payroll/service.ts, F5.6) y luego se hace update/create
+  // por `id`, que sí es un campo simple soportado.
+  const existing = await scopedDb.candidateQualification.findFirst({ where: { candidateId, jobOrderId } });
+
+  const data = {
+    status: derived.status,
+    reasons: derived.reasons,
+    hardDisqualifiers: derived.hardDisqualifiers,
+    rulesVersion: derived.rulesVersion,
+    evaluatedById: ctx.userId,
+  };
+
+  const record = existing
+    ? await scopedDb.candidateQualification.update({ where: { id: existing.id }, data })
+    : await scopedDb.candidateQualification.create({
+        data: { tenantId: ctx.tenantId, candidateId, jobOrderId, ...data },
+      });
+
+  await logAuditEvent({
+    action: "candidate.qualification_evaluated",
+    entityType: "candidate_qualification",
+    entityId: record.id,
+    after: { candidateId, jobOrderId, status: record.status },
+  });
+
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    status: record.status,
+    reasons: record.reasons,
+    hardDisqualifiers: record.hardDisqualifiers,
+    rulesVersion: record.rulesVersion,
+    evaluatedById: record.evaluatedById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+export async function getCandidateQualification(
+  candidateId: string,
+  jobOrderId: string,
+): Promise<CandidateQualificationRecord | null> {
+  const record = await scopedDb.candidateQualification.findFirst({ where: { candidateId, jobOrderId } });
+  if (!record) return null;
+
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    status: record.status,
+    reasons: record.reasons,
+    hardDisqualifiers: record.hardDisqualifiers,
+    rulesVersion: record.rulesVersion,
+    evaluatedById: record.evaluatedById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
 }
 
 /**

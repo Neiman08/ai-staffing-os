@@ -215,3 +215,50 @@ Ninguna.
 `feat: F8.4 — candidate normalization and deduplication`.
 
 **F8.4 completo.**
+
+## 11. Resultado de F8.5 — Estados de calificación con razones auditables
+
+### 11.1 Arquitectura
+
+- **`recruiting-intelligence/qualification-status.ts`** (nuevo, puro) — `deriveQualificationStatus()`: deriva el estado de 4 valores (`QUALIFIED`/`POSSIBLY_QUALIFIED`/`NEEDS_REVIEW`/`NOT_QUALIFIED`) a partir del `QualificationEvaluationResult` que ya produce F8.2, SIN modificar `qualification-rules.ts` (queda cerrado, sin tocar). Regla: `NOT_QUALIFIED` si hay un disqualifier duro no recuperable en el corto plazo (estado inelegible/categoría no coincide/documento vencido); `NEEDS_REVIEW` si el ÚNICO disqualifier es un documento faltante/no verificado (recuperable con acción humana); `POSSIBLY_QUALIFIED` si solo hay gaps blandos (experiencia/idiomas); `QUALIFIED` si no hay ninguno.
+- **Nuevo modelo `CandidateQualification`** (schema, aditivo) — un registro por par `(candidateId, jobOrderId)` (`@@unique`), con `status`, `reasons`, `hardDisqualifiers`, `rulesVersion`, `evaluatedById`. Es el estado ACTUAL (upsert en cada evaluación); el historial de cambios vive en `AuditLog` (mismo patrón que `Candidate.status`).
+- **`talent/service.ts` → `persistCandidateQualification()`** (impuro, nuevo) — evalúa (reutiliza `runQualificationEvaluation`, extraída de la función de F8.2) + deriva estado + hace upsert. Nunca cambia `Candidate.status`. **`getCandidateQualification()`** (nuevo) — solo lee lo ya persistido, nunca re-evalúa ni crea.
+- **Hallazgo de auditoría durante la implementación**: el constraint compuesto `@@unique([candidateId, jobOrderId])` no puede usarse con `scopedDb.findUnique`/`upsert` -- la extensión de tenancy (`prisma-extension.ts`) redirige esas operaciones a `findFirst` para poder inyectar el filtro de tenant (ver comentario ya existente en el archivo), y `findFirst` no reconoce el nombre de clave compuesta (`candidateId_jobOrderId`), solo `findUnique` real lo acepta. Mismo límite ya documentado y resuelto en `payroll/service.ts` (`TimeEntry`, F5.6): se usa `findFirst` con campos planos + `update`/`create` manual por `id` en vez de `upsert`. No es un bug nuevo, es una restricción arquitectónica preexistente respetada, no un F7 tocado.
+- **`GET /candidates/:id/qualification/:jobOrderId`** (F8.2, sin cambios) sigue siendo solo evaluación. **`POST /candidates/:id/qualification/:jobOrderId`** (nuevo) evalúa y persiste — requiere `candidates.update` (no solo `view`) porque escribe. **`GET /candidates/:id/qualification/:jobOrderId/status`** (nuevo) lee lo persistido, 404 si nunca se evaluó.
+
+### 11.2 Archivos modificados
+
+- Nuevo: `recruiting-intelligence/qualification-status.ts`, `qualification-status.test.ts`, migración `20260717120000_f8_5_candidate_qualification`.
+- Modificado: `packages/db/prisma/schema.prisma` (enum `QualificationStatus` + modelo `CandidateQualification` + back-relations en `Candidate`/`JobOrder`), `core/tenancy/prisma-extension.ts` (+1 línea, `CandidateQualification` en `STRICT_TENANT_MODELS`), `talent/service.ts`, `talent/router.ts`, `talent/talent.test.ts`.
+
+### 11.3 Contratos
+
+- Nuevos endpoints (sin cambios de schema en `@ai-staffing-os/shared` -- mismo criterio que F8.2/F8.3, DTOs locales al service). `POST` devuelve 201 con `CandidateQualificationRecord` (`id, candidateId, jobOrderId, status, reasons, hardDisqualifiers, rulesVersion, evaluatedById, createdAt, updatedAt`). `GET .../status` devuelve el mismo shape o 404.
+
+### 11.4 UI
+
+Ninguna en esta subfase -- igual que F8.1-F8.4, se surfacea en F8.11.
+
+### 11.5 Tests — 17 nuevos (todos passing)
+
+`qualification-status.test.ts` (11): las 4 combinaciones de estado incl. prioridad correcta cuando coexisten un disqualifier duro y uno de documento faltante; passthrough exacto de `reasons`/`hardDisqualifiers`/`rulesVersion`. `talent.test.ts` (+6): RBAC 403 sin `candidates.update` en el POST; persistencia de `NOT_QUALIFIED` con razones auditables y sin tocar `Candidate.status`; `NEEDS_REVIEW` cuando el único disqualifier es documento faltante; `QUALIFIED` + upsert real (re-evaluar el mismo par actualiza la MISMA fila, nunca crea una segunda); `GET .../status` 404 antes de evaluar y 200 con los datos correctos después; escritura de `AuditLog` en cada persistencia.
+
+### 11.6 Suite completa
+
+855 tests, 849 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip (4 gateados + 1 preexistente) -- cero regresiones. Typecheck y lint limpios.
+
+### 11.7 Migraciones
+
+`20260717120000_f8_5_candidate_qualification` -- 100% aditiva: 1 enum nuevo (`QualificationStatus`), 1 tabla nueva (`CandidateQualification`) con 2 FKs (`Candidate`, `JobOrder`, ambas `ON DELETE RESTRICT` por default de Prisma), 1 índice compuesto, 1 índice único compuesto. Cero columnas nuevas en tablas existentes, cero datos migrados/backfilleados.
+
+### 11.8 Limitaciones conocidas
+
+- Las FKs son `ON DELETE RESTRICT` (default) -- borrar un `Candidate` o `JobOrder` con calificaciones persistidas falla hasta borrar primero su `CandidateQualification`; documentado en el comentario de limpieza de `talent.test.ts`, no resuelto con cascada automática para no perder auditoría silenciosamente.
+- El mapeo `NEEDS_REVIEW` depende de que F8.2 siga usando el prefijo `"missing_required_document:"` como único código para documentos faltantes -- si F8.2 cambia esa convención en el futuro, `qualification-status.ts` debe revisarse (acoplamiento documentado, no oculto).
+- No hay endpoint de "evaluar en batch" (todos los candidatos contra un Job Order) -- cada llamada es un par puntual; se evalúa si hace falta en una subfase posterior (F8.7 Shortlist parece el lugar natural).
+
+### 11.9 Commit
+
+`feat: F8.5 — persisted qualification status with auditable reasons`.
+
+**F8.5 completo.**

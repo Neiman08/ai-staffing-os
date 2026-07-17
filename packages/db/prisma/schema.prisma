@@ -157,6 +157,17 @@ enum CandidateStatus {
   INACTIVE
 }
 
+// F8.5: estado persistido de la evaluación de reglas de F8.2
+// (recruiting-intelligence/qualification-rules.ts) para un par
+// Candidate+JobOrder específico -- deliberadamente distinto de
+// CandidateStatus (ciclo de vida general del candidato, no por Job Order).
+enum QualificationStatus {
+  QUALIFIED
+  POSSIBLY_QUALIFIED
+  NEEDS_REVIEW
+  NOT_QUALIFIED
+}
+
 enum EmploymentType {
   W2
   C1099
@@ -828,6 +839,7 @@ model Candidate {
   smsOptIn        Boolean         @default(false) // TCPA desde F0
   documents       Document[]
   worker          Worker?
+  qualifications  CandidateQualification[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -897,11 +909,39 @@ model JobOrder {
   createdById      String?
   assignments      Assignment[]
   pricingScenarios PricingScenario[]
+  qualifications   CandidateQualification[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   @@index([tenantId, status])
   @@index([companyId])
+}
+
+// F8.5: estado de calificación persistido, con razones auditables, de UN
+// Candidate contra UN JobOrder específico -- resultado de aplicar
+// `recruiting-intelligence/qualification-rules.ts` (F8.2) y derivar el
+// estado de 4 valores. Un registro por par (upsert en cada
+// (re)evaluación) -- el historial de cambios de estado vive en AuditLog
+// (mismo patrón que Candidate.status), esta tabla es el estado ACTUAL.
+model CandidateQualification {
+  id                String              @id @default(cuid())
+  tenantId          String
+  candidateId       String
+  candidate         Candidate           @relation(fields: [candidateId], references: [id])
+  jobOrderId        String
+  jobOrder          JobOrder            @relation(fields: [jobOrderId], references: [id])
+  status            QualificationStatus
+  reasons           String[]            @default([])
+  hardDisqualifiers String[]            @default([])
+  rulesVersion      Int
+  // F8.5: quién disparó la evaluación -- del contexto de tenancy, nunca
+  // del body (mismo patrón que Candidate.createdById, F5.2).
+  evaluatedById     String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, status])
 }
 
 model Project {
