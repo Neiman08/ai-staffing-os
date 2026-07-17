@@ -33,10 +33,18 @@ before(async () => {
 });
 
 after(async () => {
-  // F9.1: WorkerOnboarding tiene FKs ON DELETE RESTRICT hacia Candidate/
-  // JobOrder, así que debe borrarse primero (mismo patrón que
+  // F9.1/F9.2: DocumentChecklistItem tiene FK ON DELETE RESTRICT hacia
+  // WorkerOnboarding, que a su vez tiene FKs ON DELETE RESTRICT hacia
+  // Candidate/JobOrder -- se borra en ese orden (mismo patrón que
   // CandidateQualification en F8.5).
   if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    const onboardings = await prisma.workerOnboarding.findMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+      select: { id: true },
+    });
+    if (onboardings.length > 0) {
+      await prisma.documentChecklistItem.deleteMany({ where: { workerOnboardingId: { in: onboardings.map((o) => o.id) } } });
+    }
     await prisma.workerOnboarding.deleteMany({
       where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
     });
@@ -707,5 +715,168 @@ test("starting onboarding and changing its status write AuditLog entries", async
     where: { action: "worker.onboarding_status_changed", entityType: "worker_onboarding", entityId: startBody.id },
   });
   assert.ok(startedAudit);
+  assert.ok(statusAudit);
+});
+
+// ---------- F9.2: Document Checklist ----------
+
+async function startOnboardingReady(overrides: Record<string, unknown> = {}) {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID], ...overrides });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { method: "POST", headers: OPERATIONS_HEADERS });
+  return { candidateId, jobOrder };
+}
+
+test("POST checklist as sales@titan.dev returns 403 (no workers.update)", async () => {
+  const { candidateId, jobOrder } = await startOnboardingReady();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST checklist returns 404 when onboarding was never started", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  assert.equal(res.status, 404);
+});
+
+test("POST generates a real checklist from JobOrder.requirements (forklift_cert), each item PENDING", async () => {
+  const { candidateId, jobOrder } = await startOnboardingReady();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as Array<{ documentTypeKey: string; status: string; required: boolean }>;
+  assert.ok(body.some((i) => i.documentTypeKey === "forklift_cert"));
+  assert.ok(body.every((i) => i.status === "PENDING" && i.required === true));
+});
+
+test("POST is idempotent: re-running never duplicates items nor resets an already-progressed item", async () => {
+  const { candidateId, jobOrder } = await startOnboardingReady();
+  const firstRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const firstBody = (await firstRes.json()) as Array<{ id: string; documentTypeKey: string }>;
+  const item = firstBody.find((i) => i.documentTypeKey === "forklift_cert");
+  assert.ok(item);
+
+  await fetch(`${baseUrl}/api/v1/checklist-items/${item!.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "SUBMITTED" }),
+  });
+
+  const secondRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const secondBody = (await secondRes.json()) as Array<{ id: string; documentTypeKey: string; status: string }>;
+  assert.equal(secondBody.length, firstBody.length, "regenerating must never duplicate items");
+  assert.equal(
+    secondBody.find((i) => i.documentTypeKey === "forklift_cert")!.status,
+    "SUBMITTED",
+    "regenerating must never reset progress already made on an existing item",
+  );
+});
+
+test("PATCH checklist item: full path PENDING -> SUBMITTED -> UNDER_REVIEW -> VERIFIED succeeds; skipping is rejected with 400", async () => {
+  const { candidateId, jobOrder } = await startOnboardingReady();
+  const genRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const items = (await genRes.json()) as Array<{ id: string }>;
+  const item = items[0]!;
+
+  for (const status of ["SUBMITTED", "UNDER_REVIEW", "VERIFIED"]) {
+    const res = await fetch(`${baseUrl}/api/v1/checklist-items/${item.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+    assert.equal(res.status, 200, `expected 200 moving to ${status}`);
+  }
+
+  const verified = await prisma.documentChecklistItem.findUniqueOrThrow({ where: { id: item.id } });
+  assert.equal(verified.status, "VERIFIED");
+  assert.ok(verified.verifiedAt);
+  assert.ok(verified.verifiedById);
+
+  // Otro item recién creado, en PENDING -- saltar directo a VERIFIED debe rechazarse.
+  const secondGenRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    headers: OPERATIONS_HEADERS,
+  });
+  const secondItems = (await secondGenRes.json()) as Array<{ id: string; status: string }>;
+  const pendingItem = secondItems.find((i) => i.status === "PENDING");
+  if (pendingItem) {
+    const skipRes = await fetch(`${baseUrl}/api/v1/checklist-items/${pendingItem.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status: "VERIFIED" }),
+    });
+    assert.equal(skipRes.status, 400);
+  }
+});
+
+test("PATCH checklist item: WAIVED is reachable and reversible to NOT_REQUESTED -- never a permanent rejection", async () => {
+  const { candidateId, jobOrder } = await startOnboardingReady();
+  const genRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const items = (await genRes.json()) as Array<{ id: string }>;
+  const item = items[0]!;
+
+  const waiveRes = await fetch(`${baseUrl}/api/v1/checklist-items/${item.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "WAIVED" }),
+  });
+  assert.equal(waiveRes.status, 200);
+
+  const reopenRes = await fetch(`${baseUrl}/api/v1/checklist-items/${item.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "NOT_REQUESTED" }),
+  });
+  assert.equal(reopenRes.status, 200);
+});
+
+test("GET checklist returns the real persisted items, and generating + verifying writes AuditLog entries", async () => {
+  const { candidateId, jobOrder } = await startOnboardingReady();
+  const genRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const items = (await genRes.json()) as Array<{ id: string }>;
+
+  const getRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/checklist`, { headers: OPERATIONS_HEADERS });
+  assert.equal(getRes.status, 200);
+  const getBody = (await getRes.json()) as Array<{ id: string }>;
+  assert.equal(getBody.length, items.length);
+
+  await fetch(`${baseUrl}/api/v1/checklist-items/${items[0]!.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "SUBMITTED" }),
+  });
+
+  const onboarding = await prisma.workerOnboarding.findFirstOrThrow({ where: { candidateId, jobOrderId: jobOrder.id } });
+  const generatedAudit = await prisma.auditLog.findFirst({
+    where: { action: "worker.checklist_generated", entityType: "worker_onboarding", entityId: onboarding.id },
+  });
+  const statusAudit = await prisma.auditLog.findFirst({
+    where: { action: "worker.checklist_item_status_changed", entityType: "document_checklist_item", entityId: items[0]!.id },
+  });
+  assert.ok(generatedAudit);
   assert.ok(statusAudit);
 });

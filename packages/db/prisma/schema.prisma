@@ -1225,11 +1225,63 @@ model WorkerOnboarding {
   // F9.1: quién inició el onboarding -- del contexto de tenancy, nunca
   // del body (mismo patrón que Candidate.createdById, F5.2).
   startedById    String?
+  checklistItems DocumentChecklistItem[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, status])
+}
+
+// F9.2: estado de seguimiento de un elemento de checklist -- distinto
+// de `DocumentStatus` (que describe el archivo real en `Document`).
+// `WAIVED` siempre puede reabrirse; `REJECTED`/`EXPIRED` siempre pueden
+// reintentarse -- nunca un callejón sin salida.
+enum ChecklistItemStatus {
+  NOT_REQUESTED
+  PENDING
+  SUBMITTED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  EXPIRED
+  WAIVED
+}
+
+// F9.2: Document Checklist -- un elemento de seguimiento por
+// (workerOnboardingId, documentTypeId), generado a partir de
+// `JobOrder.requirements` (ya existente, nunca una lista inventada).
+// `documentId` enlaza opcionalmente al archivo real en `Document`
+// (F0/F5) una vez que existe -- este modelo nunca duplica el archivo,
+// solo su estado de checklist. Nunca se guarda PII innecesaria: solo
+// metadata (label, fechas, referencias por id).
+model DocumentChecklistItem {
+  id                   String                 @id @default(cuid())
+  tenantId             String
+  workerOnboardingId   String
+  workerOnboarding     WorkerOnboarding       @relation(fields: [workerOnboardingId], references: [id])
+  documentTypeId       String
+  documentType         DocumentType           @relation(fields: [documentTypeId], references: [id])
+  documentId           String?
+  document             Document?              @relation(fields: [documentId], references: [id])
+  label                String
+  required             Boolean                @default(true)
+  status               ChecklistItemStatus    @default(NOT_REQUESTED)
+  // F9.2: texto libre, no enum -- mismo criterio ya aprobado para
+  // `Payment.method` ("el proyecto prefiere datos sobre código para
+  // catálogos abiertos").
+  source               String?
+  expiresAt            DateTime?
+  verifiedAt           DateTime?
+  verifiedById         String?
+  rejectionReason      String?
+  notes                String?
+  manualReviewRequired Boolean                @default(false)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@unique([workerOnboardingId, documentTypeId])
+  @@index([tenantId, workerOnboardingId, status])
 }
 
 model Project {
@@ -1319,6 +1371,7 @@ model DocumentType {
   requiresExpiration Boolean    @default(false)
   appliesTo          Json       @default("{}") // reglas por industria/categoría
   documents          Document[]
+  checklistItems     DocumentChecklistItem[]
 
   @@unique([tenantId, key])
 }
@@ -1341,6 +1394,7 @@ model Document {
   aiExtraction    Json?
   rejectionReason String?
   alerts          ComplianceAlert[]
+  checklistItems  DocumentChecklistItem[]
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 

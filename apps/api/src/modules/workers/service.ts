@@ -22,6 +22,11 @@ import {
   type OnboardingStatus,
   type PlacementReadinessStatusLike,
 } from "../operations-intelligence/worker-onboarding";
+import {
+  buildChecklistFromRequirements,
+  isValidChecklistItemTransition,
+  type ChecklistItemStatus,
+} from "../operations-intelligence/document-checklist";
 
 type WorkerRow = {
   id: string;
@@ -488,4 +493,199 @@ export async function updateWorkerOnboardingStatus(
   });
 
   return toOnboardingRecord(updated);
+}
+
+// ================= F9.2: Document Checklist =================
+
+export interface DocumentChecklistItemRecord {
+  id: string;
+  workerOnboardingId: string;
+  documentTypeId: string;
+  documentTypeKey: string;
+  documentId: string | null;
+  label: string;
+  required: boolean;
+  status: ChecklistItemStatus;
+  source: string | null;
+  expiresAt: string | null;
+  verifiedAt: string | null;
+  verifiedById: string | null;
+  rejectionReason: string | null;
+  notes: string | null;
+  manualReviewRequired: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toChecklistItemRecord(record: {
+  id: string;
+  workerOnboardingId: string;
+  documentTypeId: string;
+  documentType: { key: string };
+  documentId: string | null;
+  label: string;
+  required: boolean;
+  status: string;
+  source: string | null;
+  expiresAt: Date | null;
+  verifiedAt: Date | null;
+  verifiedById: string | null;
+  rejectionReason: string | null;
+  notes: string | null;
+  manualReviewRequired: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}): DocumentChecklistItemRecord {
+  return {
+    id: record.id,
+    workerOnboardingId: record.workerOnboardingId,
+    documentTypeId: record.documentTypeId,
+    documentTypeKey: record.documentType.key,
+    documentId: record.documentId,
+    label: record.label,
+    required: record.required,
+    status: record.status as ChecklistItemStatus,
+    source: record.source,
+    expiresAt: record.expiresAt?.toISOString() ?? null,
+    verifiedAt: record.verifiedAt?.toISOString() ?? null,
+    verifiedById: record.verifiedById,
+    rejectionReason: record.rejectionReason,
+    notes: record.notes,
+    manualReviewRequired: record.manualReviewRequired,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F9.2: genera el checklist de documentos requeridos para un
+ * `WorkerOnboarding` YA iniciado (404 si no existe -- nunca lo inicia
+ * acá), a partir de `JobOrder.requirements` (ya existente, nunca una
+ * lista inventada). Idempotente: solo CREA los items faltantes -- nunca
+ * pisa el estado de un item ya existente (mismo criterio que
+ * `generateShortlistForJobOrder`, F8.7: regenerar nunca revierte una
+ * decisión/progreso humano ya hecho).
+ */
+export async function generateChecklistForOnboarding(
+  candidateId: string,
+  jobOrderId: string,
+): Promise<DocumentChecklistItemRecord[]> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const onboarding = await scopedDb.workerOnboarding.findFirst({ where: { candidateId, jobOrderId } });
+  if (!onboarding) throw AppError.notFound("Worker onboarding not found -- start onboarding first");
+
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, select: { requirements: true } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const requiredKeys = Array.isArray(jobOrder.requirements) ? (jobOrder.requirements as unknown[]).map(String) : [];
+  const documentTypes = requiredKeys.length > 0 ? await scopedDb.documentType.findMany({ where: { key: { in: requiredKeys } } }) : [];
+
+  const drafts = buildChecklistFromRequirements(
+    documentTypes.map((dt) => ({ documentTypeId: dt.id, documentTypeKey: dt.key, documentTypeName: dt.name })),
+    Object.fromEntries(documentTypes.map((dt) => [dt.id, dt.requiresExpiration])),
+  );
+
+  const existingItems = await scopedDb.documentChecklistItem.findMany({
+    where: { workerOnboardingId: onboarding.id },
+    select: { documentTypeId: true },
+  });
+  const existingTypeIds = new Set(existingItems.map((i) => i.documentTypeId));
+
+  const toCreate = drafts.filter((d) => !existingTypeIds.has(d.documentTypeId));
+  if (toCreate.length > 0) {
+    await scopedDb.documentChecklistItem.createMany({
+      data: toCreate.map((d) => ({
+        tenantId: ctx.tenantId,
+        workerOnboardingId: onboarding.id,
+        documentTypeId: d.documentTypeId,
+        label: d.label,
+        required: d.required,
+        status: d.status,
+        manualReviewRequired: d.manualReviewRequired,
+      })),
+    });
+
+    await logAuditEvent({
+      action: "worker.checklist_generated",
+      entityType: "worker_onboarding",
+      entityId: onboarding.id,
+      after: { candidateId, jobOrderId, itemsCreated: toCreate.length },
+    });
+  }
+
+  const allItems = await scopedDb.documentChecklistItem.findMany({
+    where: { workerOnboardingId: onboarding.id },
+    include: { documentType: { select: { key: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return allItems.map(toChecklistItemRecord);
+}
+
+/** Lee el checklist YA generado. Nunca lo regenera. */
+export async function getChecklistForOnboarding(candidateId: string, jobOrderId: string): Promise<DocumentChecklistItemRecord[]> {
+  const onboarding = await scopedDb.workerOnboarding.findFirst({ where: { candidateId, jobOrderId }, select: { id: true } });
+  if (!onboarding) throw AppError.notFound("Worker onboarding not found");
+
+  const items = await scopedDb.documentChecklistItem.findMany({
+    where: { workerOnboardingId: onboarding.id },
+    include: { documentType: { select: { key: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return items.map(toChecklistItemRecord);
+}
+
+export interface UpdateChecklistItemInput {
+  status: ChecklistItemStatus;
+  expiresAt?: string | null;
+  rejectionReason?: string | null;
+  notes?: string | null;
+}
+
+/**
+ * Único camino para cambiar el estado de un item de checklist -- valida
+ * la transición (`isValidChecklistItemTransition`). Marcar `VERIFIED`
+ * registra `verifiedAt`/`verifiedById` del contexto de tenancy, nunca
+ * del body. Nunca crea/modifica el `Document` real -- ese enlace
+ * (`documentId`) sigue siendo responsabilidad del módulo de compliance
+ * ya existente.
+ */
+export async function updateChecklistItemStatus(
+  itemId: string,
+  input: UpdateChecklistItemInput,
+): Promise<DocumentChecklistItemRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.documentChecklistItem.findUnique({ where: { id: itemId } });
+  if (!existing) throw AppError.notFound("Checklist item not found");
+
+  const currentStatus = existing.status as ChecklistItemStatus;
+  if (!isValidChecklistItemTransition(currentStatus, input.status)) {
+    throw AppError.badRequest(`Invalid checklist item status transition: ${currentStatus} -> ${input.status}`);
+  }
+
+  const updated = await scopedDb.documentChecklistItem.update({
+    where: { id: itemId },
+    data: {
+      status: input.status,
+      expiresAt: input.expiresAt !== undefined ? (input.expiresAt ? new Date(input.expiresAt) : null) : undefined,
+      rejectionReason: input.rejectionReason !== undefined ? input.rejectionReason : undefined,
+      notes: input.notes !== undefined ? input.notes : undefined,
+      verifiedAt: input.status === "VERIFIED" ? new Date() : existing.verifiedAt,
+      verifiedById: input.status === "VERIFIED" ? ctx.userId : existing.verifiedById,
+    },
+    include: { documentType: { select: { key: true } } },
+  });
+
+  await logAuditEvent({
+    action: "worker.checklist_item_status_changed",
+    entityType: "document_checklist_item",
+    entityId: itemId,
+    before: { status: currentStatus },
+    after: { status: input.status },
+  });
+
+  return toChecklistItemRecord(updated);
 }

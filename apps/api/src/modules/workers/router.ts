@@ -139,3 +139,71 @@ workersRouter.patch(
     }
   },
 );
+
+// F9.2: Document Checklist -- POST genera (idempotente, solo agrega
+// items faltantes) el checklist real a partir de JobOrder.requirements;
+// requiere que el onboarding ya haya sido iniciado (F9.1). GET solo
+// lee. PATCH cambia el estado de UN item -- valida la transición,
+// nunca crea/modifica el Document real.
+workersRouter.post(
+  "/candidates/:candidateId/onboarding/:jobOrderId/checklist",
+  requireAllPermissions(["workers.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await workersService.generateChecklistForOnboarding(req.params.candidateId!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+workersRouter.get(
+  "/candidates/:candidateId/onboarding/:jobOrderId/checklist",
+  requireAllPermissions(["workers.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.json(await workersService.getChecklistForOnboarding(req.params.candidateId!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const CHECKLIST_ITEM_STATUSES = new Set([
+  "NOT_REQUESTED",
+  "PENDING",
+  "SUBMITTED",
+  "UNDER_REVIEW",
+  "VERIFIED",
+  "REJECTED",
+  "EXPIRED",
+  "WAIVED",
+]);
+
+workersRouter.patch(
+  "/checklist-items/:itemId/status",
+  requirePermission("workers.update"),
+  async (req, res, next) => {
+    try {
+      const { status, expiresAt, rejectionReason, notes } = req.body as {
+        status?: unknown;
+        expiresAt?: string | null;
+        rejectionReason?: string | null;
+        notes?: string | null;
+      };
+      if (typeof status !== "string" || !CHECKLIST_ITEM_STATUSES.has(status)) {
+        throw AppError.badRequest("Invalid checklist item status", { allowed: [...CHECKLIST_ITEM_STATUSES] });
+      }
+      res.json(
+        await workersService.updateChecklistItemStatus(req.params.itemId!, {
+          status: status as never,
+          expiresAt,
+          rejectionReason,
+          notes,
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);

@@ -100,3 +100,35 @@ El guard que impide activar sin Worker (`if (status === "ACTIVE" && !existing.wo
 `feat: F9.1 — worker onboarding lifecycle`.
 
 **F9.1 completo.**
+
+## 7. Resultado de F9.2 — Document Checklist
+
+### 7.1 Arquitectura
+
+- **`operations-intelligence/document-checklist.ts`** (nuevo, puro): `CHECKLIST_ITEM_TRANSITIONS` + `isValidChecklistItemTransition()` (WAIVED/REJECTED/EXPIRED siempre reversibles -- nunca un callejón sin salida), `buildChecklistFromRequirements()` (mapea `JobOrder.requirements`, YA existente, a items PENDING -- nunca inventa un tipo de documento), `isChecklistItemExpired()`, `summarizeChecklist()`.
+- **Nuevo modelo `DocumentChecklistItem`** (schema, aditivo): un item de SEGUIMIENTO por `(workerOnboardingId, documentTypeId)` -- reutiliza `DocumentType` (catálogo ya existente) y enlaza opcionalmente al `Document` real (F0/F5) vía `documentId`, nunca lo duplica. Solo metadata (label, fechas, referencias por id) -- cero PII inventada, cero archivo/imagen guardado.
+- **`workers/service.ts` → `generateChecklistForOnboarding()`** (impuro, nuevo): exige un `WorkerOnboarding` ya iniciado (F9.1); idempotente -- solo CREA items faltantes, nunca pisa el estado de uno ya existente (mismo criterio que `generateShortlistForJobOrder`, F8.7). **`getChecklistForOnboarding()`** (solo lectura). **`updateChecklistItemStatus()`**: valida la transición, registra `verifiedAt`/`verifiedById` del contexto de tenancy al marcar `VERIFIED` (nunca del body).
+- **`POST /candidates/:candidateId/onboarding/:jobOrderId/checklist`** (`workers.update`+`jobOrders.view`), **`GET`** (`workers.view`+`jobOrders.view`), **`PATCH /checklist-items/:itemId/status`** (`workers.update`).
+
+### 7.2 Tests — 30 nuevos (todos passing)
+
+`document-checklist.test.ts` (14, puro): transiciones idempotentes/válidas/inválidas; WAIVED/REJECTED/EXPIRED siempre reversibles; construcción del checklist desde requirements reales; `manualReviewRequired` solo para tipos con `requiresExpiration`; detección de expiración solo para VERIFIED con fecha pasada; resumen (`summarizeChecklist`) distingue missing/expired/pendingReview correctamente. `workers.test.ts` (+7 test aunque cubren múltiples aserciones): RBAC 403; 404 sin onboarding iniciado; generación real desde `forklift_cert`; idempotencia que preserva progreso ya hecho (SUBMITTED no se resetea a PENDING al regenerar); camino feliz completo con rechazo de salto de etapa; WAIVED reversible; AuditLog en generación y cambio de estado.
+
+### 7.3 Suite completa
+
+1024 tests, 1018 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 7.4 Migraciones
+
+`20260717190000_f9_2_document_checklist` -- 100% aditiva: 1 enum nuevo (`ChecklistItemStatus`), 1 tabla nueva (`DocumentChecklistItem`) con 3 FKs (WorkerOnboarding/DocumentType `ON DELETE RESTRICT`, Document `ON DELETE SET NULL`), 2 índices.
+
+### 7.5 Limitaciones conocidas
+
+- El checklist se genera únicamente a partir de `JobOrder.requirements` -- no incluye documentos "universales" (I-9/W-4) salvo que el Job Order los liste explícitamente; documentado como decisión conservadora (nunca inventar una lista de requisitos no presente en los datos).
+- `source` es texto libre (mismo criterio ya aprobado para `Payment.method`), no un enum -- el frontend/integraciones futuras deciden el vocabulario.
+
+### 7.6 Commit
+
+`feat: F9.2 — worker document checklists`.
+
+**F9.2 completo.**
