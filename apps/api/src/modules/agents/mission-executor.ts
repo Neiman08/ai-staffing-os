@@ -26,6 +26,7 @@ import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } fro
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
 import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } from "./company-enrichment";
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
+import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
 
 /**
  * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
@@ -77,6 +78,10 @@ export interface ExecuteDiscoveryPlanParams {
   // pidió encontrar, usados por Hiring Signal Intelligence. Vacío en
   // cualquier llamador que no lo pase.
   targetJobTitles?: string[];
+  // F7.6: StructuredIntent.decisionRoles (F7.1) — roles de decisión que
+  // la misión pidió explícitamente, usados por Decision-Maker Role
+  // Planning. Vacío en cualquier llamador que no lo pase.
+  decisionRoles?: string[];
   // Inyección para tests — nunca se llama a un proveedor real en un test
   // unitario. Default: los módulos reales (google-places.ts/overpass.ts,
   // sin modificar).
@@ -142,6 +147,9 @@ export interface CompanyValidationRecord {
   hiringStatus: HiringSignalResult["hiringStatus"] | null;
   hiringConfidence: number | null;
   targetTitlesMatched: string[];
+  // F7.6: null cuando el plan no declaró find_contacts -- Decision-Maker
+  // Role Planning solo corre en preparación de ese paso futuro (F7.7).
+  rolePlan: DecisionRolePlan | null;
 }
 
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
@@ -193,6 +201,8 @@ export interface DiscoveryExecutionReport {
   companiesLikelyHiring: number;
   companiesPossibleHiring: number;
   companiesNoHiringSignal: number;
+  // F7.6: cuántas Companies recibieron un Decision-Maker Role Plan.
+  rolePlansBuilt: number;
 }
 
 interface FinalQuery {
@@ -403,6 +413,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesLikelyHiring: 0,
     companiesPossibleHiring: 0,
     companiesNoHiringSignal: 0,
+    rolePlansBuilt: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -458,6 +469,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const createdCompanyIds: string[] = [];
   const businessActivities = params.businessActivities ?? [];
   const targetJobTitles = params.targetJobTitles ?? [];
+  const decisionRoles = params.decisionRoles ?? [];
   let totalCostUsd = 0;
   let rawResults = 0;
   let acceptedResults = 0;
@@ -475,6 +487,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let companiesWithoutValidEmailTotal = 0;
   let hiringSignalsChecked = 0;
   const hiringStatusCounts: Partial<Record<HiringSignalResult["hiringStatus"], number>> = {};
+  let rolePlansBuilt = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -702,6 +715,28 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           });
         }
 
+        // F7.6: Decision-Maker Role Planning — QUÉ roles buscar, nunca
+        // QUIÉN (eso es Contact Intelligence, F7.7, todavía no
+        // implementado). Corre solo cuando el plan declara find_contacts
+        // (preparación para esa fase futura) — nunca "por si acaso".
+        let rolePlan: DecisionRolePlan | null = null;
+        if (params.plan.steps.includes("find_contacts")) {
+          const taxonomyEntryForRoles = getTaxonomyEntry(candidate.query.taxonomyKey);
+          rolePlan = buildDecisionRolePlan({
+            companyId: company.id,
+            taxonomyKey: candidate.query.taxonomyKey,
+            intentDecisionRoles: decisionRoles,
+            taxonomyDecisionMakers: taxonomyEntryForRoles?.decisionMakers ?? [],
+            hiringStatus: hiringSignal?.hiringStatus ?? null,
+            missionExclusions: params.plan.exclusions,
+          });
+          rolePlansBuilt += 1;
+          await scopedDb.company.update({
+            where: { id: company.id },
+            data: { discoveryMetadata: { ...(company.discoveryMetadata as object), rolePlan } as never },
+          });
+        }
+
         companyValidations.push({
           companyId: company.id,
           name: candidate.raw.name!,
@@ -720,6 +755,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           hiringStatus: hiringSignal?.hiringStatus ?? null,
           hiringConfidence: hiringSignal?.confidence ?? null,
           targetTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
+          rolePlan,
         });
       }
     }
@@ -792,6 +828,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesLikelyHiring: hiringStatusCounts.LIKELY_HIRING ?? 0,
     companiesPossibleHiring: hiringStatusCounts.POSSIBLE_HIRING ?? 0,
     companiesNoHiringSignal: hiringStatusCounts.NO_SIGNAL ?? 0,
+    rolePlansBuilt,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,

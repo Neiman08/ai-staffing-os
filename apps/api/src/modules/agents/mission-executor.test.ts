@@ -366,6 +366,7 @@ async function runWithHiring(
   providers: DiscoveryProviderPort,
   websiteIntelligence: WebsiteIntelligencePort,
   targetJobTitles: string[] = [],
+  decisionRoles: string[] = [],
 ) {
   return runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] }, async () => {
     const missionTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "daily_revenue_mission" } });
@@ -377,6 +378,7 @@ async function runWithHiring(
       googlePlacesApiKey: "fake-key-for-tests",
       websiteIntelligence,
       targetJobTitles,
+      decisionRoles,
     });
     createdCompanyIds.push(...report.createdCompanyIds);
     return report;
@@ -429,4 +431,59 @@ test("hiring signals: NO_SIGNAL cuando no hay evidencia, nunca inventa una senal
 
   assert.equal(report.companiesNoHiringSignal, 1);
   assert.equal(report.companyValidations[0]!.hiringStatus, "NO_SIGNAL");
+});
+
+// ---------- F7.6: Decision-Maker Role Planning wiring ----------
+
+test("role plan: nunca corre cuando el plan no declara find_contacts", async () => {
+  const tenantId = await setupTenant("roleplan-not-requested");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const report = await runWithHiring(
+    tenantId,
+    manufacturingPlan({ steps: ["discover_companies"] }),
+    providers,
+    NO_OP_WEBSITE_INTELLIGENCE,
+    [],
+    ["HR Manager"],
+  );
+  assert.equal(report.rolePlansBuilt, 0);
+  assert.equal(report.companyValidations[0]!.rolePlan, null);
+});
+
+test("role plan: se construye y persiste cuando el plan declara find_contacts", async () => {
+  const tenantId = await setupTenant("roleplan-built");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const plan = manufacturingPlan({
+    steps: ["discover_companies", "find_contacts"],
+    requiredSteps: ["discover_companies"],
+    optionalSteps: ["find_contacts"],
+  });
+  const report = await runWithHiring(tenantId, plan, providers, NO_OP_WEBSITE_INTELLIGENCE, [], ["HR Manager"]);
+
+  assert.equal(report.rolePlansBuilt, 1);
+  const rolePlan = report.companyValidations[0]!.rolePlan;
+  assert.ok(rolePlan);
+  assert.equal(rolePlan!.targetRoles[0]!.role, "HR Manager");
+  assert.equal(rolePlan!.targetRoles[0]!.source, "intent");
+
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: report.createdCompanyIds[0]! } });
+  const metadata = company.discoveryMetadata as { rolePlan?: { targetRoles?: unknown[] } } | null;
+  assert.ok(metadata?.rolePlan);
+  assert.equal((metadata!.rolePlan!.targetRoles as unknown[]).length, rolePlan!.targetRoles.length);
+});
+
+test("role plan: sin roles explicitos, usa los decisionMakers de la taxonomia real de manufacturing", async () => {
+  const tenantId = await setupTenant("roleplan-taxonomy-default");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const plan = manufacturingPlan({
+    steps: ["discover_companies", "find_contacts"],
+    requiredSteps: ["discover_companies"],
+    optionalSteps: ["find_contacts"],
+  });
+  const report = await runWithHiring(tenantId, plan, providers, NO_OP_WEBSITE_INTELLIGENCE);
+
+  const rolePlan = report.companyValidations[0]!.rolePlan;
+  assert.ok(rolePlan);
+  assert.ok(rolePlan!.targetRoles.length > 0);
+  assert.ok(rolePlan!.targetRoles.every((r) => r.source === "taxonomy"));
 });

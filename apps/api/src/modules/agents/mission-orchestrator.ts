@@ -531,6 +531,7 @@ async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction:
     restrictions,
     businessActivities: intent.businessActivities,
     targetJobTitles: intent.targetJobTitles,
+    decisionRoles: intent.decisionRoles,
   });
 
   const now = new Date();

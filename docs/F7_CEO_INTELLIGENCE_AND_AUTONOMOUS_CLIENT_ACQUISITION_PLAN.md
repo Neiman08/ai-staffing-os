@@ -571,3 +571,51 @@ Instrucción real: "Busca empresas de manufactura en Illinois que estén fuera d
 `feat: F7.5 — hiring signal intelligence`.
 
 **F7.5 completo.**
+
+---
+
+## 18. Resultado de F7.6 — Decision-Maker Role Planning
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+### 18.1 Arquitectura
+
+- **`role-planning.ts`** (`ceo-intelligence/`, puro) — `buildDecisionRolePlan()`: determina QUÉ roles buscar para una Company, nunca QUIÉN (eso es Contact Intelligence, F7.7, todavía no implementado — cero nombres/emails en el contrato, verificado por test explícito). Combina `intentDecisionRoles` (StructuredIntent.decisionRoles, F7.1, prioridad máxima, `source: "intent"`) con `taxonomyDecisionMakers` (BusinessTaxonomyEntry.decisionMakers, `source: "taxonomy"`), deduplicando (un rol pedido explícitamente nunca se repite si también aparece en la taxonomía) y respetando `missionExclusions` (un rol excluido por la misión nunca se planifica, aparece en `excludedRoles`).
+- **Boost por hiring signal** — cuando `hiringStatus` (F7.5) es `CONFIRMED_HIRING` o `LIKELY_HIRING`, los roles relacionados con RRHH/reclutamiento (`HR Manager`, `Recruiter`, `Talent Acquisition`, etc. — lista cerrada `HIRING_RELATED_ROLE_KEYWORDS`) se reordenan al frente, cambian su `source` a `"hiring_signal_boost"` y su `rationale` documenta el motivo. `POSSIBLE_HIRING`/`NO_SIGNAL`/`UNKNOWN`/`BLOCKED`/`null` nunca activan el boost.
+- **Confidence determinista**: `0.9` con roles explícitos del usuario, `0.6` solo con taxonomía, `0.2` sin nada; `+0.1` (capado en `1`) cuando además hay hiring signal confirmado/probable.
+- **`mission-executor.ts`** — corre únicamente cuando `plan.steps.includes("find_contacts")` (preparación explícita para F7.7, nunca "por si acaso"), reutilizando `hiringSignal?.hiringStatus` ya calculado en el mismo paso de la Company (sin crawl adicional, sin llamada externa — el módulo es 100% puro). Persiste en `Company.discoveryMetadata.rolePlan` (mismo patrón de F7.5, Json existente, sin migración), extendiendo in-memory el objeto ya devuelto por `persistAcceptedCandidate`.
+
+### 18.2 Persistencia
+
+Sin modelo nuevo — `discoveryMetadata.rolePlan` (Json), junto a `hiringSignal` del mismo campo (F7.5). Consistente con "No crear modelo nuevo sin necesidad clara".
+
+### 18.3 Executive Report — campos nuevos
+
+`CompanyValidationRecord.rolePlan: DecisionRolePlan | null` (null cuando el plan no declaró `find_contacts`); `DiscoveryExecutionReport.rolePlansBuilt: number` (cuántas Companies recibieron un plan). Espejo Zod agregado a `packages/shared/src/schemas/missions.ts` (`rolePlan` como objeto anidado nullable dentro de `companyValidationRecordSchema`, `rolePlansBuilt` en `discoveryExecutionReportSchema`).
+
+### 18.4 UI
+
+Extendida la misma sección "Validación" (no una sección nueva) — cada Company con plan muestra "Roles a buscar: ..." y la misión agrega "Planes de roles construidos: N" cuando aplica.
+
+### 18.5 Tests — 15 nuevos (todos passing)
+
+`role-planning.test.ts` (12): prioridad de roles explícitos, defaults de taxonomía, deduplicación intent/taxonomía, exclusiones de misión, boost con `CONFIRMED_HIRING`/`LIKELY_HIRING` (y ausencia de boost con `POSSIBLE_HIRING`), confidence en sus 3 niveles + el +0.1 capado, `hiringSignalSource` reflejando el estado real (`null` cuando F7.5 no corrió), nunca inventa persona (sin `firstName`/`email` en el JSON serializado), determinismo, `planVersion` estable. `mission-executor.test.ts` (+3): nunca corre sin `find_contacts` en el plan; se construye y persiste correctamente cuando el plan lo declara (incluida verificación directa en `discoveryMetadata`); sin roles explícitos usa los `decisionMakers` reales de la taxonomía de manufacturing.
+
+### 18.6 Suite completa
+
+722 tests, 721 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`, real OpenAI call, verificado aislado).
+
+### 18.7 Prueba real controlada
+
+No aplica — `role-planning.ts` es puro (sin Prisma fuera del wiring ya cubierto por F7.4/F7.5, sin fetch, sin proveedor externo, sin costo). Sin necesidad de una llamada real adicional; cubierto en su totalidad por los 15 tests deterministas.
+
+### 18.8 Limitaciones conocidas
+
+- No identifica personas reales — solo declara roles a buscar. La búsqueda de personas/emails específicos queda para F7.7 (Contact Intelligence), todavía no implementado.
+- El boost de hiring signal es una heurística de palabras clave (`HIRING_RELATED_ROLE_KEYWORDS`), no un análisis semántico — un rol de RRHH con una etiqueta atípica no reconocida por la lista cerrada no recibirá el boost.
+
+### 18.9 Commit
+
+`feat: F7.6 — decision-maker role planning`.
+
+**F7.6 completo.**

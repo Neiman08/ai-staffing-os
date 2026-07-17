@@ -427,6 +427,26 @@ export const companyValidationRecordSchema = z.object({
   hiringStatus: hiringStatusSchema.nullable(),
   hiringConfidence: z.number().nullable(),
   targetTitlesMatched: z.array(z.string()),
+  // F7.6: null cuando el plan no declaró find_contacts -- espejo de
+  // DecisionRolePlan (apps/api/.../ceo-intelligence/role-planning.ts).
+  rolePlan: z
+    .object({
+      companyId: z.string(),
+      targetRoles: z.array(
+        z.object({
+          role: z.string(),
+          priority: z.number(),
+          rationale: z.string(),
+          source: z.enum(["intent", "taxonomy", "hiring_signal_boost"]),
+        }),
+      ),
+      excludedRoles: z.array(z.string()),
+      confidence: z.number(),
+      taxonomySource: z.string(),
+      hiringSignalSource: z.string().nullable(),
+      planVersion: z.number(),
+    })
+    .nullable(),
 });
 export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
@@ -465,6 +485,8 @@ export const discoveryExecutionReportSchema = z.object({
   companiesLikelyHiring: z.number(),
   companiesPossibleHiring: z.number(),
   companiesNoHiringSignal: z.number(),
+  // F7.6: cuántas Companies recibieron un Decision-Maker Role Plan.
+  rolePlansBuilt: z.number(),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

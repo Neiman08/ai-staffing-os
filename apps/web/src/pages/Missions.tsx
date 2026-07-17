@@ -537,6 +537,11 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
             {v.targetTitlesMatched.length > 0 && (
               <p className="mt-1 text-[11px] text-muted-foreground">Puestos detectados: {v.targetTitlesMatched.join(", ")}</p>
             )}
+            {v.rolePlan && v.rolePlan.targetRoles.length > 0 && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Roles a buscar: {v.rolePlan.targetRoles.map((r) => r.role).join(", ")}
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -547,6 +552,11 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
           <span>Probables: {report.companiesLikelyHiring}</span>
           <span>Posibles: {report.companiesPossibleHiring}</span>
           <span>Sin señal: {report.companiesNoHiringSignal}</span>
+        </div>
+      )}
+      {report.rolePlansBuilt > 0 && (
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <span>Planes de roles construidos: {report.rolePlansBuilt}</span>
         </div>
       )}
     </div>
