@@ -615,3 +615,45 @@ test("candidato con categoria distinta a la del Job Order -> category_mismatch",
   const result = (await res.json()) as { hardDisqualifiers: string[] };
   assert.ok(result.hardDisqualifiers.includes("category_mismatch"));
 });
+
+// ---------- F8.3: Candidate Sourcing ----------
+
+test("GET /job-orders/:jobOrderId/source-candidates as sales@titan.dev returns 403 (no candidates.view)", async () => {
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/source-candidates`, { headers: SALES_HEADERS });
+  assert.equal(res.status, 403);
+});
+
+test("sourcing incluye un candidato existente con la categoria correcta, excluye uno con categoria distinta, nunca crea ni contacta a nadie", async () => {
+  const jobOrder = await createValidJobOrder();
+  const { body: matching } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID], state: "IL" });
+  const { body: nonMatching } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID], state: "IL" });
+
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/source-candidates`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const result = (await res.json()) as {
+    sourced: Array<{ candidateId: string; relevanceScore: number; reasons: string[] }>;
+    excluded: Array<{ candidateId: string; reason: string }>;
+  };
+
+  assert.ok(result.sourced.some((s) => s.candidateId === matching.id));
+  assert.ok(!result.sourced.some((s) => s.candidateId === nonMatching.id));
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: matching.id } });
+  assert.equal(stillNew.status, "NEW", "sourcing nunca debe cambiar Candidate.status");
+});
+
+test("sourcing excluye un candidato REJECTED aunque su categoria coincida", async () => {
+  const jobOrder = await createValidJobOrder();
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ status: "REJECTED" }),
+  });
+
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/source-candidates`, { headers: RECRUITER_HEADERS });
+  const result = (await res.json()) as { sourced: Array<{ candidateId: string }>; excluded: Array<{ candidateId: string }> };
+  assert.ok(!result.sourced.some((s) => s.candidateId === candidate.id));
+  assert.ok(result.excluded.some((e) => e.candidateId === candidate.id));
+});

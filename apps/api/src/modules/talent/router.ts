@@ -117,3 +117,17 @@ talentRouter.get(
     }
   },
 );
+
+// F8.3: Candidate Sourcing -- SOLO lee del pool de Candidate ya
+// existente en el tenant, nunca contacta a nadie ni crea nada.
+talentRouter.get(
+  "/job-orders/:jobOrderId/source-candidates",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.json(await talentService.sourceCandidatesForJobOrder(req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);

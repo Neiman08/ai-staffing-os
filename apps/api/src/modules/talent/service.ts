@@ -19,6 +19,7 @@ import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
 import { evaluateCandidateQualification, type QualificationEvaluationResult } from "../recruiting-intelligence/qualification-rules";
+import { sourceCandidatesForJob, type CandidateSourcingResult } from "../recruiting-intelligence/candidate-sourcing";
 
 // ================= Candidates =================
 
@@ -523,4 +524,41 @@ export async function evaluateCandidateQualificationForJobOrder(
       requiredLanguages: [],
     },
   });
+}
+
+/**
+ * F8.3: Candidate Sourcing -- wiring impuro entre
+ * `recruiting-intelligence/candidate-sourcing.ts` (puro) y los
+ * Candidate REALES ya existentes en el tenant. Única fuente permitida:
+ * el CRM propio (nunca scraping externo, nunca un candidato inventado)
+ * -- se consulta `scopedDb.candidate` filtrado por la categoría exacta
+ * del Job Order (mismo criterio "nunca traer de más" que el resto de
+ * F7/F8). Solo lectura -- nunca crea, contacta, ni cambia el estado de
+ * ningún Candidate.
+ */
+export async function sourceCandidatesForJobOrder(jobOrderId: string, limit = 20): Promise<CandidateSourcingResult> {
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const jobLocation = jobOrder.location as { state?: string } | null;
+  const candidates = await scopedDb.candidate.findMany({
+    where: { categories: { some: { id: jobOrder.categoryId } } },
+    include: { categories: true },
+    take: Math.min(limit, 100) * 3, // margen para lo que se excluya por status, sin traer todo el tenant
+    orderBy: { createdAt: "desc" },
+  });
+
+  const result = sourceCandidatesForJob({
+    candidates: candidates.map((c) => ({
+      candidateId: c.id,
+      status: c.status,
+      categoryIds: c.categories.map((cat) => cat.id),
+      yearsExperience: c.yearsExperience,
+      state: c.state,
+      createdAt: c.createdAt,
+    })),
+    job: { categoryId: jobOrder.categoryId, state: jobLocation?.state ?? null },
+  });
+
+  return { ...result, sourced: result.sourced.slice(0, limit) };
 }

@@ -132,3 +132,40 @@ Ninguna.
 `feat: F8.2 — job requirements and qualification rules`.
 
 **F8.2 completo.**
+
+---
+
+## 9. Resultado de F8.3 — Candidate Sourcing
+
+### 9.1 Arquitectura
+
+- **`recruiting-intelligence/candidate-sourcing.ts`** (puro) — `sourceCandidatesForJob()`: filtra y ordena una lista de Candidate YA existentes en el tenant (única fuente permitida -- nunca scraping externo, nunca un candidato inventado). Excluye status `REJECTED`/`INACTIVE` y cualquier candidato sin la categoría exacta requerida (razón explícita en `excluded`). Score de relevancia (0-1) por: categoría (base 0.5), mismo estado que el Job Order (+0.25), años de experiencia (+hasta 0.25) -- nunca una exclusión dura por experiencia/ubicación, solo prioridad.
+- **`talent/service.ts` → `sourceCandidatesForJobOrder()`** (impuro) — única fuente de datos: `scopedDb.candidate` filtrado por la categoría del Job Order (nunca trae candidatos de otro tenant ni de fuera del CRM). Solo lectura -- nunca crea, contacta, ni cambia `Candidate.status`.
+- **`GET /job-orders/:jobOrderId/source-candidates`** (`candidates.view` + `jobOrders.view`) — nuevo endpoint, solo lectura.
+
+### 9.2 Tests — 14 nuevos (todos passing)
+
+`candidate-sourcing.test.ts` (11): categoría coincide/no coincide; REJECTED/INACTIVE siempre excluidos; NEW/SCREENING/QUALIFIED/PLACED nunca excluidos solo por status; mismo estado puntúa más alto; más experiencia puntúa más alto pero nunca excluye; orden descendente por score; score acotado [0,1]; reasons siempre no vacío; determinismo; versión estable. `talent.test.ts` (+3): RBAC 403 sin `candidates.view`; sourcing real incluye/excluye correctamente por categoría, `Candidate.status` nunca cambia; candidato `REJECTED` excluido aunque su categoría coincida.
+
+### 9.3 Suite completa
+
+821 tests, 815 pass, 1 fail preexistente sin relación (`prospecting.test.ts`), 5 skip (4 gateados por real-provider-tests + 1 preexistente sin relación).
+
+### 9.4 UI
+
+Ninguna en esta subfase — igual que F8.1/F8.2, se surfacea en F8.11.
+
+### 9.5 Migraciones
+
+Ninguna.
+
+### 9.6 Limitaciones conocidas
+
+- El score de relevancia es una heurística fija (pesos 0.5/0.25/0.25), no calibrada contra resultados de colocación reales.
+- El endpoint trae hasta `limit*3` candidatos antes de filtrar (margen para lo excluido por status) -- en un tenant con un catálogo de candidatos muy grande por categoría, esto podría acercarse al límite de 100 sin agotar el pool real; documentado como límite pragmático, no un bug.
+
+### 9.7 Commit
+
+`feat: F8.3 — candidate sourcing`.
+
+**F8.3 completo.**
