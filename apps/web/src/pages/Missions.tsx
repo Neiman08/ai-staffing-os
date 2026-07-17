@@ -482,6 +482,16 @@ const BUSINESS_CONFIDENCE_VARIANTS: Record<string, "success" | "warning" | "dang
   REJECTED: "danger",
 };
 
+// F7.5: badges de Hiring Signal Intelligence.
+const HIRING_STATUS_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  CONFIRMED_HIRING: "success",
+  LIKELY_HIRING: "success",
+  POSSIBLE_HIRING: "warning",
+  NO_SIGNAL: "neutral",
+  BLOCKED: "danger",
+  UNKNOWN: "neutral",
+};
+
 /**
  * F7.4: "Validación" — Business Validation (Parte A) + Email Trust
  * (Parte B) por cada Company realmente creada por esta misión. Presente
@@ -504,7 +514,14 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
               <Link to={`/companies/${v.companyId}`} className="min-w-0 truncate font-medium hover:underline" title={v.name}>
                 {v.name}
               </Link>
-              <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"}>{v.businessConfidence}</Badge>
+              <div className="flex shrink-0 items-center gap-1">
+                {v.hiringStatus && (
+                  <Badge variant={HIRING_STATUS_VARIANTS[v.hiringStatus] ?? "neutral"} title="Hiring Signal">
+                    {formatStatusLabel(v.hiringStatus)}
+                  </Badge>
+                )}
+                <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"}>{v.businessConfidence}</Badge>
+              </div>
             </div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
               {v.detectedBusinessType && <span>Tipo: {v.detectedBusinessType}</span>}
@@ -517,9 +534,21 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
             {v.missingEvidence.length > 0 && (
               <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Falta confirmar: {v.missingEvidence.join(", ")}</p>
             )}
+            {v.targetTitlesMatched.length > 0 && (
+              <p className="mt-1 text-[11px] text-muted-foreground">Puestos detectados: {v.targetTitlesMatched.join(", ")}</p>
+            )}
           </div>
         ))}
       </div>
+      {report.hiringSignalsChecked > 0 && (
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <span>Hiring signals verificados: {report.hiringSignalsChecked}</span>
+          <span>Confirmados: {report.companiesConfirmedHiring}</span>
+          <span>Probables: {report.companiesLikelyHiring}</span>
+          <span>Posibles: {report.companiesPossibleHiring}</span>
+          <span>Sin señal: {report.companiesNoHiringSignal}</span>
+        </div>
+      )}
     </div>
   );
 }

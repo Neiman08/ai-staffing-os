@@ -394,7 +394,19 @@ export type DiscoveryRejectedCandidate = z.infer<typeof discoveryRejectedCandida
 export const businessValidationConfidenceLevelSchema = z.enum(["EXACT", "STRONG", "APPROXIMATE", "WEAK", "REJECTED"]);
 export type BusinessValidationConfidenceLevel = z.infer<typeof businessValidationConfidenceLevelSchema>;
 
-// F7.4 Parte A + B: un registro por Company realmente persistida —
+// F7.5: estados lógicos de Hiring Signal Intelligence — espejo de
+// HiringStatus (apps/api/.../ceo-intelligence/hiring-signals.ts).
+export const hiringStatusSchema = z.enum([
+  "CONFIRMED_HIRING",
+  "LIKELY_HIRING",
+  "POSSIBLE_HIRING",
+  "NO_SIGNAL",
+  "BLOCKED",
+  "UNKNOWN",
+]);
+export type HiringStatus = z.infer<typeof hiringStatusSchema>;
+
+// F7.4 Parte A + B / F7.5: un registro por Company realmente persistida —
 // espejo de CompanyValidationRecord (apps/api/.../mission-executor.ts).
 export const companyValidationRecordSchema = z.object({
   companyId: z.string(),
@@ -411,6 +423,10 @@ export const companyValidationRecordSchema = z.object({
   emailsInvalid: z.number(),
   companyContactPointsCreated: z.number(),
   hasValidEmail: z.boolean(),
+  // F7.5: null cuando el plan no declaró find_hiring_signals.
+  hiringStatus: hiringStatusSchema.nullable(),
+  hiringConfidence: z.number().nullable(),
+  targetTitlesMatched: z.array(z.string()),
 });
 export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
@@ -443,6 +459,12 @@ export const discoveryExecutionReportSchema = z.object({
   companiesWithoutValidEmail: z.number(),
   validationWarnings: z.array(z.string()),
   companyValidations: z.array(companyValidationRecordSchema),
+  // F7.5: agregados de Hiring Signal Intelligence.
+  hiringSignalsChecked: z.number(),
+  companiesConfirmedHiring: z.number(),
+  companiesLikelyHiring: z.number(),
+  companiesPossibleHiring: z.number(),
+  companiesNoHiringSignal: z.number(),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

@@ -24,6 +24,13 @@ export interface WebsiteGenericPhone {
   sourceUrl: string;
 }
 
+// F7.5: texto visible de una página ya crawleada, acotado -- ver
+// PageExtraction.visibleText en extract.ts para el porqué.
+export interface WebsitePageText {
+  url: string;
+  text: string;
+}
+
 export interface WebsiteIntelligenceResult {
   namedPeople: WebsiteNamedPerson[];
   genericEmails: WebsiteGenericEmail[];
@@ -33,6 +40,10 @@ export interface WebsiteIntelligenceResult {
   hasCareersPage: boolean;
   careersPageUrl: string | null;
   pagesVisited: string[];
+  // F7.5: texto visible por página visitada -- aditivo, cero impacto en
+  // consumidores existentes (email-providers/website-public-email.ts no
+  // lo lee). Fuente para hiring-signals.ts, nunca para un re-crawl.
+  pageTexts: WebsitePageText[];
   patternsFailed: string[];
   cancelled: boolean;
   blockedByRobots: boolean;
@@ -48,6 +59,7 @@ export function emptyWebsiteIntelligenceResult(): WebsiteIntelligenceResult {
     hasCareersPage: false,
     careersPageUrl: null,
     pagesVisited: [],
+    pageTexts: [],
     patternsFailed: [],
     cancelled: false,
     blockedByRobots: false,

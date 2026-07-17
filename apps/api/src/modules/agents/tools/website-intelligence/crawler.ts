@@ -251,4 +251,5 @@ function mergeExtraction(
     result.hasCareersPage = true;
     result.careersPageUrl = pageUrl;
   }
+  if (extraction.visibleText) result.pageTexts.push({ url: pageUrl, text: extraction.visibleText });
 }

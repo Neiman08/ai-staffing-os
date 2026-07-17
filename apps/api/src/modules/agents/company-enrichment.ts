@@ -42,6 +42,17 @@ export interface EnrichedEmailRecord {
   persisted: boolean;
 }
 
+// F7.5: subconjunto crudo del crawl de Website Intelligence necesario
+// para Hiring Signal Intelligence (hiring-signals.ts) -- nunca se
+// re-crawlea el sitio, se reutiliza el mismo resultado ya bajado acá.
+export interface WebsiteCrawlSignals {
+  hasWebsite: boolean;
+  crawlBlocked: boolean;
+  hasCareersPage: boolean;
+  careersPageUrl: string | null;
+  pageTexts: Array<{ url: string; text: string }>;
+}
+
 export interface CompanyEnrichmentReport {
   emailsExtracted: number;
   emailsVerified: number;
@@ -54,13 +65,14 @@ export interface CompanyEnrichmentReport {
   patternsFailed: string[];
   cancelled: boolean;
   emails: EnrichedEmailRecord[];
+  websiteSignals: WebsiteCrawlSignals;
 }
 
 function log(taskId: string, event: string, data?: Record<string, unknown>): void {
   console.log(`[company-enrichment] ${event}`, JSON.stringify({ taskId, ...data }));
 }
 
-function emptyReport(patternsFailed: string[] = []): CompanyEnrichmentReport {
+function emptyReport(patternsFailed: string[] = [], websiteSignals?: Partial<WebsiteCrawlSignals>): CompanyEnrichmentReport {
   return {
     emailsExtracted: 0,
     emailsVerified: 0,
@@ -73,6 +85,14 @@ function emptyReport(patternsFailed: string[] = []): CompanyEnrichmentReport {
     patternsFailed,
     cancelled: false,
     emails: [],
+    websiteSignals: {
+      hasWebsite: false,
+      crawlBlocked: false,
+      hasCareersPage: false,
+      careersPageUrl: null,
+      pageTexts: [],
+      ...websiteSignals,
+    },
   };
 }
 
@@ -122,8 +142,20 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
     abortSignal: params.abortSignal,
   });
 
+  const websiteSignals: WebsiteCrawlSignals = {
+    hasWebsite: true,
+    crawlBlocked: websiteResult.blockedByRobots || websiteResult.cancelled,
+    hasCareersPage: websiteResult.hasCareersPage,
+    careersPageUrl: websiteResult.careersPageUrl,
+    pageTexts: websiteResult.pageTexts,
+  };
+
   if (websiteResult.cancelled) {
-    return { ...emptyReport(websiteResult.patternsFailed), cancelled: true, websitePagesVisited: websiteResult.pagesVisited.length };
+    return {
+      ...emptyReport(websiteResult.patternsFailed, websiteSignals),
+      cancelled: true,
+      websitePagesVisited: websiteResult.pagesVisited.length,
+    };
   }
 
   const uniqueEmails = dedupeGenericEmails(websiteResult);
@@ -222,5 +254,6 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
     patternsFailed: websiteResult.patternsFailed,
     cancelled: false,
     emails,
+    websiteSignals,
   };
 }

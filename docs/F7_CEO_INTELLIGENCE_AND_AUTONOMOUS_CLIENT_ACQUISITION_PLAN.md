@@ -522,4 +522,52 @@ Idénticos a los de F7.3 tras limpiar la prueba real controlada — `Company`: 8
 4. `CompanyContactPoint` solo contiene emails `VERIFIED`/`RISKY` — nunca `INVALID` — confirmado por test explícito y por la prueba real.
 5. `Company.email` nunca degradado — un valor ya existente nunca se sobrescribe, sea cual sea su calidad.
 
-**F7.4 completo. A la espera de aprobación del PO para iniciar F7.5.**
+**F7.4 completo.**
+
+---
+
+## 17. Resultado de F7.5 — Hiring Signal Intelligence
+
+**Autorización**: PO autorizó trabajo autónomo continuo F7.5→F10 (mensaje del 2026-07-17) — no se solicita aprobación entre subfases, se documenta y continúa.
+
+### 17.1 Arquitectura
+
+- **`hiring-signals.ts`** (`ceo-intelligence/`, puro) — `evaluateHiringSignals()`: evalúa evidencia textual real (nunca inventada) de contratación, comparando `targetJobTitles` (StructuredIntent, F7.1) + `taxonomyJobTitles` (BusinessTaxonomyEntry.jobTitles) + una lista cerrada de frases genéricas de contratación (español/inglés) contra el texto ya crawleado por Website Intelligence. Estados: `CONFIRMED_HIRING` (careers page + título específico), `LIKELY_HIRING` (careers page + frase genérica), `POSSIBLE_HIRING` (evidencia en cualquier página, sin careers page), `NO_SIGNAL` (crawl exitoso, sin evidencia), `BLOCKED` (sin website / robots.txt bloqueó), `UNKNOWN` (sin texto disponible). Nunca integra un ATS real — `openingsFound` es una aproximación honesta (cantidad de títulos distintos con evidencia), documentada como limitación explícita.
+- **Extensión aditiva de Website Intelligence** (`extract.ts`/`types.ts`/`crawler.ts`, existente, tocado por primera vez desde F4.7) — se agregó `visibleText`/`pageTexts` (texto visible por página, acotado a 5000 caracteres) para que `hiring-signals.ts` tenga evidencia real sin re-crawlear. Aditivo puro: ningún campo/comportamiento existente cambió, `email-providers/website-public-email.ts` (el único consumidor real previo) no lee los campos nuevos.
+- **`company-enrichment.ts`** extendido con `websiteSignals` en su reporte (`hasWebsite`, `crawlBlocked`, `hasCareersPage`, `careersPageUrl`, `pageTexts`) — reutiliza EXACTAMENTE el mismo crawl que ya hacía para emails, nunca un segundo request al mismo sitio.
+- **`mission-executor.ts`** — tras el enriquecimiento de emails de cada Company, si `plan.steps.includes("find_hiring_signals")` (F7.1 ya declara este paso cuando la instrucción trae `targetJobTitles`/`hiringSignals`), corre `evaluateHiringSignals` y persiste el resultado en `Company.discoveryMetadata.hiringSignal` (Json existente, sin migración) — nunca corre "por si acaso" cuando el plan no lo pidió.
+
+### 17.2 Persistencia
+
+Sin modelo nuevo — `discoveryMetadata.hiringSignal` (Json). Consistente con la instrucción explícita del PO ("Persistir preferiblemente en metadata existente... No crear modelo nuevo sin necesidad clara").
+
+### 17.3 Executive Report — campos nuevos
+
+`hiringSignalsChecked`, `companiesConfirmedHiring`, `companiesLikelyHiring`, `companiesPossibleHiring`, `companiesNoHiringSignal` (agregados de misión); `CompanyValidationRecord` ganó `hiringStatus`/`hiringConfidence`/`targetTitlesMatched` (null cuando el paso no corrió).
+
+### 17.4 UI
+
+Extendida la sección "Validación" existente (no una sección nueva separada) — cada Company muestra su badge de Hiring Signal junto al de Business Validation, más puestos detectados y un resumen agregado de la misión (verificados/confirmados/probables/posibles/sin señal).
+
+### 17.5 Tests — 17 nuevos (todos passing)
+
+`hiring-signals.test.ts` (14): los 6 estados lógicos, evidencia con URL real, plural regular, determinismo, `providersUsed` vacío cuando no hubo crawl real, limitations siempre documenta ausencia de ATS. `mission-executor.test.ts` (+3): nunca corre sin `find_hiring_signals` en el plan; `CONFIRMED_HIRING` se persiste en `discoveryMetadata` y en el reporte; `NO_SIGNAL` cuando no hay evidencia (nunca inventa una señal).
+
+### 17.6 Suite completa
+
+707 tests, 706 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`).
+
+### 17.7 Prueba real controlada
+
+Instrucción real: "Busca empresas de manufactura en Illinois que estén fuera de nuestro CRM que puedan necesitar Forklift Operator..." — `targetJobTitles: ["Forklift Operator"]` correctamente extraído, `find_hiring_signals` correctamente incluido en el plan, 2 Companies reales evaluadas (`hiringSignalsChecked: 2`), resultados honestos (`UNKNOWN` para una sin texto crawleable, `NO_SIGNAL` para la otra — ninguna señal inventada). Costo: $0 adicional (Website Intelligence gratis, mismo crawl ya contado en el costo de F7.4). Limpiado después — cero dato de esta prueba quedó en `tenant-titan`.
+
+### 17.8 Limitaciones conocidas
+
+- Sin integración ATS real — `openingsFound`/estados son aproximaciones textuales, no un conteo de vacantes real.
+- `pageTexts` acotado a 5000 caracteres por página — un sitio con la evidencia de contratación muy abajo en una página larga podría no capturarla (mismo límite pragmático que el resto de Website Intelligence).
+
+### 17.9 Commit
+
+`feat: F7.5 — hiring signal intelligence`.
+
+**F7.5 completo.**

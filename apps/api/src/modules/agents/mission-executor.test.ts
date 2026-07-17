@@ -357,3 +357,76 @@ test("tenancy: las Companies creadas en un tenant no son visibles desde otro", a
   );
   assert.equal(visibleFromB.length, 0);
 });
+
+// ---------- F7.5: Hiring Signal Intelligence wiring ----------
+
+async function runWithHiring(
+  tenantId: string,
+  plan: MissionPlan,
+  providers: DiscoveryProviderPort,
+  websiteIntelligence: WebsiteIntelligencePort,
+  targetJobTitles: string[] = [],
+) {
+  return runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] }, async () => {
+    const missionTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "daily_revenue_mission" } });
+    const report = await executeDiscoveryPlan({
+      missionTaskId: missionTask.id,
+      plan,
+      restrictions: DEFAULT_MISSION_RESTRICTIONS,
+      providers,
+      googlePlacesApiKey: "fake-key-for-tests",
+      websiteIntelligence,
+      targetJobTitles,
+    });
+    createdCompanyIds.push(...report.createdCompanyIds);
+    return report;
+  });
+}
+
+test("hiring signals: nunca corre cuando el plan no declara find_hiring_signals", async () => {
+  const tenantId = await setupTenant("hiring-not-requested");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const port: WebsiteIntelligencePort = {
+    runWebsiteIntelligence: async () => ({ ...emptyWebsiteIntelligenceResult(), hasCareersPage: true, pageTexts: [{ url: "x", text: "now hiring Forklift Operator" }] }),
+  };
+  const report = await runWithHiring(tenantId, manufacturingPlan({ steps: ["discover_companies"] }), providers, port, ["Forklift Operator"]);
+  assert.equal(report.hiringSignalsChecked, 0);
+  assert.equal(report.companyValidations[0]!.hiringStatus, null);
+});
+
+test("hiring signals: CONFIRMED_HIRING se persiste en discoveryMetadata y en el reporte", async () => {
+  const tenantId = await setupTenant("hiring-confirmed");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const port: WebsiteIntelligencePort = {
+    runWebsiteIntelligence: async () => ({
+      ...emptyWebsiteIntelligenceResult(),
+      hasCareersPage: true,
+      careersPageUrl: "https://acme-mfg.com/careers",
+      pageTexts: [{ url: "https://acme-mfg.com/careers", text: "We are now hiring a Forklift Operator for our warehouse." }],
+    }),
+  };
+  const plan = manufacturingPlan({ steps: ["discover_companies", "find_hiring_signals"], requiredSteps: ["discover_companies"], optionalSteps: ["find_hiring_signals"] });
+  const report = await runWithHiring(tenantId, plan, providers, port, ["Forklift Operator"]);
+
+  assert.equal(report.hiringSignalsChecked, 1);
+  assert.equal(report.companiesConfirmedHiring, 1);
+  assert.equal(report.companyValidations[0]!.hiringStatus, "CONFIRMED_HIRING");
+  assert.deepEqual(report.companyValidations[0]!.targetTitlesMatched, ["Forklift Operator"]);
+
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: report.createdCompanyIds[0]! } });
+  const metadata = company.discoveryMetadata as { hiringSignal?: { hiringStatus?: string } } | null;
+  assert.equal(metadata?.hiringSignal?.hiringStatus, "CONFIRMED_HIRING");
+});
+
+test("hiring signals: NO_SIGNAL cuando no hay evidencia, nunca inventa una senal", async () => {
+  const tenantId = await setupTenant("hiring-no-signal");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const port: WebsiteIntelligencePort = {
+    runWebsiteIntelligence: async () => ({ ...emptyWebsiteIntelligenceResult(), pageTexts: [{ url: "https://acme-mfg.com", text: "We manufacture parts since 1990." }] }),
+  };
+  const plan = manufacturingPlan({ steps: ["discover_companies", "find_hiring_signals"], requiredSteps: ["discover_companies"], optionalSteps: ["find_hiring_signals"] });
+  const report = await runWithHiring(tenantId, plan, providers, port, ["Forklift Operator"]);
+
+  assert.equal(report.companiesNoHiringSignal, 1);
+  assert.equal(report.companyValidations[0]!.hiringStatus, "NO_SIGNAL");
+});

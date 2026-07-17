@@ -525,7 +525,13 @@ async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction:
     searchQueries: plan.searchQueries.length,
   });
 
-  const report = await executeDiscoveryPlan({ missionTaskId, plan, restrictions, businessActivities: intent.businessActivities });
+  const report = await executeDiscoveryPlan({
+    missionTaskId,
+    plan,
+    restrictions,
+    businessActivities: intent.businessActivities,
+    targetJobTitles: intent.targetJobTitles,
+  });
 
   const now = new Date();
   const targetCount = intent.objective.targetCompanyCount;

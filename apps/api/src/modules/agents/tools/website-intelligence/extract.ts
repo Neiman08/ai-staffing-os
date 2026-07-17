@@ -64,7 +64,15 @@ export interface PageExtraction {
   namedPeople: WebsiteNamedPerson[];
   genericPhones: WebsiteGenericPhone[];
   hasContactForm: boolean;
+  // F7.5: texto visible de la página, acotado (ver MAX_VISIBLE_TEXT_CHARS)
+  // -- aditivo, ningún consumidor existente de PageExtraction lo usaba
+  // antes de F7.5. Fuente para Hiring Signal Intelligence (hiring-signals.ts):
+  // nunca se re-crawlea el sitio para buscar señales de contratación, se
+  // reutiliza el mismo texto ya bajado para emails/teléfonos/tarjetas.
+  visibleText: string;
 }
+
+const MAX_VISIBLE_TEXT_CHARS = 5000;
 
 /**
  * Extrae emails/teléfonos/tarjetas de persona de UNA página ya
@@ -146,6 +154,7 @@ export function extractFromPage(html: string, pageUrl: string): PageExtraction {
     namedPeople,
     genericPhones: Array.from(genericPhoneSet.values()),
     hasContactForm,
+    visibleText: bodyText.replace(/\s+/g, " ").trim().slice(0, MAX_VISIBLE_TEXT_CHARS),
   };
 }
 

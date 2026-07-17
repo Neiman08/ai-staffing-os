@@ -7,6 +7,7 @@ import { env } from "../../core/env";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
+import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import { SUPPORTED_STATE_CODES } from "../ceo-intelligence/geo";
 import { normalizeText } from "../ceo-intelligence/text-normalize";
 import {
@@ -24,6 +25,7 @@ import { emptyResult, type ProviderCandidate, type ProviderSearchResult } from "
 import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "./tools/provider-health";
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
 import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } from "./company-enrichment";
+import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 
 /**
  * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
@@ -71,6 +73,10 @@ export interface ExecuteDiscoveryPlanParams {
   // de evidencia adicional, débil, opcional para Business Validation (ver
   // business-validation.ts). Vacío en cualquier llamador que no lo pase.
   businessActivities?: string[];
+  // F7.5: StructuredIntent.targetJobTitles (F7.1) — puestos que la misión
+  // pidió encontrar, usados por Hiring Signal Intelligence. Vacío en
+  // cualquier llamador que no lo pase.
+  targetJobTitles?: string[];
   // Inyección para tests — nunca se llama a un proveedor real en un test
   // unitario. Default: los módulos reales (google-places.ts/overpass.ts,
   // sin modificar).
@@ -131,6 +137,11 @@ export interface CompanyValidationRecord {
   emailsInvalid: number;
   companyContactPointsCreated: number;
   hasValidEmail: boolean;
+  // F7.5: null cuando el plan no declaró find_hiring_signals -- nunca se
+  // ejecuta ese paso "por si acaso".
+  hiringStatus: HiringSignalResult["hiringStatus"] | null;
+  hiringConfidence: number | null;
+  targetTitlesMatched: string[];
 }
 
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
@@ -175,6 +186,13 @@ export interface DiscoveryExecutionReport {
   companiesWithoutValidEmail: number;
   validationWarnings: string[];
   companyValidations: CompanyValidationRecord[];
+  // F7.5: agregados de Hiring Signal Intelligence -- todos en 0 cuando
+  // el plan no declaró find_hiring_signals (nunca corre "por si acaso").
+  hiringSignalsChecked: number;
+  companiesConfirmedHiring: number;
+  companiesLikelyHiring: number;
+  companiesPossibleHiring: number;
+  companiesNoHiringSignal: number;
 }
 
 interface FinalQuery {
@@ -380,6 +398,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesWithoutValidEmail: 0,
     validationWarnings: [],
     companyValidations: [],
+    hiringSignalsChecked: 0,
+    companiesConfirmedHiring: 0,
+    companiesLikelyHiring: 0,
+    companiesPossibleHiring: 0,
+    companiesNoHiringSignal: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -434,6 +457,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const rejectionReasons = new Set<string>();
   const createdCompanyIds: string[] = [];
   const businessActivities = params.businessActivities ?? [];
+  const targetJobTitles = params.targetJobTitles ?? [];
   let totalCostUsd = 0;
   let rawResults = 0;
   let acceptedResults = 0;
@@ -449,6 +473,8 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let emailsUnknownTotal = 0;
   let companyContactPointsCreatedTotal = 0;
   let companiesWithoutValidEmailTotal = 0;
+  let hiringSignalsChecked = 0;
+  const hiringStatusCounts: Partial<Record<HiringSignalResult["hiringStatus"], number>> = {};
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -646,6 +672,36 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         if (!hasValidEmail) companiesWithoutValidEmailTotal += 1;
         for (const failure of enrichment.patternsFailed) validationWarnings.add(failure);
 
+        // F7.5: Hiring Signal Intelligence — paso opcional del plan
+        // (find_hiring_signals), nunca corre si el plan no lo declaró.
+        // Reutiliza EXACTAMENTE el mismo crawl que ya hizo el
+        // enriquecimiento de emails (enrichment.websiteSignals) — jamás
+        // un segundo request al mismo sitio.
+        let hiringSignal: HiringSignalResult | null = null;
+        if (params.plan.steps.includes("find_hiring_signals")) {
+          const taxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
+          hiringSignal = evaluateHiringSignals({
+            companyId: company.id,
+            hasWebsite: enrichment.websiteSignals.hasWebsite,
+            crawlBlocked: enrichment.websiteSignals.crawlBlocked,
+            hasCareersPage: enrichment.websiteSignals.hasCareersPage,
+            careersPageUrl: enrichment.websiteSignals.careersPageUrl,
+            pageTexts: enrichment.websiteSignals.pageTexts,
+            targetJobTitles,
+            taxonomyJobTitles: taxonomyEntry?.jobTitles ?? [],
+          });
+          hiringSignalsChecked += 1;
+          hiringStatusCounts[hiringSignal.hiringStatus] = (hiringStatusCounts[hiringSignal.hiringStatus] ?? 0) + 1;
+          for (const warning of hiringSignal.warnings) validationWarnings.add(warning);
+          // `company.discoveryMetadata` ya trae el objeto que
+          // persistAcceptedCandidate acaba de escribir (Prisma devuelve
+          // la fila creada) -- se extiende in-memory, sin un fetch extra.
+          await scopedDb.company.update({
+            where: { id: company.id },
+            data: { discoveryMetadata: { ...(company.discoveryMetadata as object), hiringSignal } as never },
+          });
+        }
+
         companyValidations.push({
           companyId: company.id,
           name: candidate.raw.name!,
@@ -661,6 +717,9 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           emailsInvalid: enrichment.emailsInvalid,
           companyContactPointsCreated: enrichment.companyContactPointsCreated,
           hasValidEmail,
+          hiringStatus: hiringSignal?.hiringStatus ?? null,
+          hiringConfidence: hiringSignal?.confidence ?? null,
+          targetTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
         });
       }
     }
@@ -728,6 +787,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesWithoutValidEmail: companiesWithoutValidEmailTotal,
     validationWarnings: Array.from(validationWarnings),
     companyValidations,
+    hiringSignalsChecked,
+    companiesConfirmedHiring: hiringStatusCounts.CONFIRMED_HIRING ?? 0,
+    companiesLikelyHiring: hiringStatusCounts.LIKELY_HIRING ?? 0,
+    companiesPossibleHiring: hiringStatusCounts.POSSIBLE_HIRING ?? 0,
+    companiesNoHiringSignal: hiringStatusCounts.NO_SIGNAL ?? 0,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,
