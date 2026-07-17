@@ -20,37 +20,36 @@ import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
 import { evaluateCandidateQualification, type QualificationEvaluationResult } from "../recruiting-intelligence/qualification-rules";
 import { sourceCandidatesForJob, type CandidateSourcingResult } from "../recruiting-intelligence/candidate-sourcing";
+import {
+  normalizeCandidateEmail as normalizeEmail,
+  normalizeCandidatePhone as normalizePhone,
+  buildCandidateIdentityKeys,
+} from "../recruiting-intelligence/candidate-identity";
 
 // ================= Candidates =================
 
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
-
 /**
- * F5.2: quita espacios, guiones, paréntesis y, cuando el número tiene 11
- * dígitos empezando en "1" (código de país de EE.UU./Canadá), el prefijo —
- * "cuando sea posible" tal como pidió el PO, no una normalización E.164
- * completa (no hay librería de parsing de teléfonos en el proyecto).
- */
-function normalizePhone(phone: string): string {
-  const digits = phone.replace(/[^\d]/g, "");
-  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
-  return digits;
-}
-
-/**
- * F5.2 (aprobado): dedup a nivel de servicio, dentro del tenant únicamente
- * (scopedDb ya lo garantiza). No hay constraint único en DB sobre
- * email/phone — dos creaciones concurrentes del mismo candidato podrían
- * ambas pasar esta verificación antes de que la primera termine de
+ * F5.2 (aprobado), reforzado en F8.4: dedup a nivel de servicio, dentro del
+ * tenant únicamente (scopedDb ya lo garantiza). No hay constraint único en
+ * DB sobre email/phone — dos creaciones concurrentes del mismo candidato
+ * podrían ambas pasar esta verificación antes de que la primera termine de
  * escribir (race condition real, documentada, no resuelta acá por
  * instrucción explícita del PO: "no agregues un índice único todavía sin
  * proponerlo aparte").
+ *
+ * F8.4 añade un tercer criterio (normalizedNameState, vía
+ * `recruiting-intelligence/candidate-identity.ts`) para atrapar duplicados
+ * sin email/phone en común pero con nombre+apellido+estado idénticos — la
+ * normalización en sí se movió a ese módulo puro (antes vivía inline acá)
+ * para poder testearla de forma aislada y compartirla con futuras
+ * utilidades de import/sourcing masivo.
  */
 async function findDuplicateCandidate(input: {
+  firstName: string;
+  lastName: string;
   email?: string;
   phone?: string;
+  state?: string;
 }): Promise<{ id: string } | null> {
   if (input.email) {
     const byEmail = await scopedDb.candidate.findFirst({
@@ -67,6 +66,18 @@ async function findDuplicateCandidate(input: {
       select: { id: true, phone: true },
     });
     const match = withPhone.find((c) => c.phone && normalizePhone(c.phone) === normalizedPhone);
+    if (match) return { id: match.id };
+  }
+
+  const identity = buildCandidateIdentityKeys(input);
+  if (identity.normalizedNameState) {
+    const candidatesWithState = await scopedDb.candidate.findMany({
+      where: { state: { not: null } },
+      select: { id: true, firstName: true, lastName: true, state: true },
+    });
+    const match = candidatesWithState.find(
+      (c) => buildCandidateIdentityKeys(c).normalizedNameState === identity.normalizedNameState,
+    );
     if (match) return { id: match.id };
   }
 
@@ -170,9 +181,15 @@ export async function createCandidate(input: CreateCandidateInput): Promise<Cand
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
-  const duplicate = await findDuplicateCandidate({ email: input.email, phone: input.phone });
+  const duplicate = await findDuplicateCandidate({
+    firstName: input.firstName,
+    lastName: input.lastName,
+    email: input.email,
+    phone: input.phone,
+    state: input.state,
+  });
   if (duplicate) {
-    throw AppError.conflict("A candidate with this email or phone already exists in this tenant", {
+    throw AppError.conflict("A candidate with this email, phone, or name and state already exists in this tenant", {
       existingCandidateId: duplicate.id,
     });
   }

@@ -169,3 +169,49 @@ Ninguna.
 `feat: F8.3 — candidate sourcing`.
 
 **F8.3 completo.**
+
+## 10. Resultado de F8.4 — Candidate Normalization and Deduplication
+
+### 10.1 Arquitectura
+
+- **`recruiting-intelligence/candidate-identity.ts`** (nuevo, puro) — mirrorea exactamente el patrón de `ceo-intelligence/discovery-identity.ts` (F7.3): `normalizeCandidateEmail()`/`normalizeCandidatePhone()` (movidas desde `talent/service.ts`, comportamiento preservado byte a byte), `CandidateIdentityInput`/`CandidateIdentityKeys`, `buildCandidateIdentityKeys()`, y `deduplicateCandidates()` (utilidad de dedup en batch para futuros flujos de import/sourcing masivo, no usada todavía por `createCandidate`).
+- **Clave nueva**: `normalizedNameState` (firstName+lastName+state, case/espacio-insensible) -- null cuando falta el state, para no generar falsos positivos con nombres comunes (`"John Smith"` sin ubicación conocida nunca matchea contra sí mismo).
+- **`talent/service.ts` → `findDuplicateCandidate()`** (impuro) — ahora importa las normalizaciones desde el módulo puro (dirección de dependencia correcta: impuro → puro, nunca al revés) y agrega un tercer chequeo por `normalizedNameState` cuando no hay match por email/phone. El comportamiento existente (409 conflict al crear, nunca merge silencioso) se preserva exacto -- ver F5.2. La limitación conocida y ya aceptada por el PO ("no agregues un índice único todavía sin proponerlo aparte") sigue documentada, no resuelta.
+- `updateCandidate()` no se tocó -- fuera de alcance de F8.4 (solo se refuerza el dedup en creación, igual que antes).
+
+### 10.2 Archivos modificados
+
+- Nuevo: `recruiting-intelligence/candidate-identity.ts`, `recruiting-intelligence/candidate-identity.test.ts`.
+- Modificado: `talent/service.ts` (refactor de `findDuplicateCandidate` + `createCandidate`), `talent/talent.test.ts` (+2 tests de integración).
+
+### 10.3 Contratos
+
+Sin cambios en schemas de `@ai-staffing-os/shared` ni en endpoints -- `POST /candidates` sigue devolviendo 409 con `details.existingCandidateId` en cualquier duplicado (email, phone, o ahora también nombre+estado). Único cambio observable: el texto del mensaje de error pasó de mencionar solo "email or phone" a "email, phone, or name and state", para reflejar el nuevo criterio -- ningún test depende del texto exacto.
+
+### 10.4 UI
+
+Ninguna en esta subfase -- el 409 ya se maneja en el formulario de creación existente (sin cambios).
+
+### 10.5 Tests — 17 nuevos (todos passing)
+
+`candidate-identity.test.ts` (15): normalización de email/phone (incl. código de país, casos límite de 11 dígitos); `buildCandidateIdentityKeys` con/sin email/phone/state; `normalizedNameState` case/espacio-insensible y null cuando falta state; `deduplicateCandidates` con orden fijo de claves (email > phone > nameState), `existingKeys` para chequear contra DB, y ausencia de falsos positivos con nombres comunes sin state. `talent.test.ts` (+2): mismo firstName+lastName+state sin email/phone en común sigue rechazado con 409; mismo firstName+lastName SIN state en ninguno de los dos NO se rechaza (evita falso positivo).
+
+### 10.6 Suite completa
+
+838 tests, 832 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, llamada real a OpenAI), 5 skip (4 gateados por real-provider-tests + 1 preexistente sin relación) -- cero regresiones.
+
+### 10.7 Migraciones
+
+Ninguna.
+
+### 10.8 Limitaciones conocidas
+
+- La limitación de F5.2 sigue vigente sin resolver por instrucción explícita del PO: no hay índice único en DB sobre email/phone/nombre+estado, por lo que persiste una race condition teórica entre dos creaciones concurrentes del mismo candidato.
+- `normalizedNameState` no cubre variantes de nombre (apodos, segundos nombres, typos) -- es un match exacto normalizado, no fuzzy.
+- `deduplicateCandidates()` (utilidad batch) queda lista pero sin consumidor todavía -- se habilitará cuando F8 agregue un flujo de import masivo, si el plan lo requiere.
+
+### 10.9 Commit
+
+`feat: F8.4 — candidate normalization and deduplication`.
+
+**F8.4 completo.**

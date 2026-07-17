@@ -152,6 +152,49 @@ test("phone is normalized (spaces/dashes/parens/country code) and duplicate phon
   assert.equal(dupRes.status, 409, "same phone with different formatting/country code must still be detected as a duplicate");
 });
 
+test("F8.4: same firstName+lastName+state with no email/phone in common is still rejected as a duplicate", async () => {
+  const uniqueLastName = `Dedupe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { res: firstRes } = await createValidCandidate({
+    firstName: "Jamie",
+    lastName: uniqueLastName,
+    email: undefined,
+    phone: undefined,
+    state: "IL",
+  });
+  assert.equal(firstRes.status, 201);
+
+  const { res: dupRes, body: dupBody } = (await createValidCandidate({
+    firstName: "  jamie  ",
+    lastName: uniqueLastName.toLowerCase(),
+    email: undefined,
+    phone: undefined,
+    state: "il",
+  })) as unknown as { res: Response; body: { error: { details?: { existingCandidateId?: string } } } };
+  assert.equal(dupRes.status, 409, "same name+state (case/space insensitive) with no email/phone must still be detected as a duplicate");
+  assert.ok(dupBody.error.details?.existingCandidateId);
+});
+
+test("F8.4: same firstName+lastName but no state on either side is NOT treated as a duplicate (avoids common-name false positives)", async () => {
+  const uniqueLastName = `NoState-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { res: firstRes } = await createValidCandidate({
+    firstName: "Taylor",
+    lastName: uniqueLastName,
+    email: undefined,
+    phone: undefined,
+    state: undefined,
+  });
+  assert.equal(firstRes.status, 201);
+
+  const { res: secondRes } = await createValidCandidate({
+    firstName: "Taylor",
+    lastName: uniqueLastName,
+    email: undefined,
+    phone: undefined,
+    state: undefined,
+  });
+  assert.equal(secondRes.status, 201, "without a state on either record, name alone must not trigger a false-positive duplicate rejection");
+});
+
 test("invalid categoryId is rejected", async () => {
   const { res } = await createValidCandidate({ categoryIds: ["category-does-not-exist"] });
   assert.equal(res.status, 400);
