@@ -408,3 +408,51 @@ Ninguna en esta subfase -- se surfacea en F8.11.
 `feat: F8.8 — screening intelligence`.
 
 **F8.8 completo.**
+
+## 15. Resultado de F8.9 — Interview Scheduling Preview
+
+### 15.1 Arquitectura
+
+- **`recruiting-intelligence/interview-preview.ts`** (nuevo, puro): `buildInterviewPreview()` valida completitud (ventanas propuestas, duración, timezone, ubicación/enlace requerido según modalidad, participantes) y detecta conflictos contra otras previews YA persistidas del MISMO candidato -- **reutiliza `matching/date-overlap.ts` (F6.2) para la comparación de solapamiento, sin duplicar esa lógica**. Las ventanas propuestas/participantes/restricciones son SIEMPRE input humano, nunca inventados. `availabilityConfirmed` es literalmente el tipo `false` (constante) -- documentado explícitamente para que ninguna capa pueda presentarlo como disponibilidad real sin integración de calendario (que no existe en este proyecto).
+- Estado derivado (`computeInterviewPreviewStatus`): `NEEDS_AVAILABILITY` (sin ventanas), `DRAFT` (falta info o hay conflictos), `READY_FOR_APPROVAL` (todo completo, sin conflictos) -- **nunca** deriva automáticamente `APPROVED_FOR_SEND` ni `CANCELLED`, esos son SIEMPRE una transición manual explícita vía `INTERVIEW_PREVIEW_TRANSITIONS` + `isValidInterviewPreviewTransition()` (mismo patrón que F8.7).
+- **Nuevo modelo `InterviewPreview`** (schema, aditivo, mismo patrón que el resto de F8): un registro por par `(candidateId, jobOrderId)`.
+- **`talent/service.ts` → `generateAndPersistInterviewPreview()`** (impuro, nuevo): lee otras previews del mismo candidato en OTROS Job Orders para detectar conflictos reales (nunca inventa disponibilidad). **`getInterviewPreview()`** (solo lectura) y **`updateInterviewPreviewStatus()`** (único camino para `APPROVED_FOR_SEND`/`CANCELLED`, valida la transición).
+- **`POST /candidates/:id/interview-preview/:jobOrderId`** (genera+persiste, `candidates.update`+`jobOrders.view`, valida el shape del body), **`GET /candidates/:id/interview-preview/:jobOrderId`** (solo lectura), **`PATCH /candidates/:id/interview-preview/:jobOrderId/status`** (cambio manual de estado, `candidates.update`).
+- **Restricciones cumplidas explícitamente**: cero llamadas a Google Calendar/cualquier API externa, cero envío de email/SMS/invitación, cero creación de reunión externa, `APPROVED_FOR_SEND` es solo un registro de aprobación humana -- nunca dispara un envío real (no existe ese sistema todavía, documentado como límite explícito).
+
+### 15.2 Archivos modificados
+
+- Nuevo: `interview-preview.ts`, `interview-preview.test.ts`, migración `20260717160000_f8_9_interview_preview`.
+- Modificado: `schema.prisma` (enums `InterviewModality`/`InterviewPreviewStatus` + modelo `InterviewPreview` + back-relations), `core/tenancy/prisma-extension.ts` (+1 línea), `talent/service.ts`, `talent/router.ts`, `talent/talent.test.ts`.
+
+### 15.3 Contratos
+
+DTOs locales al service. `POST` body: `{ proposedWindows[{start,end}], durationMinutes, timezone, modality, locationOrLink?, participants[{role,name}], restrictions? }`, validado en el router (400 si el shape es inválido). `POST`/`GET` devuelven `InterviewPreviewRecord`. `PATCH .../status` body: `{ status }`.
+
+### 15.4 UI
+
+Ninguna en esta subfase -- se surfacea en F8.11, mostrando explícitamente "PREVIEW"/"DRAFT" de forma visible como pide la instrucción.
+
+### 15.5 Tests — 25 nuevos (todos passing)
+
+`interview-preview.test.ts` (16): NEEDS_AVAILABILITY sin ventanas; DRAFT con info faltante (incl. VIDEO sin link); PHONE nunca requiere link; READY_FOR_APPROVAL cuando todo está completo; DRAFT + conflicto real detectado contra otra preview persistida; sin conflicto cuando no hay solapamiento; `availabilityConfirmed` siempre `false`; participantes/restricciones nunca inventados (passthrough); determinismo; transiciones válidas/inválidas (APPROVED_FOR_SEND solo desde READY_FOR_APPROVAL, CANCELLED alcanzable desde cualquier estado no-terminal y reabre a DRAFT, CANCELLED nunca salta directo a APPROVED_FOR_SEND). `talent.test.ts` (+9): RBAC 403; 404 antes de generar; 400 con body malformado; genera preview real con READY_FOR_APPROVAL + availabilityConfirmed=false, nunca toca Candidate.status; NEEDS_AVAILABILITY sin ventanas; conflicto real detectado entre dos Job Orders distintos para el mismo candidato; idempotencia; PATCH válido (READY_FOR_APPROVAL->APPROVED_FOR_SEND) vs inválido (NEEDS_AVAILABILITY->APPROVED_FOR_SEND) rechazado con 400; AuditLog en generación y en cambio de estado.
+
+### 15.6 Suite completa
+
+947 tests, 941 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 15.7 Migraciones
+
+`20260717160000_f8_9_interview_preview` -- 100% aditiva: 2 enums nuevos (`InterviewModality`, `InterviewPreviewStatus`), 1 tabla nueva (`InterviewPreview`) con 2 FKs (`ON DELETE RESTRICT`), 2 índices. Cero columnas nuevas en tablas existentes.
+
+### 15.8 Limitaciones conocidas
+
+- La detección de conflictos solo compara contra OTRAS `InterviewPreview` ya persistidas del mismo candidato -- no contra un calendario real (no existe integración), documentado explícitamente, no un bug.
+- Igual que el resto de F8, las FKs son `ON DELETE RESTRICT`.
+- `APPROVED_FOR_SEND` no dispara ningún envío real -- es intencional (no hay sistema de notificaciones para esto todavía); queda como el punto de enganche futuro si se decide integrar calendario/email real, fuera de alcance de esta sesión.
+
+### 15.9 Commit
+
+`feat: F8.9 — interview scheduling preview`.
+
+**F8.9 completo.**

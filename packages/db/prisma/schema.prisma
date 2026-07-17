@@ -843,6 +843,7 @@ model Candidate {
   matches         CandidateMatch[]
   shortlistEntries CandidateShortlistEntry[]
   screeningPlans  ScreeningPlan[]
+  interviewPreviews InterviewPreview[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -916,6 +917,7 @@ model JobOrder {
   matches          CandidateMatch[]
   shortlistEntries CandidateShortlistEntry[]
   screeningPlans   ScreeningPlan[]
+  interviewPreviews InterviewPreview[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -1073,6 +1075,66 @@ model ScreeningPlan {
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId])
+}
+
+// F8.9: modalidad de una entrevista propuesta -- nunca implica que ya
+// se creó una reunión real (ver InterviewPreview.locationOrLink,
+// nullable = "pendiente").
+enum InterviewModality {
+  PHONE
+  VIDEO
+  IN_PERSON
+}
+
+// F8.9: estado del PREVIEW de programación -- `APPROVED_FOR_SEND` NUNCA
+// implica que se envió una invitación real (no hay integración de
+// calendario/email conectada en este proyecto); es solo la aprobación
+// humana para que, en una fase futura, otro sistema pueda enviarla.
+enum InterviewPreviewStatus {
+  DRAFT
+  NEEDS_AVAILABILITY
+  READY_FOR_APPROVAL
+  APPROVED_FOR_SEND
+  CANCELLED
+}
+
+// F8.9: Interview Scheduling Preview -- preparación y preview de
+// programación de entrevista para UN Candidate contra UN JobOrder.
+// `proposedWindows`/`participants`/`conflicts` son Json (arreglos
+// heterogéneos, mismo criterio que `CandidateMatch.softPreferences`).
+// `availabilityConfirmed` es SIEMPRE `false` -- se persiste para que
+// quede auditado que nunca se marcó como confirmada. Un registro por
+// par (candidateId, jobOrderId), mismo patrón de upsert que el resto de
+// F8; historial vía AuditLog. Nunca modifica un calendario real, nunca
+// envía invitaciones.
+model InterviewPreview {
+  id                  String                 @id @default(cuid())
+  tenantId            String
+  candidateId         String
+  candidate           Candidate              @relation(fields: [candidateId], references: [id])
+  jobOrderId          String
+  jobOrder            JobOrder               @relation(fields: [jobOrderId], references: [id])
+  status              InterviewPreviewStatus @default(DRAFT)
+  proposedWindows     Json
+  durationMinutes     Int
+  timezone            String
+  modality            InterviewModality
+  locationOrLink      String?
+  participants        Json
+  restrictions        String[]               @default([])
+  conflicts           Json
+  availabilityConfirmed Boolean              @default(false)
+  missingInformation  String[]               @default([])
+  rulesVersion        Int
+  calculatedAt        DateTime
+  // F8.9: quién propuso/generó el preview -- del contexto de tenancy,
+  // nunca del body (mismo patrón que Candidate.createdById, F5.2).
+  createdById         String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId, status])
 }
 
 model Project {

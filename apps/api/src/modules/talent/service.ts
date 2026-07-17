@@ -38,6 +38,15 @@ import {
   type ShortlistReviewStatus,
 } from "../recruiting-intelligence/candidate-shortlist";
 import { buildScreeningPlan } from "../recruiting-intelligence/screening-plan";
+import {
+  buildInterviewPreview,
+  isValidInterviewPreviewTransition,
+  type InterviewPreviewInput,
+  type InterviewPreviewStatus,
+  type InterviewModality,
+  type ProposedWindow,
+  type InterviewParticipant,
+} from "../recruiting-intelligence/interview-preview";
 
 // ================= Candidates =================
 
@@ -1130,6 +1139,202 @@ export async function getScreeningPlan(candidateId: string, jobOrderId: string):
   const record = await scopedDb.screeningPlan.findFirst({ where: { candidateId, jobOrderId } });
   if (!record) return null;
   return toScreeningPlanRecord(record);
+}
+
+export interface CreateInterviewPreviewInput {
+  proposedWindows: ProposedWindow[];
+  durationMinutes: number;
+  timezone: string;
+  modality: InterviewModality;
+  locationOrLink?: string | null;
+  participants: InterviewParticipant[];
+  restrictions?: string[];
+}
+
+export interface InterviewPreviewRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  status: InterviewPreviewStatus;
+  proposedWindows: unknown;
+  durationMinutes: number;
+  timezone: string;
+  modality: InterviewModality;
+  locationOrLink: string | null;
+  participants: unknown;
+  restrictions: string[];
+  conflicts: unknown;
+  availabilityConfirmed: boolean;
+  missingInformation: string[];
+  rulesVersion: number;
+  calculatedAt: string;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toInterviewPreviewRecord(record: {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  status: string;
+  proposedWindows: unknown;
+  durationMinutes: number;
+  timezone: string;
+  modality: string;
+  locationOrLink: string | null;
+  participants: unknown;
+  restrictions: string[];
+  conflicts: unknown;
+  availabilityConfirmed: boolean;
+  missingInformation: string[];
+  rulesVersion: number;
+  calculatedAt: Date;
+  createdById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): InterviewPreviewRecord {
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    status: record.status as InterviewPreviewStatus,
+    proposedWindows: record.proposedWindows,
+    durationMinutes: record.durationMinutes,
+    timezone: record.timezone,
+    modality: record.modality as InterviewModality,
+    locationOrLink: record.locationOrLink,
+    participants: record.participants,
+    restrictions: record.restrictions,
+    conflicts: record.conflicts,
+    availabilityConfirmed: record.availabilityConfirmed,
+    missingInformation: record.missingInformation,
+    rulesVersion: record.rulesVersion,
+    calculatedAt: record.calculatedAt.toISOString(),
+    createdById: record.createdById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F8.9: Interview Scheduling Preview -- wiring impuro entre
+ * `recruiting-intelligence/interview-preview.ts` (puro) y los datos
+ * reales del tenant. `proposedWindows`/`participants`/`restrictions`
+ * son SIEMPRE input humano (nunca inventados acá). Para detectar
+ * conflictos, se leen otras previews YA persistidas del MISMO
+ * candidato en OTROS Job Orders -- nunca se inventa disponibilidad.
+ * Nunca modifica un calendario real, nunca envía invitaciones/email.
+ * Upsert por (candidateId, jobOrderId), mismo workaround de
+ * `findFirst`-por-campos-planos ya documentado en F8.5.
+ */
+export async function generateAndPersistInterviewPreview(
+  candidateId: string,
+  jobOrderId: string,
+  input: CreateInterviewPreviewInput,
+): Promise<InterviewPreviewRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const [candidate, jobOrder] = await Promise.all([
+    scopedDb.candidate.findUnique({ where: { id: candidateId }, select: { id: true } }),
+    scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, select: { id: true } }),
+  ]);
+  if (!candidate) throw AppError.notFound("Candidate not found");
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const otherPreviews = await scopedDb.interviewPreview.findMany({
+    where: { candidateId, jobOrderId: { not: jobOrderId } },
+    select: { id: true, proposedWindows: true },
+  });
+  const existingWindows = otherPreviews.flatMap((p) =>
+    (p.proposedWindows as unknown as ProposedWindow[]).map((w) => ({ interviewPreviewId: p.id, start: w.start, end: w.end })),
+  );
+
+  const preview: InterviewPreviewInput = {
+    candidateId,
+    jobOrderId,
+    proposedWindows: input.proposedWindows,
+    durationMinutes: input.durationMinutes,
+    timezone: input.timezone,
+    modality: input.modality,
+    locationOrLink: input.locationOrLink ?? null,
+    participants: input.participants,
+    restrictions: input.restrictions ?? [],
+    existingWindows,
+  };
+
+  const result = buildInterviewPreview(preview);
+
+  const existing = await scopedDb.interviewPreview.findFirst({ where: { candidateId, jobOrderId } });
+  const data = {
+    status: result.status,
+    proposedWindows: result.proposedWindows as never,
+    durationMinutes: result.durationMinutes,
+    timezone: result.timezone,
+    modality: result.modality,
+    locationOrLink: result.locationOrLink,
+    participants: result.participants as never,
+    restrictions: result.restrictions,
+    conflicts: result.conflicts as never,
+    availabilityConfirmed: result.availabilityConfirmed,
+    missingInformation: result.missingInformation,
+    rulesVersion: result.rulesVersion,
+    calculatedAt: new Date(result.calculatedAt),
+  };
+
+  const record = existing
+    ? await scopedDb.interviewPreview.update({ where: { id: existing.id }, data })
+    : await scopedDb.interviewPreview.create({ data: { tenantId: ctx.tenantId, candidateId, jobOrderId, createdById: ctx.userId, ...data } });
+
+  await logAuditEvent({
+    action: "candidate.interview_preview_generated",
+    entityType: "interview_preview",
+    entityId: record.id,
+    after: { candidateId, jobOrderId, status: record.status, conflictCount: result.conflicts.length },
+  });
+
+  return toInterviewPreviewRecord(record);
+}
+
+/** Lee el preview YA persistido. Nunca recalcula. */
+export async function getInterviewPreview(candidateId: string, jobOrderId: string): Promise<InterviewPreviewRecord | null> {
+  const record = await scopedDb.interviewPreview.findFirst({ where: { candidateId, jobOrderId } });
+  if (!record) return null;
+  return toInterviewPreviewRecord(record);
+}
+
+/**
+ * Único camino para cambiar `status` manualmente -- `APPROVED_FOR_SEND`
+ * y `CANCELLED` son SIEMPRE una acción humana explícita (nunca
+ * derivadas automáticamente, ver `interview-preview.ts`). Nunca envía
+ * nada real -- "APPROVED_FOR_SEND" es solo una aprobación humana
+ * registrada, no una invitación enviada.
+ */
+export async function updateInterviewPreviewStatus(
+  candidateId: string,
+  jobOrderId: string,
+  status: InterviewPreviewStatus,
+): Promise<InterviewPreviewRecord> {
+  const existing = await scopedDb.interviewPreview.findFirst({ where: { candidateId, jobOrderId } });
+  if (!existing) throw AppError.notFound("Interview preview not found");
+
+  const currentStatus = existing.status as InterviewPreviewStatus;
+  if (!isValidInterviewPreviewTransition(currentStatus, status)) {
+    throw AppError.badRequest(`Invalid interview preview status transition: ${currentStatus} -> ${status}`);
+  }
+
+  const updated = await scopedDb.interviewPreview.update({ where: { id: existing.id }, data: { status } });
+
+  await logAuditEvent({
+    action: "candidate.interview_preview_status_changed",
+    entityType: "interview_preview",
+    entityId: existing.id,
+    before: { status: currentStatus },
+    after: { status },
+  });
+
+  return toInterviewPreviewRecord(updated);
 }
 
 /**

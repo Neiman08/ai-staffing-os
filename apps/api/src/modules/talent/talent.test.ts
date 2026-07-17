@@ -35,12 +35,16 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2/F8.2/F8.5/F8.6/F8.7/F8.8: limpieza — todo lo creado por esta
-  // suite queda claramente identificado (nombre/prefijo de test) y se
-  // borra al terminar. CandidateQualification/CandidateMatch/
-  // CandidateShortlistEntry/ScreeningPlan tienen FKs ON DELETE RESTRICT
-  // hacia Candidate/JobOrder, así que deben borrarse primero.
+  // F5.2/F8.2/F8.5/F8.6/F8.7/F8.8/F8.9: limpieza — todo lo creado por
+  // esta suite queda claramente identificado (nombre/prefijo de test) y
+  // se borra al terminar. CandidateQualification/CandidateMatch/
+  // CandidateShortlistEntry/ScreeningPlan/InterviewPreview tienen FKs ON
+  // DELETE RESTRICT hacia Candidate/JobOrder, así que deben borrarse
+  // primero.
   if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.interviewPreview.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
     await prisma.screeningPlan.deleteMany({
       where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
     });
@@ -1121,6 +1125,179 @@ test("generating a screening plan writes an AuditLog entry", async () => {
     where: { action: "candidate.screening_plan_generated", entityType: "screening_plan", entityId: body.id },
   });
   assert.ok(auditEntry);
+});
+
+// ---------- F8.9: Interview Scheduling Preview ----------
+
+function validInterviewPreviewPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    proposedWindows: [{ start: "2026-08-01T15:00:00.000Z", end: "2026-08-01T15:30:00.000Z" }],
+    durationMinutes: 30,
+    timezone: "America/Chicago",
+    modality: "PHONE",
+    participants: [{ role: "recruiter", name: "Recruiter One" }],
+    ...overrides,
+  };
+}
+
+test("POST /candidates/:id/interview-preview/:jobOrderId as sales@titan.dev returns 403 (no candidates.update)", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+  assert.equal(res.status, 403);
+});
+
+test("GET /candidates/:id/interview-preview/:jobOrderId returns 404 before any preview has been generated", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 404);
+});
+
+test("POST rejects a malformed body (missing proposedWindows) with 400", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload({ proposedWindows: undefined })),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST generates a real preview with status READY_FOR_APPROVAL when complete, availabilityConfirmed always false, never changes Candidate.status", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { status: string; availabilityConfirmed: boolean };
+  assert.equal(body.status, "READY_FOR_APPROVAL");
+  assert.equal(body.availabilityConfirmed, false);
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } });
+  assert.equal(stillNew.status, "NEW", "generating an interview preview must never change Candidate.status");
+});
+
+test("POST with no proposed windows returns NEEDS_AVAILABILITY", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload({ proposedWindows: [] })),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { status: string };
+  assert.equal(body.status, "NEEDS_AVAILABILITY");
+});
+
+test("POST detects a real conflict against another persisted preview for the same candidate on a different Job Order", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrderA = await createValidJobOrder();
+  const jobOrderB = await createValidJobOrder();
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrderA.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+
+  const overlappingRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrderB.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(
+      validInterviewPreviewPayload({ proposedWindows: [{ start: "2026-08-01T15:15:00.000Z", end: "2026-08-01T15:45:00.000Z" }] }),
+    ),
+  });
+  assert.equal(overlappingRes.status, 201);
+  const body = (await overlappingRes.json()) as { status: string; conflicts: unknown[] };
+  assert.equal(body.status, "DRAFT", "a real scheduling conflict must prevent READY_FOR_APPROVAL");
+  assert.equal(body.conflicts.length, 1);
+});
+
+test("POST is idempotent: re-running upserts the same InterviewPreview row instead of creating a second one", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+
+  const count = await prisma.interviewPreview.count({ where: { candidateId: candidate.id, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1);
+});
+
+test("PATCH status: READY_FOR_APPROVAL -> APPROVED_FOR_SEND is a valid human approval, DRAFT -> APPROVED_FOR_SEND is rejected", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const readyJobOrder = await createValidJobOrder();
+  const draftJobOrder = await createValidJobOrder();
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${readyJobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+  const approveRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${readyJobOrder.id}/status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ status: "APPROVED_FOR_SEND" }),
+  });
+  assert.equal(approveRes.status, 200);
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${draftJobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload({ proposedWindows: [] })),
+  });
+  const invalidRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${draftJobOrder.id}/status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ status: "APPROVED_FOR_SEND" }),
+  });
+  assert.equal(invalidRes.status, 400, "NEEDS_AVAILABILITY must never jump directly to APPROVED_FOR_SEND");
+});
+
+test("generating a preview and changing its status write AuditLog entries", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify(validInterviewPreviewPayload()),
+  });
+  const body = (await res.json()) as { id: string };
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/interview-preview/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ status: "APPROVED_FOR_SEND" }),
+  });
+
+  const generatedAudit = await prisma.auditLog.findFirst({
+    where: { action: "candidate.interview_preview_generated", entityType: "interview_preview", entityId: body.id },
+  });
+  const statusAudit = await prisma.auditLog.findFirst({
+    where: { action: "candidate.interview_preview_status_changed", entityType: "interview_preview", entityId: body.id },
+  });
+  assert.ok(generatedAudit);
+  assert.ok(statusAudit);
 });
 
 // ---------- F8.3: Candidate Sourcing ----------

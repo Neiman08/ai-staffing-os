@@ -21,6 +21,7 @@ const STRICT_TENANT_MODELS = new Set([
   "CandidateMatch",
   "CandidateShortlistEntry",
   "ScreeningPlan",
+  "InterviewPreview",
   "Project",
   "Assignment",
   "Shift",
