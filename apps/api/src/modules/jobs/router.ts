@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createJobOrderInputSchema,
+  jobIntakeInputSchema,
   jobOrderQuerySchema,
   updateJobOrderInputSchema,
   updateJobOrderStatusInputSchema,
@@ -31,6 +32,18 @@ jobsRouter.post("/job-orders", requirePermission("jobOrders.create"), async (req
   try {
     const input = createJobOrderInputSchema.parse(req.body);
     res.status(201).json(await jobsService.createJobOrder(input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F8.1: Job Intake Intelligence -- SOLO interpreta, nunca crea un
+// JobOrder (mismo permiso que crear porque es un paso previo a esa
+// misma acción, igual que POST /missions/plan en F7.2).
+jobsRouter.post("/job-orders/interpret-intake", requirePermission("jobOrders.create"), async (req, res, next) => {
+  try {
+    const input = jobIntakeInputSchema.parse(req.body);
+    res.json(await jobsService.interpretJobOrderIntake(input.rawInstruction));
   } catch (err) {
     next(err);
   }

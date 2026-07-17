@@ -432,3 +432,56 @@ test("a status transition writes both an Activity and an AuditLog entry with bef
   assert.deepEqual(audit?.before, { status: "DRAFT" });
   assert.deepEqual(audit?.after, { status: "CANCELLED" });
 });
+
+// ---- F8.1: Job Intake Intelligence ----
+
+test("POST /job-orders/interpret-intake as compliance@titan.dev returns 403 (no jobOrders.create)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/interpret-intake`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({ rawInstruction: "Necesito 5 Forklift Operators en Chicago." }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST /job-orders/interpret-intake interpreta contra el catálogo real, nunca crea un JobOrder", async () => {
+  const before = await prisma.jobOrder.count();
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/interpret-intake`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ rawInstruction: "Necesito 5 Forklift Operators en Chicago, IL, turno de noche, $18-22/hr, requieren Forklift Certification." }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    jobTitle: string | null;
+    matchedCategoryId: string | null;
+    city: string | null;
+    state: string | null;
+    headcount: number | null;
+    shift: string | null;
+    certifications: string[];
+    ambiguities: string[];
+  };
+  assert.equal(body.jobTitle, "Forklift Operator");
+  assert.equal(body.matchedCategoryId, "category-forklift-operator");
+  assert.equal(body.city, "Chicago");
+  assert.equal(body.state, "IL");
+  assert.equal(body.headcount, 5);
+  assert.equal(body.shift, "NIGHT");
+  assert.ok(body.certifications.includes("Forklift Certification"));
+
+  const after = await prisma.jobOrder.count();
+  assert.equal(after, before, "interpret-intake nunca debe crear un JobOrder real");
+});
+
+test("POST /job-orders/interpret-intake sin categoria real matcheada devuelve jobTitle null y una ambiguedad, nunca inventa un titulo", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/interpret-intake`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ rawInstruction: "Necesito gente para un puesto que no existe en el catálogo." }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { jobTitle: string | null; ambiguities: string[] };
+  assert.equal(body.jobTitle, null);
+  assert.ok(body.ambiguities.length > 0);
+});

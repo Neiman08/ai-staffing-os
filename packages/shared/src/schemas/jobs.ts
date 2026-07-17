@@ -152,3 +152,37 @@ export const updateJobOrderStatusInputSchema = z.object({
   status: jobOrderStatusSchema,
 });
 export type UpdateJobOrderStatusInput = z.infer<typeof updateJobOrderStatusInputSchema>;
+
+// F8.1: Job Intake Intelligence -- espeja JobIntakeResult
+// (apps/api/.../recruiting-intelligence/job-intake.ts). Nunca crea un
+// JobOrder, solo interpreta texto libre en un preview estructurado
+// para revisión humana antes de llamar a createJobOrder.
+export const jobIntakeInputSchema = z.object({
+  rawInstruction: z.string().min(1),
+});
+export type JobIntakeInputRequest = z.infer<typeof jobIntakeInputSchema>;
+
+export const jobIntakeResultSchema = z.object({
+  jobTitle: z.string().nullable(),
+  normalizedTitle: z.string().nullable(),
+  matchedCategoryId: z.string().nullable(),
+  industry: z.string().nullable(),
+  city: z.string().nullable(),
+  state: z.string().nullable(),
+  headcount: z.number().nullable(),
+  shift: jobOrderShiftTypeSchema.nullable(),
+  payRate: z.object({ min: z.number().nullable(), max: z.number().nullable() }).nullable(),
+  schedule: z.string().nullable(),
+  experienceRequired: z.string().nullable(),
+  certifications: z.array(z.string()),
+  complianceRequirements: z.array(z.string()),
+  skills: z.array(z.string()),
+  languages: z.array(z.string()),
+  startDate: z.string().nullable(),
+  urgency: riskLevelSchema.nullable(),
+  exclusions: z.array(z.string()),
+  ambiguities: z.array(z.string()),
+  confidence: z.number(),
+  intakeVersion: z.number(),
+});
+export type JobIntakeResultResponse = z.infer<typeof jobIntakeResultSchema>;

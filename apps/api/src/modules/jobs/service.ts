@@ -14,6 +14,7 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
+import { interpretJobIntake, type JobIntakeResult } from "../recruiting-intelligence/job-intake";
 
 /**
  * F5.1: mismo shape { city, state, address } que el schema ya declaraba
@@ -320,4 +321,26 @@ export async function updateJobOrderStatus(id: string, input: UpdateJobOrderStat
   });
 
   return toListItem(updated);
+}
+
+/**
+ * F8.1: Job Intake Intelligence -- wiring impuro entre
+ * `recruiting-intelligence/job-intake.ts` (puro) y el catálogo real de
+ * JobCategory/DocumentType del tenant. Nunca crea un JobOrder -- solo
+ * interpreta la instrucción y devuelve el preview estructurado para que
+ * el humano revise/complete antes de llamar a `createJobOrder` (mismo
+ * patrón "plan-only, nunca ejecuta" ya establecido por
+ * `planMissionOnly` en F7.2).
+ */
+export async function interpretJobOrderIntake(rawInstruction: string): Promise<JobIntakeResult> {
+  const [categories, documentTypes] = await Promise.all([
+    scopedDb.jobCategory.findMany({ include: { industry: true } }),
+    scopedDb.documentType.findMany(),
+  ]);
+
+  return interpretJobIntake({
+    rawInstruction,
+    knownJobCategories: categories.map((c) => ({ id: c.id, name: c.name, industryName: c.industry?.name ?? null })),
+    knownDocumentTypes: documentTypes.map((d) => ({ key: d.key, name: d.name, category: d.category })),
+  });
 }

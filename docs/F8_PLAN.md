@@ -53,4 +53,45 @@ Sin mensajes reales a candidatos. Sin scraping prohibido. Sin candidatos falsos 
 
 ## 5. Estado
 
-Auditoría completa. Continuando automáticamente con la implementación de F8.1.
+Auditoría completa.
+
+---
+
+## 6. Resultado de F8.1 — Job Intake Intelligence
+
+### 6.1 Arquitectura
+
+- **`recruiting-intelligence/job-intake.ts`** (puro) — `interpretJobIntake()`: convierte una instrucción de intake en lenguaje natural en campos estructurados de `JobOrder`. Nunca inventa: título/categoría solo matchea contra `JobCategory` reales del tenant (pasadas como input, más específica gana — "Journeyman Electrician" sobre "Electrician"); certificaciones/compliance requirements solo matchean contra `DocumentType` reales; ubicación reutiliza `detectCitiesAndStates` (`ceo-intelligence/geo.ts`, ya probado desde F7.1); idiomas de un vocabulario cerrado; fecha de inicio SOLO literal (nunca interpreta "el lunes"/"next week" como fecha real, ya que eso requeriría inyectar "hoy" y renunciar a pureza/determinismo). Todo lo no detectado queda `null`/vacío + entrada explícita en `ambiguities`.
+- **`jobs/service.ts` → `interpretJobOrderIntake()`** (impuro) — única responsabilidad: cargar `JobCategory`/`DocumentType` reales del tenant (`scopedDb`, ya tenant+global) y llamar al módulo puro. **Nunca crea un JobOrder** — mismo patrón "plan-only" que `planMissionOnly` (F7.2): el humano revisa el preview y decide si completa/corrige antes de `POST /job-orders`.
+- **`POST /job-orders/interpret-intake`** (`jobOrders.create`, mismo permiso que crear ya que es un paso previo a esa misma acción) — nuevo endpoint, no modifica ninguno existente.
+
+### 6.2 Contratos
+
+`jobIntakeInputSchema`/`jobIntakeResultSchema` nuevos en `packages/shared/src/schemas/jobs.ts` — espejo de `JobIntakeResult`.
+
+### 6.3 Tests — 14 nuevos (todos passing)
+
+`job-intake.test.ts` (11): extracción completa de una instrucción con todos los campos; preferencia por la categoría más específica; sin categoría real matcheada → `null` + ambigüedad (nunca inventa); campos sin detectar quedan `null` con su propia ambigüedad; exclusiones no contaminan el resto del parseo; certificaciones nunca inventadas fuera del catálogo; idiomas de vocabulario cerrado; experiencia con patrón numérico explícito; fecha de inicio solo literal, nunca relativa; determinismo; versión estable. `jobs.test.ts` (+3): RBAC 403 sin `jobOrders.create`; interpretación real contra el catálogo seed (`category-forklift-operator`, `Forklift Certification`) y confirmación de que **cero JobOrder se crea**; sin categoría matcheada, `jobTitle: null` + ambigüedad.
+
+### 6.4 Suite completa
+
+787 tests, 781 pass, 1 fail preexistente sin relación (`prospecting.test.ts`), 5 skip (4 gateados por real-provider-tests + 1 preexistente sin relación).
+
+### 6.5 UI
+
+Ninguna en esta subfase — se surfacea en F8.11 (Recruiting Mission UI), mismo criterio que F7.1 (el intérprete de intención tampoco tuvo UI propia hasta integrarse en Mission Detail en F7.2).
+
+### 6.6 Limitaciones conocidas
+
+- `schedule` (horario detallado, ej. "Lunes a Viernes 8am-5pm") y `skills` (habilidades sueltas no atadas a una categoría/certificación) quedan siempre vacíos — no existe un catálogo real de habilidades en el CRM contra el cual matchear sin inventar; documentado como limitación en vez de adivinar.
+- Fechas relativas ("el lunes", "next week") nunca se resuelven a una fecha real — requeriría romper la pureza del módulo (inyectar "hoy"); decisión conservadora deliberada.
+
+### 6.7 Commit
+
+`feat: F8.1 — job intake intelligence`.
+
+**F8.1 completo.**
+
+## 7. Estado
+
+Continuando automáticamente con la implementación de F8.2.
