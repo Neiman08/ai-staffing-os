@@ -6,6 +6,7 @@ import { computeContactConfidenceScore, mapTitleToDecisionRole } from "./tools/c
 import { extractFieldsFromPdlPerson } from "./tools/contact-providers/people-data-labs";
 import { extractFromPage, findTargetLinks } from "./tools/website-intelligence/extract";
 import { mapStatusToVerificationStatus } from "./tools/email-verification-providers/hunter";
+import { REAL_PROVIDER_TESTS_ENABLED, REAL_PROVIDER_TEST_SKIP_REASON } from "../../test-helpers/real-provider-tests";
 
 const createdContactIds: string[] = [];
 
@@ -97,7 +98,10 @@ test("mapTitleToDecisionRole: clasifica cargos prioritarios reales, nunca invent
 // Contact creado debe tener procedencia completa y ningún dato inventado.
 // ============================================================
 
-test("findContacts (llamada real al proveedor configurado o ausencia honesta): siempre termina DONE, nunca inventa datos", async () => {
+test(
+  "findContacts (llamada real al proveedor configurado o ausencia honesta): siempre termina DONE, nunca inventa datos",
+  { skip: REAL_PROVIDER_TESTS_ENABLED ? false : REAL_PROVIDER_TEST_SKIP_REASON },
+  async () => {
   const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
   const company = await prisma.company.findFirstOrThrow({ where: { tenantId: salesUser.tenantId } });
 
@@ -134,7 +138,8 @@ test("findContacts (llamada real al proveedor configurado o ausencia honesta): s
       if (f.status === "NOT_FOUND") assert.equal(f.value, null);
     }
   }
-});
+  },
+);
 
 // ============================================================
 // F4.7: Website Intelligence — extracción pura de HTML (sin red). Mismo
@@ -220,7 +225,10 @@ test("mapStatusToVerificationStatus: clasifica el vocabulario real de Hunter, UN
 // debe terminar DONE con 0 emails y el motivo real en patternsFailed.
 // ============================================================
 
-test("findEmail (llamada real a Website Intelligence + Hunter.io o ausencia honesta): siempre termina DONE, nunca inventa un email", async () => {
+test(
+  "findEmail (llamada real a Website Intelligence + Hunter.io o ausencia honesta): siempre termina DONE, nunca inventa un email",
+  { skip: REAL_PROVIDER_TESTS_ENABLED ? false : REAL_PROVIDER_TEST_SKIP_REASON },
+  async () => {
   const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
   const company = await prisma.company.findFirstOrThrow({ where: { tenantId: salesUser.tenantId, website: { not: null } } });
 
@@ -255,4 +263,5 @@ test("findEmail (llamada real a Website Intelligence + Hunter.io o ausencia hone
     // Nunca se persiste un email sin al menos una fuente identificable.
     if (contact.email) assert.ok(contact.emailSource, "un Contact con email debe tener emailSource — nunca un email sin procedencia");
   }
-});
+  },
+);

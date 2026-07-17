@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { createApp } from "../../app";
+import { REAL_PROVIDER_TESTS_ENABLED, REAL_PROVIDER_TEST_SKIP_REASON } from "../../test-helpers/real-provider-tests";
 
 let server: Server;
 let baseUrl: string;
@@ -64,7 +65,10 @@ async function waitForMissionSettled(missionId: string, timeoutMs = 60_000): Pro
   throw new Error(`Mission ${missionId} did not settle within ${timeoutMs}ms`);
 }
 
-test("una instrucción de descubrimiento externo (Manufacturing/IL, bucket real) ejecuta el nuevo ejecutor dinámico, nunca crea Lead/Opportunity/Campaign/Contact", async () => {
+test(
+  "una instrucción de descubrimiento externo (Manufacturing/IL, bucket real) ejecuta el nuevo ejecutor dinámico, nunca crea Lead/Opportunity/Campaign/Contact",
+  { skip: REAL_PROVIDER_TESTS_ENABLED ? false : REAL_PROVIDER_TEST_SKIP_REASON },
+  async () => {
   const [leadsBefore, oppsBefore, campaignsBefore, contactsBefore, contactPointsBefore] = await Promise.all([
     prisma.lead.count({ where: { tenantId: "tenant-titan" } }),
     prisma.opportunity.count({ where: { tenantId: "tenant-titan" } }),
@@ -164,4 +168,5 @@ test("una instrucción de descubrimiento externo (Manufacturing/IL, bucket real)
       assert.notEqual(point.verificationStatus, "INVALID", `CompanyContactPoint ${point.email} nunca debe persistirse como INVALID`);
     }
   }
-});
+  },
+);

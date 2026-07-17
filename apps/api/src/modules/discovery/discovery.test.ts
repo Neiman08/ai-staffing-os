@@ -4,6 +4,7 @@ import { prisma } from "@ai-staffing-os/db";
 import { createAndRunTaskSync } from "../agents/task-executor";
 import { extractFields, computeConfidenceScore } from "../agents/tools/discovery-tools.impl";
 import { extractFieldsFromGooglePlace } from "../agents/tools/discovery-providers/google-places";
+import { REAL_PROVIDER_TESTS_ENABLED, REAL_PROVIDER_TEST_SKIP_REASON } from "../../test-helpers/real-provider-tests";
 
 const createdCompanyIds: string[] = [];
 
@@ -160,7 +161,10 @@ test("extractFieldsFromGooglePlace: websiteUri inválido queda NOT_FOUND, nunca 
 // inventado.
 // ============================================================
 
-test("discoverCompanies (llamada real al proveedor configurado): siempre termina DONE, nunca inventa datos, provenance completa si crea algo", async () => {
+test(
+  "discoverCompanies (llamada real al proveedor configurado): siempre termina DONE, nunca inventa datos, provenance completa si crea algo",
+  { skip: REAL_PROVIDER_TESTS_ENABLED ? false : REAL_PROVIDER_TEST_SKIP_REASON },
+  async () => {
   const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
   const task = await createAndRunTaskSync(salesUser.tenantId, salesUser.id, {
     agentKey: "discovery",
@@ -202,7 +206,8 @@ test("discoverCompanies (llamada real al proveedor configurado): siempre termina
       if (f.status === "NOT_FOUND") assert.equal(f.value, null);
     }
   }
-});
+  },
+);
 
 // ============================================================
 // Bugfix multi-sector: discover_companies debe soportar N frases de
@@ -214,7 +219,10 @@ test("discoverCompanies (llamada real al proveedor configurado): siempre termina
 // buscó y no había nada" de "nunca se llegó a buscar".
 // ============================================================
 
-test("discoverCompanies con searchTerms: corre una búsqueda independiente por frase, nunca inventa datos", async () => {
+test(
+  "discoverCompanies con searchTerms: corre una búsqueda independiente por frase, nunca inventa datos",
+  { skip: REAL_PROVIDER_TESTS_ENABLED ? false : REAL_PROVIDER_TEST_SKIP_REASON },
+  async () => {
   const salesUser = await prisma.user.findFirstOrThrow({ where: { email: "sales@titan.dev" } });
   const searchTerms = ["electrical contractor", "low voltage contractor"];
   const task = await createAndRunTaskSync(salesUser.tenantId, salesUser.id, {
@@ -242,4 +250,5 @@ test("discoverCompanies con searchTerms: corre una búsqueda independiente por f
     // industryNames — nunca una industria inventada por frase.
     assert.equal(company.industryId, "industry-construction");
   }
-});
+  },
+);
