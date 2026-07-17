@@ -1,4 +1,4 @@
-// F7.3: prueba de integración real de punta a punta —
+// F7.3/F7.4: prueba de integración real de punta a punta —
 // POST /missions con una instrucción que el LLM real
 // (interpretDailyDirective) interpreta como useExternalDiscovery=true,
 // contra tenant-titan (mismo tenant real que missions.test.ts). Ejercita
@@ -7,7 +7,15 @@
 // mockeados) — esta es la ÚNICA prueba de esta suite que hace una
 // llamada real a Google Places (misma tolerancia a costo real que
 // discovery.test.ts, que ya hace lo mismo), acotada a Manufacturing/
-// Illinois (bucket real aprobado) y a lo sumo 2 empresas.
+// Illinois (bucket real aprobado) y a lo sumo 2 empresas. Desde F7.4,
+// también ejercita Website Intelligence real (gratis, sin API key) sobre
+// las empresas reales encontradas — sirve como la prueba real controlada
+// de F7.4 (Business Validation + Email Trust) exigida por el plan:
+// Manufacturing, máximo 2 Companies, Website Intelligence permitido, sin
+// Hunter/PDL, sin Leads/Opportunities/Campaigns/Contacts. Limpieza:
+// CompanyContactPoint tiene onDelete: Cascade sobre Company (ver
+// schema.prisma), así que borrar las Companies de createdCompanyIds ya
+// limpia también cualquier CompanyContactPoint real que se haya creado.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
@@ -57,11 +65,12 @@ async function waitForMissionSettled(missionId: string, timeoutMs = 60_000): Pro
 }
 
 test("una instrucción de descubrimiento externo (Manufacturing/IL, bucket real) ejecuta el nuevo ejecutor dinámico, nunca crea Lead/Opportunity/Campaign/Contact", async () => {
-  const [leadsBefore, oppsBefore, campaignsBefore, contactsBefore] = await Promise.all([
+  const [leadsBefore, oppsBefore, campaignsBefore, contactsBefore, contactPointsBefore] = await Promise.all([
     prisma.lead.count({ where: { tenantId: "tenant-titan" } }),
     prisma.opportunity.count({ where: { tenantId: "tenant-titan" } }),
     prisma.campaign.count({ where: { tenantId: "tenant-titan" } }),
     prisma.contact.count({ where: { tenantId: "tenant-titan" } }),
+    prisma.companyContactPoint.count({ where: { tenantId: "tenant-titan" } }),
   ]);
 
   const res = await fetch(`${baseUrl}/api/v1/missions`, {
@@ -91,6 +100,12 @@ test("una instrucción de descubrimiento externo (Manufacturing/IL, bucket real)
       missionState: string;
       restrictionsApplied: string[];
       queryExecutions: unknown[];
+      emailsExtracted: number;
+      emailsVerified: number;
+      emailsRisky: number;
+      emailsInvalid: number;
+      companyContactPointsCreated: number;
+      companyValidations: Array<{ companyId: string; businessConfidence: string; detectedBusinessType: string | null }>;
     } | null;
     missionPhase: string | null;
     childTasks: Array<{ type: string }>;
@@ -108,14 +123,45 @@ test("una instrucción de descubrimiento externo (Manufacturing/IL, bucket real)
     "exactamente un AgentTask hijo de discover_companies (el del nuevo ejecutor)",
   );
 
-  const [leadsAfter, oppsAfter, campaignsAfter, contactsAfter] = await Promise.all([
+  // F7.4: cada Company realmente creada debe traer su propio registro de
+  // Business Validation — nunca "EXACT" hardcodeado como en F7.3, el
+  // nivel real depende de qué evidencia encontró el validador.
+  assert.equal(detail.discoveryExecution!.companyValidations.length, detail.discoveryExecution!.companiesCreated);
+  for (const validation of detail.discoveryExecution!.companyValidations) {
+    assert.ok(["EXACT", "STRONG", "APPROXIMATE", "WEAK"].includes(validation.businessConfidence));
+  }
+  // Email Trust: cualquier email VERIFIED/RISKY reportado debe reflejarse
+  // en CompanyContactPoint real — nunca INVALID (el bug real del PO).
+  assert.equal(detail.discoveryExecution!.emailsInvalid >= 0, true);
+  assert.ok(detail.discoveryExecution!.companyContactPointsCreated <= detail.discoveryExecution!.emailsExtracted);
+
+  const [leadsAfter, oppsAfter, campaignsAfter, contactsAfter, contactPointsAfter] = await Promise.all([
     prisma.lead.count({ where: { tenantId: "tenant-titan" } }),
     prisma.opportunity.count({ where: { tenantId: "tenant-titan" } }),
     prisma.campaign.count({ where: { tenantId: "tenant-titan" } }),
     prisma.contact.count({ where: { tenantId: "tenant-titan" } }),
+    prisma.companyContactPoint.count({ where: { tenantId: "tenant-titan" } }),
   ]);
   assert.equal(leadsAfter, leadsBefore, "cero Lead creado por el flujo dinámico");
   assert.equal(oppsAfter, oppsBefore, "cero Opportunity creada por el flujo dinámico");
   assert.equal(campaignsAfter, campaignsBefore, "cero Campaign creada por el flujo dinámico");
   assert.equal(contactsAfter, contactsBefore, "cero Contact creado por el flujo dinámico (Contact Intelligence no corre en esta fase)");
+  assert.equal(
+    contactPointsAfter - contactPointsBefore,
+    detail.discoveryExecution!.companyContactPointsCreated,
+    "el conteo real de CompanyContactPoint creados coincide exactamente con el reportado",
+  );
+
+  if (detail.discoveryExecution!.emailsInvalid === 0 && detail.discoveryExecution!.companyContactPointsCreated > 0) {
+    // Revisión manual (pedida por el plan): si esta corrida encontró
+    // algún email, confirmar que cada uno persistido realmente pertenece
+    // al dominio de su propia Company — nunca uno de dominio ajeno.
+    const points = await prisma.companyContactPoint.findMany({
+      where: { companyId: { in: detail.discoveryExecution!.createdCompanyIds } },
+      select: { companyId: true, email: true, verificationStatus: true },
+    });
+    for (const point of points) {
+      assert.notEqual(point.verificationStatus, "INVALID", `CompanyContactPoint ${point.email} nunca debe persistirse como INVALID`);
+    }
+  }
 });

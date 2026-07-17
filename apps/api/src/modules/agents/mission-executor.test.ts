@@ -7,6 +7,8 @@ import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { resetProviderHealthForTests, getProviderHealth } from "./tools/provider-health";
 import { emptyResult, type ProviderCandidate, type ProviderSearchResult } from "./tools/discovery-providers/types";
 import { executeDiscoveryPlan, buildFinalQueries, type DiscoveryProviderPort } from "./mission-executor";
+import { emptyWebsiteIntelligenceResult } from "./tools/website-intelligence/types";
+import type { WebsiteIntelligencePort } from "./company-enrichment";
 
 /**
  * F7.3: tests del ejecutor real de descubrimiento. Cero llamadas
@@ -116,6 +118,13 @@ function googleResult(candidates: ProviderCandidate[], extra: Partial<ProviderSe
   return { candidates, costUsd: 0.032, sourcesUsed: ["Google Places (fixture)"], patternsFailed: [], cancelled: false, ...extra };
 }
 
+// F7.4: este archivo prueba exclusivamente la mecánica de F7.3 (queries/
+// dedup/límites/estados) — Website Intelligence siempre se inyecta vacía
+// acá (cero red real, cero emails) a propósito; el comportamiento real
+// de Business Validation/Email Trust tiene su propia batería dedicada en
+// business-validation.test.ts/email-trust.test.ts/company-enrichment.test.ts.
+const NO_OP_WEBSITE_INTELLIGENCE: WebsiteIntelligencePort = { runWebsiteIntelligence: async () => emptyWebsiteIntelligenceResult() };
+
 async function run(tenantId: string, plan: MissionPlan, providers: DiscoveryProviderPort, restrictions: MissionRestrictions = DEFAULT_MISSION_RESTRICTIONS) {
   return runWithTenancyContext(
     { tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] },
@@ -127,6 +136,7 @@ async function run(tenantId: string, plan: MissionPlan, providers: DiscoveryProv
         restrictions,
         providers,
         googlePlacesApiKey: "fake-key-for-tests",
+        websiteIntelligence: NO_OP_WEBSITE_INTELLIGENCE,
       });
       createdCompanyIds.push(...report.createdCompanyIds);
       return report;
@@ -309,7 +319,7 @@ test("Discovery en F7.3 crea Company, pero nunca Lead/Opportunity/Campaign/Conta
 test("categoria sin bucket de Industry real (hospitality): se ejecuta la query por honestidad de costo, pero se rechaza sin persistir", async () => {
   const tenantId = await setupTenant("no-bucket");
   const hotelPlan = manufacturingPlan({
-    searchQueries: [{ searchTerm: "hotel", crmIndustryBucket: null, taxonomyKey: "hotel" }],
+    searchQueries: [{ searchTerm: "hotel", crmIndustryBucket: null, taxonomyKey: "hospitality" }],
   });
   const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture({ name: "Grand Hotel Chicago" })]) });
   const report = await run(tenantId, hotelPlan, providers);

@@ -18,7 +18,10 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     key: "hospitality",
     label: "Hospitality (Hotels & Resorts)",
     synonyms: ["hotel", "hoteles", "resort", "resorts", "lodging", "hospitality", "hospitalidad", "motel", "inn"],
-    companyTypes: ["hotel", "resort", "lodging property", "motel", "inn"],
+    // F7.4 Parte A: "suites"/"hospitality property" agregados -- evidencia
+    // de aceptacion explicita pedida por el PO para validar un candidato
+    // real de hospitality (ver docs/F7.../PLAN.md §"Hoteles").
+    companyTypes: ["hotel", "resort", "lodging property", "motel", "inn", "suites", "hospitality property"],
     crmIndustryBucket: null,
     googleSearchPhrases: ["hotel", "resort", "lodging property", "hospitality group"],
     websitePhrases: ["rooms", "reservations", "check-in", "housekeeping", "hospitality"],
@@ -31,7 +34,10 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "Front Desk Agent",
     ],
     decisionMakers: ["General Manager", "Executive Housekeeper", "Housekeeping Manager", "HR Manager", "Recruiter"],
-    negativeKeywords: ["staffing agency", "recruiting agency", "travel agency"],
+    // F7.4 Parte A: "cleaning"/"property management"/"restaurant" agregados
+    // -- rechazos explicitos pedidos por el PO (cleaning contractors,
+    // property management sin evidencia de hotel, restaurantes).
+    negativeKeywords: ["staffing agency", "recruiting agency", "travel agency", "cleaning", "property management", "restaurant"],
     relatedIndustries: ["janitorial", "commercial_cleaning"],
     validations: [
       "El sitio menciona reservas/habitaciones/check-in",
@@ -54,13 +60,23 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "industrial plant",
       "factory",
     ],
-    companyTypes: ["manufacturing company", "factory", "industrial plant"],
+    // F7.4 Parte A: "manufacturing"/"manufacturer"/"production"/
+    // "fabrication"/"processing"/"assembly"/"plant" agregados -- evidencia
+    // de aceptacion explicita pedida por el PO (ver docs/F7.../PLAN.md
+    // §"Manufacturing"). "manufacturing" standalone es deliberado: el
+    // caso real reportado por el PO ("General Manufacturing, LLC") usa
+    // la palabra sola, sin "company" ni "-er" -- el patrón más común en
+    // nombres reales de empresa, no cubierto por "manufacturing company"
+    // ni "manufacturer" por separado.
+    companyTypes: ["manufacturing company", "factory", "industrial plant", "manufacturing", "manufacturer", "production", "fabrication", "processing", "assembly", "plant"],
     crmIndustryBucket: "Manufacturing",
     googleSearchPhrases: ["manufacturing company", "factory", "industrial manufacturer"],
     websitePhrases: ["production line", "manufacturing facility", "plant", "quality control"],
     jobTitles: ["Production Worker", "Machine Operator", "Maintenance Technician", "Quality Control Inspector"],
     decisionMakers: ["Plant Manager", "Operations Manager", "Production Manager", "HR Manager", "Recruiter"],
-    negativeKeywords: ["staffing agency", "logistics only", "pure distribution"],
+    // F7.4 Parte A: "consulting" agregado -- rechazo explicito pedido por
+    // el PO ("Rechazar: consulting; staffing; pure logistics; ...").
+    negativeKeywords: ["staffing agency", "logistics only", "pure distribution", "consulting"],
     relatedIndustries: ["food_manufacturing", "beverage_manufacturing", "packaging", "industrial_automation"],
     validations: ["El sitio muestra evidencia real de producción/planta", "No es una oficina corporativa sin planta"],
     version: 1,
@@ -79,7 +95,10 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "dairy processing",
       "meat processing",
     ],
-    companyTypes: ["food manufacturer", "food processing plant", "bakery manufacturer", "dairy processor"],
+    // F7.4 Parte A: "food processing"/"beverage production"/"packaging
+    // food"/"plant"/"factory" agregados -- evidencia de aceptacion
+    // explicita pedida por el PO (ver docs/F7.../PLAN.md §"Food Manufacturing").
+    companyTypes: ["food manufacturer", "food processing plant", "bakery manufacturer", "dairy processor", "food processing", "beverage production", "packaging food", "plant", "factory"],
     crmIndustryBucket: "Manufacturing",
     googleSearchPhrases: ["food manufacturing company", "food processing plant", "food production facility"],
     websitePhrases: ["food safety", "FDA", "HACCP", "food production"],
@@ -132,10 +151,13 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     key: "warehousing",
     label: "Warehousing",
     synonyms: ["warehouse", "warehouses", "warehousing", "almacen", "almacenes", "bodega"],
-    companyTypes: ["warehouse", "warehousing company", "fulfillment center"],
+    // F7.4 Parte A: "distribution center"/"logistics facility"/"shipping
+    // and receiving" agregados -- evidencia de aceptacion explicita
+    // pedida por el PO (ver docs/F7.../PLAN.md §"Warehousing").
+    companyTypes: ["warehouse", "warehousing company", "fulfillment center", "distribution center", "logistics facility", "shipping and receiving"],
     crmIndustryBucket: "Warehouse/Logistics",
     googleSearchPhrases: ["warehouse company", "warehousing and fulfillment", "distribution warehouse"],
-    websitePhrases: ["warehouse", "fulfillment", "storage facility"],
+    websitePhrases: ["warehouse", "fulfillment", "storage facility", "distribution center", "shipping", "receiving"],
     jobTitles: ["Forklift Operator", "Warehouse Associate", "Material Handler", "Order Picker"],
     decisionMakers: ["Warehouse Manager", "Operations Manager", "HR Manager", "Recruiter"],
     negativeKeywords: ["retail store", "office only"],
@@ -183,7 +205,12 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     key: "janitorial",
     label: "Janitorial Services",
     synonyms: ["janitorial", "janitorial services", "servicios de limpieza", "limpieza comercial"],
-    companyTypes: ["janitorial services company", "cleaning services company"],
+    // F7.4 Parte A: "janitorial"/"custodial services"/"facility services"
+    // agregados -- evidencia de aceptacion explicita pedida por el PO
+    // (ver docs/F7.../PLAN.md §"Janitorial / Commercial Cleaning").
+    // "janitorial" standalone (sin "services company") cubre el patrón
+    // más común de nombre real, ej. "Bright Star Janitorial Services".
+    companyTypes: ["janitorial services company", "cleaning services company", "janitorial", "custodial services", "facility services"],
     crmIndustryBucket: null,
     googleSearchPhrases: ["janitorial services company", "commercial cleaning company"],
     websitePhrases: ["janitorial", "commercial cleaning", "facility maintenance"],
@@ -198,7 +225,9 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     key: "commercial_cleaning",
     label: "Commercial Cleaning",
     synonyms: ["commercial cleaning", "limpieza comercial", "cleaning company", "facility services"],
-    companyTypes: ["commercial cleaning company", "facility services company"],
+    // F7.4 Parte A: "custodial services" agregado -- evidencia de
+    // aceptacion explicita pedida por el PO.
+    companyTypes: ["commercial cleaning company", "facility services company", "custodial services"],
     crmIndustryBucket: null,
     googleSearchPhrases: ["commercial cleaning company", "facility services company"],
     websitePhrases: ["commercial cleaning", "facility services", "office cleaning"],

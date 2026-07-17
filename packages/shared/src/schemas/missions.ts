@@ -382,8 +382,37 @@ export const discoveryRejectedCandidateSchema = z.object({
   reason: z.string(),
   evidence: z.string(),
   confidence: z.number(),
+  // F7.4: presentes solo cuando el rechazo vino de Business Validation.
+  matchedEvidence: z.array(z.string()).optional(),
+  missingEvidence: z.array(z.string()).optional(),
 });
 export type DiscoveryRejectedCandidate = z.infer<typeof discoveryRejectedCandidateSchema>;
+
+// F7.4 Parte A: nivel de confianza real de Business Validation — nunca
+// "REJECTED" en un registro persistido (esos candidatos no llegan a
+// crear Company, ver mission-executor.ts's classifyCandidate).
+export const businessValidationConfidenceLevelSchema = z.enum(["EXACT", "STRONG", "APPROXIMATE", "WEAK", "REJECTED"]);
+export type BusinessValidationConfidenceLevel = z.infer<typeof businessValidationConfidenceLevelSchema>;
+
+// F7.4 Parte A + B: un registro por Company realmente persistida —
+// espejo de CompanyValidationRecord (apps/api/.../mission-executor.ts).
+export const companyValidationRecordSchema = z.object({
+  companyId: z.string(),
+  name: z.string(),
+  taxonomyKey: z.string(),
+  businessConfidence: businessValidationConfidenceLevelSchema,
+  detectedBusinessType: z.string().nullable(),
+  detectedSector: z.string().nullable(),
+  matchedEvidence: z.array(z.string()),
+  missingEvidence: z.array(z.string()),
+  emailsExtracted: z.number(),
+  emailsVerified: z.number(),
+  emailsRisky: z.number(),
+  emailsInvalid: z.number(),
+  companyContactPointsCreated: z.number(),
+  hasValidEmail: z.boolean(),
+});
+export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
 export const discoveryExecutionReportSchema = z.object({
   requestedCompanyCount: z.number(),
@@ -398,6 +427,22 @@ export const discoveryExecutionReportSchema = z.object({
   createdCompanyIds: z.array(z.string()),
   providersUsed: z.array(z.string()),
   providersOmitted: z.array(z.string()),
+  // F7.4 Parte A: alias explícitos pedidos por el PO — mismos números
+  // que acceptedResults/rejectedResults/su suma, nunca recalculados.
+  candidatesValidated: z.number(),
+  acceptedCompanies: z.number(),
+  rejectedCompanies: z.number(),
+  rejectionReasons: z.array(z.string()),
+  // F7.4 Parte B: agregados de Email Trust sobre toda la misión.
+  emailsExtracted: z.number(),
+  emailsVerified: z.number(),
+  emailsRisky: z.number(),
+  emailsInvalid: z.number(),
+  emailsUnknown: z.number(),
+  companyContactPointsCreated: z.number(),
+  companiesWithoutValidEmail: z.number(),
+  validationWarnings: z.array(z.string()),
+  companyValidations: z.array(companyValidationRecordSchema),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

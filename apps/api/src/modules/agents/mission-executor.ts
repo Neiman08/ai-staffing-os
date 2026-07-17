@@ -7,15 +7,15 @@ import { env } from "../../core/env";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
-import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import { SUPPORTED_STATE_CODES } from "../ceo-intelligence/geo";
-import { normalizeText, containsWord } from "../ceo-intelligence/text-normalize";
+import { normalizeText } from "../ceo-intelligence/text-normalize";
 import {
   buildCompanyIdentityKeys,
   deduplicateDiscoveryCandidates,
   type CompanyIdentityKeys,
   type DiscoveryCandidateLike,
 } from "../ceo-intelligence/discovery-identity";
+import { validateBusinessCandidate, BUSINESS_VALIDATION_VERSION, type BusinessValidationConfidenceLevel } from "../ceo-intelligence/business-validation";
 import { createQueuedTask } from "./task-executor";
 import { computeConfidenceScore } from "./tools/discovery-tools.impl";
 import { searchGooglePlaces } from "./tools/discovery-providers/google-places";
@@ -23,26 +23,32 @@ import { searchOverpass } from "./tools/discovery-providers/overpass";
 import { emptyResult, type ProviderCandidate, type ProviderSearchResult } from "./tools/discovery-providers/types";
 import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "./tools/provider-health";
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
+import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } from "./company-enrichment";
 
 /**
- * F7.3: ejecutor real de descubrimiento a partir de un MissionPlan ya
- * generado (F7.1/F7.2, sin modificar). Reemplaza, SOLO para el flujo
+ * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
+ * ya generado (F7.1/F7.2, sin modificar). Reemplaza, SOLO para el flujo
  * nuevo, el patrón "por cada industria: ejecutar todos los search terms"
  * de discovery-tools.impl.ts (que sigue existiendo, sin tocar, para el
  * AgentTool discover_companies clásico) por: "por cada query única del
- * plan: ejecutar una vez, deduplicar globalmente, clasificar, validar,
- * persistir solo Company". Separación explícita en 8 pasos (ver plan
- * aprobado): validación de plan (buildFinalQueries + guards de estado),
- * selección de pasos permitidos (guards BLOCKED de arriba), ejecución de
- * queries (executeOneQuery), normalización (buildCompanyIdentityKeys),
- * deduplicación (deduplicateDiscoveryCandidates), clasificación
- * (classifyCandidate), persistencia (persistAcceptedCandidate), reporte
- * (buildReport).
+ * plan: ejecutar una vez, deduplicar globalmente, validar empresa,
+ * persistir Company, inspeccionar website, validar emails, persistir
+ * CompanyContactPoint". Pipeline completo (F7.4): (1) descubrir
+ * (executeOneQuery); (2) normalizar (buildCompanyIdentityKeys); (3)
+ * deduplicar (deduplicateDiscoveryCandidates); (4) validar empresa
+ * (classifyCandidate -> business-validation.ts, F7.4 Parte A); (5)
+ * rechazar no relevantes; (6) persistir Company (persistAcceptedCandidate);
+ * (7-8) inspeccionar website + extraer emails (company-enrichment.ts,
+ * envuelve Website Intelligence); (9) validar email (email-trust.ts,
+ * F7.4 Parte B); (10) persistir CompanyContactPoint; (11) reporte
+ * (DiscoveryExecutionReport).
  *
- * Nunca crea Lead/Opportunity/Campaign/Contact/CompanyContactPoint — solo
- * Company + un AgentTask hijo de trazabilidad mínima (tipo
- * "discover_companies", igual que el flujo clásico, para que participe
- * del mismo guardia de presupuesto de datos en data-provider-budget.ts).
+ * Nunca crea Lead/Opportunity/Campaign/Contact — solo Company,
+ * CompanyContactPoint (únicamente emails VERIFIED/RISKY, nunca INVALID)
+ * y un AgentTask hijo de trazabilidad mínima (tipo "discover_companies",
+ * igual que el flujo clásico, para que participe del mismo guardia de
+ * presupuesto de datos en data-provider-budget.ts). Contact Intelligence
+ * (contactos personales nombrados) sigue sin ejecutarse en esta fase.
  */
 
 const PROVIDER_KEY_GOOGLE_PLACES = "google_places_text_search";
@@ -61,11 +67,19 @@ export interface ExecuteDiscoveryPlanParams {
   plan: MissionPlan;
   restrictions: MissionRestrictions;
   abortSignal?: AbortSignal;
+  // F7.4: labels de taxonomía matcheados por el intérprete (F7.1) — señal
+  // de evidencia adicional, débil, opcional para Business Validation (ver
+  // business-validation.ts). Vacío en cualquier llamador que no lo pase.
+  businessActivities?: string[];
   // Inyección para tests — nunca se llama a un proveedor real en un test
   // unitario. Default: los módulos reales (google-places.ts/overpass.ts,
   // sin modificar).
   providers?: DiscoveryProviderPort;
   googlePlacesApiKey?: string;
+  // F7.4: inyección para tests de Website Intelligence (company-enrichment.ts)
+  // — nunca se llama al crawler real en un test unitario. Default: el
+  // módulo real.
+  websiteIntelligence?: WebsiteIntelligencePort;
 }
 
 export interface QueryExecutionRecord {
@@ -90,6 +104,33 @@ export interface RejectedCandidateRecord {
   reason: string;
   evidence: string;
   confidence: number;
+  // F7.4: presentes solo cuando el rechazo vino de Business Validation
+  // (no de los rechazos posteriores del ejecutor: bucket/Industry
+  // faltante) -- ver business-validation.ts.
+  matchedEvidence?: string[];
+  missingEvidence?: string[];
+}
+
+// F7.4 Parte A + B: un registro por Company realmente persistida, con el
+// resultado completo de Business Validation (por qué se aceptó) y el
+// resumen de Email Trust (qué se encontró/persistió en su sitio) — la
+// fuente única que consume la UI para "Validación de empresa" y "Emails
+// organizacionales" (Mission Detail).
+export interface CompanyValidationRecord {
+  companyId: string;
+  name: string;
+  taxonomyKey: string;
+  businessConfidence: BusinessValidationConfidenceLevel;
+  detectedBusinessType: string | null;
+  detectedSector: string | null;
+  matchedEvidence: string[];
+  missingEvidence: string[];
+  emailsExtracted: number;
+  emailsVerified: number;
+  emailsRisky: number;
+  emailsInvalid: number;
+  companyContactPointsCreated: number;
+  hasValidEmail: boolean;
 }
 
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
@@ -115,6 +156,25 @@ export interface DiscoveryExecutionReport {
   restrictionsApplied: string[];
   queryExecutions: QueryExecutionRecord[];
   rejectedCandidates: RejectedCandidateRecord[];
+  // F7.4 Parte A: candidatesValidated/acceptedCompanies/rejectedCompanies
+  // son alias explícitos pedidos por el PO -- mismos números que
+  // acceptedResults/rejectedResults/su suma, nunca recalculados con otra
+  // lógica (una sola fuente de verdad).
+  candidatesValidated: number;
+  acceptedCompanies: number;
+  rejectedCompanies: number;
+  rejectionReasons: string[];
+  // F7.4 Parte B: agregados de Email Trust sobre TODAS las Companies
+  // aceptadas de esta misión.
+  emailsExtracted: number;
+  emailsVerified: number;
+  emailsRisky: number;
+  emailsInvalid: number;
+  emailsUnknown: number;
+  companyContactPointsCreated: number;
+  companiesWithoutValidEmail: number;
+  validationWarnings: string[];
+  companyValidations: CompanyValidationRecord[];
 }
 
 interface FinalQuery {
@@ -248,48 +308,30 @@ interface Candidate extends DiscoveryCandidateLike {
 }
 
 /**
- * Validación básica y determinista (F7.3 — no reemplaza Business
- * Validation completa de una fase futura, que crawlearía el sitio real).
- * Evidencia disponible hoy: nombre + exclusiones explícitas de la misión
- * + negativeKeywords de la entrada de taxonomía que originó la query.
- * Nunca acepta un candidato sin nombre utilizable. El bucket de Industry
- * (crmIndustryBucket null) es un rechazo aparte, ver rejectForMissingBucket.
+ * F7.4 Parte A: adaptador delgado sobre validateBusinessCandidate
+ * (business-validation.ts, puro) — reemplaza la validación básica de
+ * F7.3 (solo nombre + exclusiones + negativeKeywords) por el evaluador
+ * completo taxonomy-driven (nombre + dominio + descripción + provider
+ * types + businessActivities, 5 niveles de confianza EXACT/STRONG/
+ * APPROXIMATE/WEAK/REJECTED). `providerTypes`/`description` quedan
+ * siempre vacíos hoy -- ningún proveedor conectado los popula todavía
+ * (limitación documentada, ver discoveryMetadata.originalProviderTypes,
+ * F7.3 §15.11 y F7.4 doc).
  */
-function classifyCandidate(
-  candidate: Candidate,
-  plan: MissionPlan,
-): { accepted: true; confidence: number } | { accepted: false; reason: string; evidence: string; confidence: number } {
-  if (!candidate.raw.name) {
-    return { accepted: false, reason: "Sin nombre utilizable en la respuesta del proveedor.", evidence: candidate.raw.sourceUrl, confidence: 1 };
-  }
-
-  const normalizedName = normalizeText(candidate.raw.name);
-  for (const exclusion of plan.exclusions) {
-    if (exclusion.trim() && containsWord(normalizedName, normalizeText(exclusion))) {
-      return {
-        accepted: false,
-        reason: `El nombre coincide con un término excluido explícitamente por la misión: "${exclusion}".`,
-        evidence: candidate.raw.name,
-        confidence: 1,
-      };
-    }
-  }
-
-  const entry = getTaxonomyEntry(candidate.query.taxonomyKey);
-  if (entry) {
-    for (const negative of entry.negativeKeywords) {
-      if (containsWord(normalizedName, normalizeText(negative))) {
-        return {
-          accepted: false,
-          reason: `El nombre sugiere un falso positivo para "${entry.label}": coincide con "${negative}".`,
-          evidence: candidate.raw.name,
-          confidence: 0.7,
-        };
-      }
-    }
-  }
-
-  return { accepted: true, confidence: computeConfidenceScore(candidate.raw.fields) };
+function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActivities: string[]) {
+  const website = candidate.raw.fields.website?.status === "CONFIRMED" ? (candidate.raw.fields.website.value as string) : null;
+  return validateBusinessCandidate({
+    candidateName: candidate.raw.name,
+    website,
+    searchTerm: candidate.query.searchTerm,
+    taxonomyKey: candidate.query.taxonomyKey,
+    city: candidate.query.city,
+    state: candidate.query.state,
+    missionExclusions: plan.exclusions,
+    providerTypes: [],
+    description: null,
+    businessActivities,
+  });
 }
 
 /**
@@ -308,8 +350,8 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const googlePlacesApiKey = params.googlePlacesApiKey ?? env.GOOGLE_PLACES_API_KEY;
   const requestedCompanyCount = params.plan.stopConditions.maxCompanies;
   const limitations: string[] = [
-    "Contact Intelligence no fue ejecutado en esta fase.",
-    "Business Validation es básica (nombre + exclusiones + negativeKeywords) — no incluye crawl del sitio real.",
+    "Contact Intelligence (contactos personales) no fue ejecutado en esta fase.",
+    "Business Validation no incluye provider types ni descripción pública — ningún proveedor conectado los popula todavía (evidencia limitada a nombre/dominio/query).",
   ];
 
   const emptyReport = (missionState: MissionExecutionState, stopReason: string): DiscoveryExecutionReport => ({
@@ -325,6 +367,19 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     createdCompanyIds: [],
     providersUsed: [],
     providersOmitted: [],
+    candidatesValidated: 0,
+    acceptedCompanies: 0,
+    rejectedCompanies: 0,
+    rejectionReasons: [],
+    emailsExtracted: 0,
+    emailsVerified: 0,
+    emailsRisky: 0,
+    emailsInvalid: 0,
+    emailsUnknown: 0,
+    companyContactPointsCreated: 0,
+    companiesWithoutValidEmail: 0,
+    validationWarnings: [],
+    companyValidations: [],
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -372,9 +427,13 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
 
   const queryExecutions: QueryExecutionRecord[] = [];
   const rejectedCandidates: RejectedCandidateRecord[] = [];
+  const companyValidations: CompanyValidationRecord[] = [];
   const providersUsed = new Set<string>();
   const providersOmitted = new Set<string>();
+  const validationWarnings = new Set<string>();
+  const rejectionReasons = new Set<string>();
   const createdCompanyIds: string[] = [];
+  const businessActivities = params.businessActivities ?? [];
   let totalCostUsd = 0;
   let rawResults = 0;
   let acceptedResults = 0;
@@ -383,6 +442,13 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let duplicatesAlreadyInCrm = 0;
   let cancelled = false;
   let stopReason = "queries_exhausted";
+  let emailsExtractedTotal = 0;
+  let emailsVerifiedTotal = 0;
+  let emailsRiskyTotal = 0;
+  let emailsInvalidTotal = 0;
+  let emailsUnknownTotal = 0;
+  let companyContactPointsCreatedTotal = 0;
+  let companiesWithoutValidEmailTotal = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -496,16 +562,20 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           if (value) existingKeys[field].add(value);
         }
 
-        const classification = classifyCandidate(candidate, params.plan);
-        if (!classification.accepted) {
+        const validation = classifyCandidate(candidate, params.plan, businessActivities);
+        for (const warning of validation.warnings) validationWarnings.add(warning);
+
+        if (!validation.accepted) {
           rejectedResults += 1;
           record.rejectedCount += 1;
+          const reason = validation.rejectionReasons.join(" ");
+          rejectionReasons.add(reason);
           rejectedCandidates.push({
             name: candidate.raw.name,
             taxonomyKey: candidate.query.taxonomyKey,
-            reason: classification.reason,
-            evidence: classification.evidence,
-            confidence: classification.confidence,
+            reason,
+            evidence: candidate.raw.name ?? candidate.raw.sourceUrl,
+            confidence: validation.confidenceScore,
           });
           continue;
         }
@@ -513,12 +583,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         if (!candidate.query.crmIndustryBucket) {
           rejectedResults += 1;
           record.rejectedCount += 1;
+          const reason = `Sin bucket de Industry real aprobado para la categoría "${candidate.query.taxonomyKey}" — decisión pendiente del PO (ver plan §9.4). No se persiste hasta que se apruebe/cree la Industry correspondiente.`;
+          rejectionReasons.add(reason);
           rejectedCandidates.push({
             name: candidate.raw.name,
             taxonomyKey: candidate.query.taxonomyKey,
-            reason: `Sin bucket de Industry real aprobado para la categoría "${candidate.query.taxonomyKey}" — decisión pendiente del PO (ver plan §9.4). No se persiste hasta que se apruebe/cree la Industry correspondiente.`,
+            reason,
             evidence: candidate.raw.name ?? candidate.raw.sourceUrl,
             confidence: 1,
+            matchedEvidence: validation.matchedEvidence,
+            missingEvidence: validation.missingEvidence,
           });
           continue;
         }
@@ -527,12 +601,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         if (!industry) {
           rejectedResults += 1;
           record.rejectedCount += 1;
+          const reason = `Industry real "${candidate.query.crmIndustryBucket}" no existe en el CRM de este tenant.`;
+          rejectionReasons.add(reason);
           rejectedCandidates.push({
             name: candidate.raw.name,
             taxonomyKey: candidate.query.taxonomyKey,
-            reason: `Industry real "${candidate.query.crmIndustryBucket}" no existe en el CRM de este tenant.`,
+            reason,
             evidence: candidate.raw.name ?? candidate.raw.sourceUrl,
             confidence: 1,
+            matchedEvidence: validation.matchedEvidence,
+            missingEvidence: validation.missingEvidence,
           });
           continue;
         }
@@ -540,12 +618,50 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         const company = await persistAcceptedCandidate({
           candidate,
           industryId: industry.id,
-          confidenceScore: classification.confidence,
+          confidenceScore: computeConfidenceScore(candidate.raw.fields),
+          businessValidation: validation,
           missionTaskId: childTask.id,
         });
         createdCompanyIds.push(company.id);
         acceptedResults += 1;
         record.acceptedCount += 1;
+
+        // F7.4 Parte B, pasos 7-10 del pipeline: inspeccionar website ->
+        // extraer emails -> validar -> persistir CompanyContactPoint —
+        // solo para Companies genuinamente nuevas (no se re-enriquece
+        // nada que ya existía, esas nunca pasan por acá).
+        const enrichment = await enrichCompanyWithOrganizationalEmails({
+          taskId: childTask.id,
+          companyId: company.id,
+          abortSignal: params.abortSignal,
+          websiteIntelligence: params.websiteIntelligence,
+        });
+        emailsExtractedTotal += enrichment.emailsExtracted;
+        emailsVerifiedTotal += enrichment.emailsVerified;
+        emailsRiskyTotal += enrichment.emailsRisky;
+        emailsInvalidTotal += enrichment.emailsInvalid;
+        emailsUnknownTotal += enrichment.emailsUnknown;
+        companyContactPointsCreatedTotal += enrichment.companyContactPointsCreated;
+        const hasValidEmail = enrichment.emailsVerified > 0 || enrichment.emailsRisky > 0;
+        if (!hasValidEmail) companiesWithoutValidEmailTotal += 1;
+        for (const failure of enrichment.patternsFailed) validationWarnings.add(failure);
+
+        companyValidations.push({
+          companyId: company.id,
+          name: candidate.raw.name!,
+          taxonomyKey: candidate.query.taxonomyKey,
+          businessConfidence: validation.confidence,
+          detectedBusinessType: validation.detectedBusinessType,
+          detectedSector: validation.detectedSector,
+          matchedEvidence: validation.matchedEvidence,
+          missingEvidence: validation.missingEvidence,
+          emailsExtracted: enrichment.emailsExtracted,
+          emailsVerified: enrichment.emailsVerified,
+          emailsRisky: enrichment.emailsRisky,
+          emailsInvalid: enrichment.emailsInvalid,
+          companyContactPointsCreated: enrichment.companyContactPointsCreated,
+          hasValidEmail,
+        });
       }
     }
 
@@ -582,7 +698,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
       status: "DONE",
       completedAt: new Date(),
       costUsd: totalCostUsd,
-      output: { queryExecutions, createdCompanyIds, rejectedCandidates, missionState } as never,
+      output: { queryExecutions, createdCompanyIds, rejectedCandidates, companyValidations, missionState } as never,
     },
   });
 
@@ -599,6 +715,19 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     createdCompanyIds,
     providersUsed: Array.from(providersUsed),
     providersOmitted: Array.from(providersOmitted),
+    candidatesValidated: acceptedResults + rejectedResults,
+    acceptedCompanies: createdCompanyIds.length,
+    rejectedCompanies: rejectedResults,
+    rejectionReasons: Array.from(rejectionReasons),
+    emailsExtracted: emailsExtractedTotal,
+    emailsVerified: emailsVerifiedTotal,
+    emailsRisky: emailsRiskyTotal,
+    emailsInvalid: emailsInvalidTotal,
+    emailsUnknown: emailsUnknownTotal,
+    companyContactPointsCreated: companyContactPointsCreatedTotal,
+    companiesWithoutValidEmail: companiesWithoutValidEmailTotal,
+    validationWarnings: Array.from(validationWarnings),
+    companyValidations,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -612,7 +741,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
 
 function buildRestrictionsApplied(restrictions: MissionRestrictions): string[] {
   const notes: string[] = [
-    "No se crea ninguna Lead/Opportunity/Campaign/Contact/CompanyContactPoint en este flujo — solo Company + trazabilidad mínima de misión.",
+    "No se crea ninguna Lead/Opportunity/Campaign/Contact en este flujo — solo Company, CompanyContactPoint (emails organizacionales verificados) y trazabilidad mínima de misión.",
   ];
   if (!restrictions.allowCampaignCreation) notes.push("No se creó ninguna Campaign — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOpportunityCreation) notes.push("No se crearon Opportunities — la instrucción lo prohibió explícitamente.");
@@ -638,18 +767,25 @@ function isPreexisting(
 async function persistAcceptedCandidate(params: {
   candidate: Candidate;
   industryId: string;
+  // Score de completitud de datos (website/phone/address/email
+  // confirmados) — computeConfidenceScore, eje DISTINTO del de Business
+  // Validation (que mide confianza de que el TIPO de negocio coincide,
+  // no cuántos campos vinieron completos). Nunca se mezclan: este va a
+  // la columna Company.confidenceScore (sin cambios de F7.3); el de
+  // Business Validation va a discoveryMetadata.classificationMode/
+  // classificationConfidence (F7.4, ver abajo).
   confidenceScore: number;
+  businessValidation: ReturnType<typeof validateBusinessCandidate>;
   missionTaskId: string;
 }) {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
-  const { candidate, industryId, confidenceScore, missionTaskId } = params;
+  const { candidate, industryId, confidenceScore, businessValidation, missionTaskId } = params;
   const raw = candidate.raw;
   const website = raw.fields.website?.status === "CONFIRMED" ? (raw.fields.website.value as string) : null;
   const phone = raw.fields.phone?.status === "CONFIRMED" ? (raw.fields.phone.value as string) : null;
   const city = raw.fields.city?.status === "CONFIRMED" ? (raw.fields.city.value as string) : candidate.query.city;
   const now = new Date();
-  const entry = getTaxonomyEntry(candidate.query.taxonomyKey);
 
   const company = await scopedDb.company.create({
     data: {
@@ -677,11 +813,22 @@ async function persistAcceptedCandidate(params: {
         providerPlaceId: candidate.identity.providerPlaceId,
         canonicalDomain: candidate.identity.canonicalDomain,
         normalizedPhone: candidate.identity.normalizedPhone,
-        detectedBusinessType: entry?.companyTypes[0] ?? candidate.query.taxonomyKey,
-        detectedSector: candidate.query.crmIndustryBucket,
-        classificationMode: "EXACT",
-        classificationConfidence: confidenceScore,
-        classificationReason: `Encontrada por la query "${candidate.query.searchTerm}" (taxonomía: ${candidate.query.taxonomyKey}), archivada bajo Industry real "${candidate.query.crmIndustryBucket}".`,
+        detectedBusinessType: businessValidation.detectedBusinessType,
+        detectedSector: businessValidation.detectedSector,
+        // F7.4: nivel real de Business Validation (EXACT/STRONG/
+        // APPROXIMATE/WEAK — nunca REJECTED, esos no llegan a
+        // persistirse) en vez del literal fijo "EXACT" de F7.3.
+        classificationMode: businessValidation.confidence,
+        classificationConfidence: businessValidation.confidenceScore,
+        classificationReason:
+          businessValidation.matchedEvidence.length > 0
+            ? `Evidencia coincidente: ${businessValidation.matchedEvidence.join(", ")}.`
+            : `Sin evidencia directa en nombre/dominio — aceptada por confianza ${businessValidation.confidence} (query dirigida de la taxonomía "${candidate.query.taxonomyKey}").`,
+        // F7.4: nuevos campos de discoveryMetadata (Json, sin migración) —
+        // trazabilidad completa de Business Validation.
+        matchedEvidence: businessValidation.matchedEvidence,
+        missingEvidence: businessValidation.missingEvidence,
+        businessValidationVersion: BUSINESS_VALIDATION_VERSION,
         accepted: true,
         rejectionReason: null,
         originalProviderTypes: [],

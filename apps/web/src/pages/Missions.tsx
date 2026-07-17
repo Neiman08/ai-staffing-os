@@ -466,6 +466,125 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
   );
 }
 
+const EMAIL_STATUS_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  VERIFIED: "success",
+  RISKY: "warning",
+  INVALID: "danger",
+  UNKNOWN: "neutral",
+  NOT_VERIFIED: "neutral",
+};
+
+const BUSINESS_CONFIDENCE_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  EXACT: "success",
+  STRONG: "success",
+  APPROXIMATE: "warning",
+  WEAK: "warning",
+  REJECTED: "danger",
+};
+
+/**
+ * F7.4: "Validación" — Business Validation (Parte A) + Email Trust
+ * (Parte B) por cada Company realmente creada por esta misión. Presente
+ * únicamente cuando el reporte trae companyValidations (misiones
+ * ejecutadas por el ejecutor dinámico desde F7.4 en adelante — misiones
+ * de F7.3 puro, antes de este fix, muestran el arreglo vacío, sección
+ * oculta). Nunca muestra un email INVALID como si fuera un contacto
+ * utilizable — solo aparece acá para transparencia de por qué se
+ * descartó.
+ */
+function BusinessValidationSection({ report }: { report: NonNullable<MissionDetail["discoveryExecution"]> }) {
+  if (report.companyValidations.length === 0) return null;
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Validación</p>
+      <div className="space-y-2">
+        {report.companyValidations.map((v) => (
+          <div key={v.companyId} className="rounded-md border border-border p-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <Link to={`/companies/${v.companyId}`} className="min-w-0 truncate font-medium hover:underline" title={v.name}>
+                {v.name}
+              </Link>
+              <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"}>{v.businessConfidence}</Badge>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+              {v.detectedBusinessType && <span>Tipo: {v.detectedBusinessType}</span>}
+              {v.detectedSector && <span>Sector: {v.detectedSector}</span>}
+              {!v.hasValidEmail && <span className="text-amber-600 dark:text-amber-400">Sin email organizacional válido</span>}
+            </div>
+            {v.matchedEvidence.length > 0 && (
+              <p className="mt-1 text-[11px] text-muted-foreground">Evidencia: {v.matchedEvidence.join(", ")}</p>
+            )}
+            {v.missingEvidence.length > 0 && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Falta confirmar: {v.missingEvidence.join(", ")}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * F7.4 Parte B: "Emails organizacionales" — los emails realmente
+ * evaluados por Email Trust para las Companies de esta misión (nunca
+ * personas — Contact Intelligence no corre en esta fase). Se lee de
+ * discoveryExecution.companyValidations (agregados por Company, no un
+ * listado literal de cada dirección) — cuenta extraídos/verificados/
+ * riesgosos/inválidos, nunca muestra un INVALID como si fuera usable.
+ */
+function OrganizationalEmailsSection({ report }: { report: NonNullable<MissionDetail["discoveryExecution"]> }) {
+  return (
+    <div>
+      <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Emails organizacionales</p>
+      <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-2 text-center text-xs sm:grid-cols-5">
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.emailsExtracted}</p>
+          <p className="text-muted-foreground">Extraídos</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.emailsVerified}</p>
+          <p className="text-muted-foreground">Verificados</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.emailsRisky}</p>
+          <p className="text-muted-foreground">Riesgosos</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.emailsInvalid}</p>
+          <p className="text-muted-foreground">Inválidos</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.companyContactPointsCreated}</p>
+          <p className="text-muted-foreground">Puntos de contacto</p>
+        </div>
+      </div>
+      {report.companiesWithoutValidEmail > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {report.companiesWithoutValidEmail} empresa(s) sin ningún email organizacional válido.
+        </p>
+      )}
+      <div className="mt-2 space-y-1.5">
+        {report.companyValidations
+          .filter((v) => v.emailsExtracted > 0)
+          .map((v) => (
+            <div key={v.companyId} className="rounded-md border border-border p-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-medium" title={v.name}>
+                  {v.name}
+                </span>
+                <div className="flex shrink-0 items-center gap-1">
+                  {v.emailsVerified > 0 && <Badge variant={EMAIL_STATUS_VARIANTS.VERIFIED}>{v.emailsVerified} verificado(s)</Badge>}
+                  {v.emailsRisky > 0 && <Badge variant={EMAIL_STATUS_VARIANTS.RISKY}>{v.emailsRisky} riesgoso(s)</Badge>}
+                  {v.emailsInvalid > 0 && <Badge variant={EMAIL_STATUS_VARIANTS.INVALID}>{v.emailsInvalid} inválido(s)</Badge>}
+                </div>
+              </div>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
 function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null; onClose: () => void }) {
   const { data: detail } = useQuery({
     queryKey: ["mission", missionId],
@@ -491,6 +610,7 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
             <MissionPlanSection plan={detail.missionPlan} warnings={detail.ceoIntentMeta?.warnings ?? []} />
           )}
           {detail.discoveryExecution && <DiscoveryExecutionSection report={detail.discoveryExecution} />}
+          {detail.discoveryExecution && <BusinessValidationSection report={detail.discoveryExecution} />}
           {detail.unrecognizedTerms.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Términos no reconocidos</p>
@@ -572,16 +692,19 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               )}
             </div>
           </div>
+          {detail.discoveryExecution && <OrganizationalEmailsSection report={detail.discoveryExecution} />}
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Contact Intelligence</p>
-            {/* F7.3: Contact Intelligence nunca corrió para una misión
-                ejecutada por el nuevo ejecutor dinámico — mostrar "0
-                emails"/"0 contactos" acá sería engañoso (parecería que sí
+            {/* F7.4: Contact Intelligence (contactos PERSONALES nombrados)
+                nunca corrió para una misión ejecutada por el nuevo
+                ejecutor dinámico — solo Email Trust sobre emails
+                organizacionales (ver OrganizationalEmailsSection arriba).
+                Mostrar "0 contactos" acá sería engañoso (parecería que sí
                 se buscó y no encontró nada). Mensaje explícito en su
                 lugar. */}
             {detail.discoveryExecution ? (
               <p className="rounded-md border border-border p-2 text-xs text-muted-foreground">
-                Contact Intelligence pendiente de una fase posterior.
+                Contact Intelligence (contactos personales) pendiente de una fase posterior.
               </p>
             ) : (
               <>
