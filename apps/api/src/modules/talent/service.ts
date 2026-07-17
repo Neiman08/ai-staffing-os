@@ -18,6 +18,7 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
+import { evaluateCandidateQualification, type QualificationEvaluationResult } from "../recruiting-intelligence/qualification-rules";
 
 // ================= Candidates =================
 
@@ -475,4 +476,51 @@ export async function listJobCategories(): Promise<JobCategoryListItem[]> {
     industryName: category.industry?.name ?? null,
     requiredCertifications: (category.requiredCertifications as string[]) ?? [],
   }));
+}
+
+/**
+ * F8.2: Job Requirements and Qualification Rules -- wiring impuro entre
+ * `recruiting-intelligence/qualification-rules.ts` (puro) y los datos
+ * reales de Candidate/JobOrder. Solo EVALÚA -- nunca cambia
+ * Candidate.status ni crea ningún registro (la persistencia del estado
+ * de 4 valores QUALIFIED/POSSIBLY_QUALIFIED/NEEDS_REVIEW/NOT_QUALIFIED
+ * es F8.5, deliberadamente no implementada acá).
+ *
+ * Limitación conocida y documentada: `JobOrder` todavía no tiene
+ * columnas para experiencia mínima/idiomas requeridos (F8.1 los
+ * extrae de la instrucción de intake, pero no se persisten en el
+ * schema todavía) -- se evalúan como `null`/`[]` (sin requisito) hasta
+ * que exista esa columna, nunca se inventa un valor.
+ */
+export async function evaluateCandidateQualificationForJobOrder(
+  candidateId: string,
+  jobOrderId: string,
+): Promise<QualificationEvaluationResult> {
+  const [candidate, jobOrder] = await Promise.all([
+    scopedDb.candidate.findUnique({ where: { id: candidateId }, include: { categories: true, documents: { include: { documentType: true } } } }),
+    scopedDb.jobOrder.findUnique({ where: { id: jobOrderId } }),
+  ]);
+  if (!candidate) throw AppError.notFound("Candidate not found");
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  return evaluateCandidateQualification({
+    candidate: {
+      candidateId: candidate.id,
+      status: candidate.status,
+      categoryIds: candidate.categories.map((c) => c.id),
+      yearsExperience: candidate.yearsExperience,
+      languages: candidate.languages,
+      documents: candidate.documents.map((d) => ({
+        documentTypeKey: d.documentType.key,
+        status: d.status,
+        expirationDate: d.expirationDate,
+      })),
+    },
+    job: {
+      categoryId: jobOrder.categoryId,
+      requiredDocumentTypeKeys: (jobOrder.requirements as string[] | null) ?? [],
+      minYearsExperience: null,
+      requiredLanguages: [],
+    },
+  });
 }

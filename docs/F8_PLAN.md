@@ -95,3 +95,40 @@ Ninguna en esta subfase — se surfacea en F8.11 (Recruiting Mission UI), mismo 
 ## 7. Estado
 
 Continuando automáticamente con la implementación de F8.2.
+
+---
+
+## 8. Resultado de F8.2 — Job Requirements and Qualification Rules
+
+### 8.1 Arquitectura
+
+- **`recruiting-intelligence/qualification-rules.ts`** (puro) — `evaluateCandidateQualification()`: evalúa un `Candidate` (etapa de reclutamiento) contra los requisitos de un `JobOrder` -- distinto y ANTERIOR al motor de matching de F6 (`matching/scoring.ts`), que opera sobre `Worker` ya activos/operacionales. 3 disqualifiers duros: `candidate_status_ineligible` (REJECTED/INACTIVE, terminal por diseño del CRM), `category_mismatch`, `missing_required_document:<key>`/`document_expired:<key>` (documento requerido sin uno `VERIFIED` y vigente). 2 gaps blandos (nunca descalifican): `experienceGap`, `languageGaps`. Cero atributos protegidos en el contrato de entrada -- ver `qualification-rules.test.ts`, tests de fairness explícitos (mismo criterio que `matching/scoring.test.ts:373`, F6.4).
+- **`talent/service.ts` → `evaluateCandidateQualificationForJobOrder()`** (impuro) — carga `Candidate` (con `categories`/`documents.documentType`) y `JobOrder` reales, llama al módulo puro. **Nunca cambia `Candidate.status` ni crea nada** -- solo evalúa. Limitación documentada: `JobOrder` todavía no tiene columnas de experiencia mínima/idiomas requeridos (F8.1 los extrae del texto de intake, pero no se persisten en el schema) -- se evalúan como "sin requisito" hasta que exista esa columna, nunca se inventa un valor.
+- **`GET /candidates/:id/qualification/:jobOrderId`** (`candidates.view` + `jobOrders.view`, `requireAllPermissions`) — nuevo endpoint, solo lectura.
+
+### 8.2 Tests — 20 nuevos (todos passing)
+
+`qualification-rules.test.ts` (16): categoría coincide/no coincide; status REJECTED/INACTIVE siempre descalifica, NEW/SCREENING/QUALIFIED/PLACED nunca por sí solos; documento ausente vs. vencido vs. `PENDING_REVIEW`/`REJECTED` (ninguno de estos últimos cuenta como válido); experiencia insuficiente y no declarada son gap blando, nunca hard disqualifier; idiomas faltantes son gap blando; `reasons` siempre no vacío; determinismo; versión estable; **fairness**: el contrato de `QualificationCandidateInput` declara EXACTAMENTE 6 claves (ninguna protegida) y dos candidatos idénticos en lo relevante producen el mismo resultado exacto. `talent.test.ts` (+4): RBAC 403 sin `candidates.view`; documento faltante → `missing_required_document`, `Candidate.status` nunca cambia (verificado directo contra Prisma); documento `VERIFIED` vigente → sin disqualifiers de documento; categoría distinta → `category_mismatch`.
+
+### 8.3 Suite completa
+
+807 tests, 801 pass, 1 fail preexistente sin relación (`prospecting.test.ts`), 5 skip (4 gateados por real-provider-tests + 1 preexistente sin relación).
+
+### 8.4 UI
+
+Ninguna en esta subfase — igual que F8.1, se surfacea en F8.11 (Recruiting Mission UI).
+
+### 8.5 Migraciones
+
+Ninguna.
+
+### 8.6 Limitaciones conocidas
+
+- `JobOrder` no persiste experiencia mínima/idiomas requeridos todavía (ver 8.1) -- esos dos gaps quedan siempre `false`/`[]` hasta que se agregue esa columna, decisión conservadora documentada en vez de una migración apurada.
+- La persistencia del estado de 4 valores (QUALIFIED/POSSIBLY_QUALIFIED/NEEDS_REVIEW/NOT_QUALIFIED) es F8.5, deliberadamente no implementada acá.
+
+### 8.7 Commit
+
+`feat: F8.2 — job requirements and qualification rules`.
+
+**F8.2 completo.**

@@ -12,12 +12,17 @@ let baseUrl: string;
 const RECRUITER_HEADERS = { "x-dev-user": "recruiter@titan.dev", "content-type": "application/json" };
 const SALES_HEADERS = { "x-dev-user": "sales@titan.dev", "content-type": "application/json" };
 const CEO_HEADERS = { "x-dev-user": "ceo@titan.dev", "content-type": "application/json" };
+const OPERATIONS_HEADERS = { "x-dev-user": "operations@titan.dev", "content-type": "application/json" };
 
 // F5.2: registro real del seed de F0 — no se inventan IDs.
 const REAL_CATEGORY_ID = "category-general-labor";
+const REAL_FORKLIFT_CATEGORY_ID = "category-forklift-operator";
+const REAL_COMPANY_ID = "company-01";
 
 const createdCandidateIds: string[] = [];
 const createdWorkerIds: string[] = [];
+const createdJobOrderIds: string[] = [];
+const createdDocumentIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -30,13 +35,19 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2: limpieza — todo lo creado por esta suite queda claramente
+  // F5.2/F8.2: limpieza — todo lo creado por esta suite queda claramente
   // identificado (nombre/prefijo de test) y se borra al terminar.
+  if (createdDocumentIds.length > 0) {
+    await prisma.document.deleteMany({ where: { id: { in: createdDocumentIds } } });
+  }
   if (createdWorkerIds.length > 0) {
     await prisma.worker.deleteMany({ where: { id: { in: createdWorkerIds } } });
   }
   if (createdCandidateIds.length > 0) {
     await prisma.candidate.deleteMany({ where: { id: { in: createdCandidateIds } } });
+  }
+  if (createdJobOrderIds.length > 0) {
+    await prisma.jobOrder.deleteMany({ where: { id: { in: createdJobOrderIds } } });
   }
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -531,4 +542,76 @@ test("a repeated (duplicate) conversion attempt is also logged, without creating
     where: { entityType: "candidate", entityId: id, action: "candidate.converted_to_worker" },
   });
   assert.equal(realConversionAuditCount, 1, "only the first, real conversion writes candidate.converted_to_worker");
+});
+
+// ---------- F8.2: Job Requirements and Qualification Rules ----------
+
+async function createValidJobOrder(overrides: Record<string, unknown> = {}) {
+  const res = await fetch(`${baseUrl}/api/v1/job-orders`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({
+      companyId: REAL_COMPANY_ID,
+      categoryId: REAL_FORKLIFT_CATEGORY_ID,
+      title: "F8.2 test — Forklift Operator",
+      workersNeeded: 2,
+      billRate: 30,
+      payRate: 20,
+      startDate: new Date().toISOString(),
+      requirements: ["forklift_cert"],
+      ...overrides,
+    }),
+  });
+  const body = (await res.json()) as { id: string };
+  if (res.status === 201) createdJobOrderIds.push(body.id);
+  return body;
+}
+
+test("GET /candidates/:id/qualification/:jobOrderId as sales@titan.dev returns 403 (no candidates.view)", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, { headers: SALES_HEADERS });
+  assert.equal(res.status, 403);
+});
+
+test("candidato sin documento requerido -> missing_required_document, nunca cambia Candidate.status", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const result = (await res.json()) as { hardDisqualifiers: string[]; missingDocuments: string[] };
+  assert.ok(result.hardDisqualifiers.includes("missing_required_document:forklift_cert"));
+  assert.ok(result.missingDocuments.includes("forklift_cert"));
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } });
+  assert.equal(stillNew.status, "NEW", "evaluar calificación nunca debe cambiar Candidate.status");
+});
+
+test("candidato con documento requerido VERIFIED y vigente -> sin disqualifiers de documento", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const documentType = await prisma.documentType.findFirstOrThrow({ where: { key: "forklift_cert" } });
+  const document = await prisma.document.create({
+    data: {
+      tenantId: (await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } })).tenantId,
+      candidateId: candidate.id,
+      documentTypeId: documentType.id,
+      status: "VERIFIED",
+    },
+  });
+  createdDocumentIds.push(document.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const result = (await res.json()) as { hardDisqualifiers: string[] };
+  assert.ok(!result.hardDisqualifiers.some((d) => d.startsWith("missing_required_document") || d.startsWith("document_expired")));
+});
+
+test("candidato con categoria distinta a la del Job Order -> category_mismatch", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/qualification/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  const result = (await res.json()) as { hardDisqualifiers: string[] };
+  assert.ok(result.hardDisqualifiers.includes("category_mismatch"));
 });

@@ -102,3 +102,18 @@ talentRouter.get(
     }
   },
 );
+
+// F8.2: Job Requirements and Qualification Rules -- SOLO evalúa, nunca
+// cambia Candidate.status ni crea nada. Requiere ambos permisos porque
+// lee tanto Candidate como JobOrder.
+talentRouter.get(
+  "/candidates/:id/qualification/:jobOrderId",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.json(await talentService.evaluateCandidateQualificationForJobOrder(req.params.id!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
