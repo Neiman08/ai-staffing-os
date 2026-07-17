@@ -842,6 +842,7 @@ model Candidate {
   qualifications  CandidateQualification[]
   matches         CandidateMatch[]
   shortlistEntries CandidateShortlistEntry[]
+  screeningPlans  ScreeningPlan[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -914,6 +915,7 @@ model JobOrder {
   qualifications   CandidateQualification[]
   matches          CandidateMatch[]
   shortlistEntries CandidateShortlistEntry[]
+  screeningPlans   ScreeningPlan[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -1039,6 +1041,38 @@ model CandidateShortlistEntry {
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, rank])
+}
+
+// F8.8: Screening Intelligence -- plan de preguntas de screening
+// persistido para UN Candidate contra UN JobOrder. `questions` es Json
+// (arreglo heterogéneo id/question/rationale/expectedEvidence, mismo
+// criterio que `CandidateMatch.softPreferences`). NUNCA contiene
+// respuestas (el screening real no ocurre acá, solo se prepara el
+// plan) ni un veredicto de aprobación/rechazo -- eso es responsabilidad
+// humana. Un registro por par, upsert en cada regeneración, historial
+// vía AuditLog.
+model ScreeningPlan {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  candidateId         String
+  candidate           Candidate @relation(fields: [candidateId], references: [id])
+  jobOrderId          String
+  jobOrder            JobOrder  @relation(fields: [jobOrderId], references: [id])
+  questions           Json
+  allowedDisqualifiers String[] @default([])
+  manualReviewFlags   String[] @default([])
+  missingInformation  String[] @default([])
+  riskFlags           String[] @default([])
+  rulesVersion        Int
+  calculatedAt        DateTime
+  // F8.8: quién generó el plan -- del contexto de tenancy, nunca del
+  // body (mismo patrón que Candidate.createdById, F5.2).
+  generatedById       String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId])
 }
 
 model Project {

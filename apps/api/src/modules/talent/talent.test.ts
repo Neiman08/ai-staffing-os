@@ -35,12 +35,15 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2/F8.2/F8.5/F8.6/F8.7: limpieza — todo lo creado por esta suite
-  // queda claramente identificado (nombre/prefijo de test) y se borra al
-  // terminar. CandidateQualification/CandidateMatch/
-  // CandidateShortlistEntry tienen FKs ON DELETE RESTRICT hacia
-  // Candidate/JobOrder, así que deben borrarse primero.
+  // F5.2/F8.2/F8.5/F8.6/F8.7/F8.8: limpieza — todo lo creado por esta
+  // suite queda claramente identificado (nombre/prefijo de test) y se
+  // borra al terminar. CandidateQualification/CandidateMatch/
+  // CandidateShortlistEntry/ScreeningPlan tienen FKs ON DELETE RESTRICT
+  // hacia Candidate/JobOrder, así que deben borrarse primero.
   if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.screeningPlan.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
     await prisma.candidateShortlistEntry.deleteMany({
       where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
     });
@@ -1042,6 +1045,82 @@ test("shortlist generation and review-status changes write AuditLog entries", as
   });
   assert.ok(generatedAudit);
   assert.ok(statusAudit);
+});
+
+// ---------- F8.8: Screening Intelligence ----------
+
+test("POST /candidates/:id/screening-plan/:jobOrderId as sales@titan.dev returns 403 (no candidates.update)", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: SALES_HEADERS });
+  assert.equal(res.status, 403);
+});
+
+test("GET /candidates/:id/screening-plan/:jobOrderId returns 404 before any plan has been generated", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 404);
+});
+
+test("POST generates a real screening plan with baseline questions, real category name, and a document_readiness question when a required document is missing", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    questions: Array<{ id: string; question: string }>;
+    manualReviewFlags: string[];
+    missingInformation: string[];
+    allowedDisqualifiers: string[];
+  };
+
+  assert.ok(body.questions.some((q) => q.id === "availability_start_date"));
+  assert.ok(body.questions.some((q) => q.id === "document_readiness"));
+  assert.ok(body.questions.some((q) => q.question.includes("Forklift Operator")));
+  assert.ok(body.manualReviewFlags.length > 0, "missing forklift_cert must trigger NEEDS_REVIEW manual flag");
+  assert.ok(body.allowedDisqualifiers.includes("category_mismatch"));
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: candidate.id } });
+  assert.equal(stillNew.status, "NEW", "generating a screening plan must never change Candidate.status");
+});
+
+test("POST is idempotent: re-running upserts the same ScreeningPlan row instead of creating a second one", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const firstRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(firstRes.status, 201);
+  const secondRes = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(secondRes.status, 201);
+
+  const count = await prisma.screeningPlan.count({ where: { candidateId: candidate.id, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1);
+});
+
+test("GET returns the persisted plan without regenerating", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { candidateId: string; jobOrderId: string };
+  assert.equal(body.candidateId, candidate.id);
+  assert.equal(body.jobOrderId, jobOrder.id);
+});
+
+test("generating a screening plan writes an AuditLog entry", async () => {
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidate.id}/screening-plan/${jobOrder.id}`, { method: "POST", headers: RECRUITER_HEADERS });
+  const body = (await res.json()) as { id: string };
+
+  const auditEntry = await prisma.auditLog.findFirst({
+    where: { action: "candidate.screening_plan_generated", entityType: "screening_plan", entityId: body.id },
+  });
+  assert.ok(auditEntry);
 });
 
 // ---------- F8.3: Candidate Sourcing ----------

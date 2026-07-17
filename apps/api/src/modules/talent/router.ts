@@ -234,3 +234,32 @@ talentRouter.patch("/shortlist/:entryId/review-status", requirePermission("candi
     next(err);
   }
 });
+
+// F8.8: Screening Intelligence -- POST genera Y persiste (upsert) el
+// plan; requiere update porque escribe. GET solo lee, nunca regenera.
+// Nunca entrevista, nunca contacta al candidato.
+talentRouter.post(
+  "/candidates/:id/screening-plan/:jobOrderId",
+  requireAllPermissions(["candidates.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await talentService.generateAndPersistScreeningPlan(req.params.id!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+talentRouter.get(
+  "/candidates/:id/screening-plan/:jobOrderId",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      const record = await talentService.getScreeningPlan(req.params.id!, req.params.jobOrderId!);
+      if (!record) throw AppError.notFound("No persisted screening plan found for this candidate and job order");
+      res.json(record);
+    } catch (err) {
+      next(err);
+    }
+  },
+);

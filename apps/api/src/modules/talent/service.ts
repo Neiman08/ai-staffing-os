@@ -37,6 +37,7 @@ import {
   isValidShortlistTransition,
   type ShortlistReviewStatus,
 } from "../recruiting-intelligence/candidate-shortlist";
+import { buildScreeningPlan } from "../recruiting-intelligence/screening-plan";
 
 // ================= Candidates =================
 
@@ -1020,6 +1021,115 @@ export async function updateShortlistEntryReviewStatus(
   });
 
   return toShortlistEntryRecord(updated);
+}
+
+export interface ScreeningPlanRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  questions: unknown;
+  allowedDisqualifiers: string[];
+  manualReviewFlags: string[];
+  missingInformation: string[];
+  riskFlags: string[];
+  rulesVersion: number;
+  calculatedAt: string;
+  generatedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toScreeningPlanRecord(record: {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  questions: unknown;
+  allowedDisqualifiers: string[];
+  manualReviewFlags: string[];
+  missingInformation: string[];
+  riskFlags: string[];
+  rulesVersion: number;
+  calculatedAt: Date;
+  generatedById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): ScreeningPlanRecord {
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    questions: record.questions,
+    allowedDisqualifiers: record.allowedDisqualifiers,
+    manualReviewFlags: record.manualReviewFlags,
+    missingInformation: record.missingInformation,
+    riskFlags: record.riskFlags,
+    rulesVersion: record.rulesVersion,
+    calculatedAt: record.calculatedAt.toISOString(),
+    generatedById: record.generatedById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F8.8: Screening Intelligence -- wiring impuro entre
+ * `recruiting-intelligence/screening-plan.ts` (puro) y los datos reales
+ * del tenant. Reutiliza DIRECTAMENTE `runQualificationEvaluation`
+ * (F8.2/F8.5/F8.6, sin duplicar) y la categoría real del Job Order para
+ * el texto de las preguntas. Nunca entrevista, nunca contacta al
+ * candidato, nunca inventa respuestas ni aprueba/rechaza -- solo genera
+ * y persiste el PLAN. Upsert por (candidateId, jobOrderId), mismo
+ * workaround de `findFirst`-por-campos-planos ya documentado en F8.5.
+ */
+export async function generateAndPersistScreeningPlan(candidateId: string, jobOrderId: string): Promise<ScreeningPlanRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, include: { category: true } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const evaluation = await runQualificationEvaluation(candidateId, jobOrderId);
+  const derived = deriveQualificationStatus(evaluation);
+
+  const plan = buildScreeningPlan({
+    candidateId,
+    jobOrderId,
+    categoryName: jobOrder.category.name,
+    qualification: evaluation,
+    qualificationStatus: derived.status,
+  });
+
+  const existing = await scopedDb.screeningPlan.findFirst({ where: { candidateId, jobOrderId } });
+  const data = {
+    questions: plan.questions as never,
+    allowedDisqualifiers: plan.allowedDisqualifiers,
+    manualReviewFlags: plan.manualReviewFlags,
+    missingInformation: plan.missingInformation,
+    riskFlags: plan.riskFlags,
+    rulesVersion: plan.rulesVersion,
+    calculatedAt: new Date(plan.calculatedAt),
+    generatedById: ctx.userId,
+  };
+
+  const record = existing
+    ? await scopedDb.screeningPlan.update({ where: { id: existing.id }, data })
+    : await scopedDb.screeningPlan.create({ data: { tenantId: ctx.tenantId, candidateId, jobOrderId, ...data } });
+
+  await logAuditEvent({
+    action: "candidate.screening_plan_generated",
+    entityType: "screening_plan",
+    entityId: record.id,
+    after: { candidateId, jobOrderId, questionCount: (plan.questions as unknown[]).length, rulesVersion: plan.rulesVersion },
+  });
+
+  return toScreeningPlanRecord(record);
+}
+
+/** Lee el plan de screening YA persistido. Nunca regenera. */
+export async function getScreeningPlan(candidateId: string, jobOrderId: string): Promise<ScreeningPlanRecord | null> {
+  const record = await scopedDb.screeningPlan.findFirst({ where: { candidateId, jobOrderId } });
+  if (!record) return null;
+  return toScreeningPlanRecord(record);
 }
 
 /**

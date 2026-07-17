@@ -362,3 +362,49 @@ Ninguna en esta subfase -- se surfacea en F8.11.
 `feat: F8.7 — reviewable candidate shortlists`.
 
 **F8.7 completo.**
+
+## 14. Resultado de F8.8 — Screening Intelligence
+
+### 14.1 Arquitectura
+
+- **`recruiting-intelligence/screening-plan.ts`** (nuevo, puro): `buildScreeningPlan()` genera un plan de preguntas para UN candidato contra UN Job Order, reutilizando DIRECTAMENTE `QualificationEvaluationResult` (F8.2) y `PersistedQualificationStatus` (F8.5) -- nunca vuelve a evaluar documentos/categoría/experiencia. 3 preguntas base siempre presentes (disponibilidad, experiencia, cumplimiento operativo) + preguntas condicionales (`document_readiness` si hay documentos faltantes/vencidos, `experience_gap_probe` si `experienceGap`, `language_verification` si hay `languageGaps`). Cada pregunta incluye `rationale` y `expectedEvidence` explícitos -- nunca una pregunta sin justificación. `ALLOWED_DISQUALIFIERS` es una lista blanca FIJA de política (no derivada del candidato), explícitamente sin atributos protegidos.
+- **Nuevo modelo `ScreeningPlan`** (schema, aditivo, mismo patrón que `CandidateQualification`/`CandidateMatch`/`CandidateShortlistEntry`): un registro por par `(candidateId, jobOrderId)`, `questions` en `Json` (mismo criterio que `CandidateMatch.softPreferences`). Nunca contiene respuestas ni un veredicto -- el screening real y la decisión son responsabilidad humana.
+- **`talent/service.ts` → `generateAndPersistScreeningPlan()`** (impuro, nuevo): reutiliza `runQualificationEvaluation` (sin duplicar) + la categoría real del Job Order (`jobOrder.category.name`) para el texto de las preguntas. **`getScreeningPlan()`** (solo lectura, nunca regenera).
+- **`POST /candidates/:id/screening-plan/:jobOrderId`** (`candidates.update`+`jobOrders.view`, genera y persiste) y **`GET /candidates/:id/screening-plan/:jobOrderId`** (`candidates.view`+`jobOrders.view`, solo lectura, 404 si nunca se generó).
+
+### 14.2 Archivos modificados
+
+- Nuevo: `screening-plan.ts`, `screening-plan.test.ts`, migración `20260717150000_f8_8_screening_plan`.
+- Modificado: `schema.prisma` (modelo `ScreeningPlan` + back-relations), `core/tenancy/prisma-extension.ts` (+1 línea), `talent/service.ts`, `talent/router.ts`, `talent/talent.test.ts`.
+
+### 14.3 Contratos
+
+DTOs locales al service (mismo criterio que el resto de F8). `POST`/`GET` devuelven `ScreeningPlanRecord` (`id/candidateId/jobOrderId/questions/allowedDisqualifiers/manualReviewFlags/missingInformation/riskFlags/rulesVersion/calculatedAt/generatedById/createdAt/updatedAt`).
+
+### 14.4 UI
+
+Ninguna en esta subfase -- se surfacea en F8.11.
+
+### 14.5 Tests — 19 nuevos (todos passing)
+
+`screening-plan.test.ts` (13): las 3 preguntas base siempre presentes; cada pregunta condicional aparece según su gap correspondiente; toda pregunta tiene rationale/expectedEvidence no vacíos; manualReviewFlags refleja NEEDS_REVIEW/NOT_QUALIFIED únicamente; missingInformation/riskFlags reflejan los hechos de qualification sin re-derivarlos; `allowedDisqualifiers` es una lista fija idéntica sin importar el candidato; determinismo; **fairness explícita sobre el TEXTO generado** (no solo nombres de campo) recorriendo 7 combinaciones de gaps distintas contra una lista de 20+ términos prohibidos (raza/género/edad/religión/nacionalidad/discapacidad/embarazo/estado civil/antecedentes penales/estatus migratorio, en español e inglés); fairness de `allowedDisqualifiers`. `talent.test.ts` (+6): RBAC 403; 404 antes de generar; genera plan real con categoría real y pregunta de documento cuando falta uno requerido, nunca toca `Candidate.status`; idempotencia; GET lee sin regenerar; AuditLog escrito.
+
+### 14.6 Suite completa
+
+922 tests, 916 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 14.7 Migraciones
+
+`20260717150000_f8_8_screening_plan` -- 100% aditiva: 1 tabla nueva (`ScreeningPlan`) con 2 FKs (`ON DELETE RESTRICT`), 2 índices. Cero columnas nuevas en tablas existentes, cero enum nuevo.
+
+### 14.8 Limitaciones conocidas
+
+- Las preguntas son plantillas de texto fijo (con interpolación de categoría/documentos/idiomas) -- no hay generación por LLM, deliberado (determinismo y ausencia total de alucinación en preguntas de screening es más importante que variedad de redacción).
+- Igual que F8.5-F8.7, las FKs son `ON DELETE RESTRICT`.
+- No hay endpoint para registrar/persistir RESPUESTAS del candidato -- fuera de alcance explícito de esta subfase (el plan es solo preparación, nunca el screening real).
+
+### 14.9 Commit
+
+`feat: F8.8 — screening intelligence`.
+
+**F8.8 completo.**
