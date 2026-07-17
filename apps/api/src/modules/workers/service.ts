@@ -10,11 +10,18 @@ import type {
 } from "@ai-staffing-os/shared";
 import { isValidWorkerStatusTransition, WORKER_STATUS_TRANSITIONS } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
+import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
 import { createWorkerFromQualifiedCandidate } from "../talent/service";
+import {
+  evaluateOnboardingProgress,
+  isValidOnboardingTransition,
+  type OnboardingStatus,
+  type PlacementReadinessStatusLike,
+} from "../operations-intelligence/worker-onboarding";
 
 type WorkerRow = {
   id: string;
@@ -278,4 +285,207 @@ export async function updateWorkerStatus(id: string, input: UpdateWorkerStatusIn
   });
 
   return toListItem(updated);
+}
+
+// ================= F9.1: Worker Onboarding =================
+
+export interface WorkerOnboardingRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  workerId: string | null;
+  status: OnboardingStatus;
+  progress: number;
+  blockers: string[];
+  warnings: string[];
+  nextBestAction: string;
+  requiresApproval: true;
+  rulesVersion: number;
+  startedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toOnboardingRecord(record: {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  workerId: string | null;
+  status: string;
+  progress: number;
+  blockers: string[];
+  warnings: string[];
+  nextBestAction: string;
+  rulesVersion: number;
+  startedById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): WorkerOnboardingRecord {
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    workerId: record.workerId,
+    status: record.status as OnboardingStatus,
+    progress: record.progress,
+    blockers: record.blockers,
+    warnings: record.warnings,
+    nextBestAction: record.nextBestAction,
+    requiresApproval: true,
+    rulesVersion: record.rulesVersion,
+    startedById: record.startedById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Reevalúa progress/blockers/warnings/nextBestAction para el `status`
+ * dado -- reutiliza `PlacementReadiness.readinessStatus` (F8.10, NUNCA
+ * recalculado acá) y el `complianceStatus` del Worker si ya existe.
+ */
+async function computeOnboardingSignals(
+  candidateId: string,
+  jobOrderId: string,
+  status: OnboardingStatus,
+): Promise<ReturnType<typeof evaluateOnboardingProgress>> {
+  const [candidate, placementReadiness] = await Promise.all([
+    scopedDb.candidate.findUnique({ where: { id: candidateId }, include: { worker: true } }),
+    scopedDb.placementReadiness.findFirst({ where: { candidateId, jobOrderId }, select: { readinessStatus: true } }),
+  ]);
+  if (!candidate) throw AppError.notFound("Candidate not found");
+  if (!placementReadiness) {
+    throw AppError.badRequest("No Placement Readiness evaluation found for this candidate and job order -- run it first", {
+      candidateId,
+      jobOrderId,
+    });
+  }
+
+  return evaluateOnboardingProgress({
+    status,
+    placementReadinessStatus: placementReadiness.readinessStatus as PlacementReadinessStatusLike,
+    hasExistingWorker: !!candidate.worker,
+    workerComplianceStatus: candidate.worker?.complianceStatus ?? null,
+  });
+}
+
+/**
+ * F9.1: inicia el onboarding de un Candidate ya "autorizado" -- exige
+ * una `PlacementReadiness` YA evaluada (F8.10, consumida como señal,
+ * nunca recalculada) para el mismo par. Idempotente por
+ * (candidateId, jobOrderId): si ya existe un registro, lo devuelve tal
+ * cual sin crear un segundo ni reiniciar su progreso. `INVITED` es un
+ * estado interno/preview -- nunca se envía una invitación real (no hay
+ * integración de email/SMS en este proyecto). Si el Candidate ya tiene
+ * un Worker (conversión previa vía F5.2), se enlaza automáticamente
+ * -- nunca se crea uno nuevo acá.
+ */
+export async function startWorkerOnboarding(candidateId: string, jobOrderId: string): Promise<WorkerOnboardingRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.workerOnboarding.findFirst({ where: { candidateId, jobOrderId } });
+  if (existing) return toOnboardingRecord(existing);
+
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, select: { id: true } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const candidate = await scopedDb.candidate.findUnique({ where: { id: candidateId }, include: { worker: true } });
+  if (!candidate) throw AppError.notFound("Candidate not found");
+
+  const signals = await computeOnboardingSignals(candidateId, jobOrderId, "INVITED");
+
+  const record = await scopedDb.workerOnboarding.create({
+    data: {
+      tenantId: ctx.tenantId,
+      candidateId,
+      jobOrderId,
+      workerId: candidate.worker?.id ?? null,
+      status: "INVITED",
+      progress: signals.progress,
+      blockers: signals.blockers,
+      warnings: signals.warnings,
+      nextBestAction: signals.nextBestAction,
+      rulesVersion: signals.rulesVersion,
+      startedById: ctx.userId,
+    },
+  });
+
+  await logAuditEvent({
+    action: "worker.onboarding_started",
+    entityType: "worker_onboarding",
+    entityId: record.id,
+    after: { candidateId, jobOrderId, status: record.status },
+  });
+
+  return toOnboardingRecord(record);
+}
+
+/** Lee el onboarding YA persistido -- nunca lo inicia. */
+export async function getWorkerOnboarding(candidateId: string, jobOrderId: string): Promise<WorkerOnboardingRecord | null> {
+  const record = await scopedDb.workerOnboarding.findFirst({ where: { candidateId, jobOrderId } });
+  if (!record) return null;
+  return toOnboardingRecord(record);
+}
+
+/**
+ * Único camino para cambiar `status`. Valida la transición
+ * (`isValidOnboardingTransition`) y, específicamente, RECHAZA moverse a
+ * `ACTIVE` si todavía no existe un Worker -- nunca lo crea/activa acá,
+ * eso sigue siendo responsabilidad exclusiva del flujo ya existente
+ * `convertCandidateToWorker`/`createWorker` (F5.2/F5.3).
+ */
+export async function updateWorkerOnboardingStatus(
+  candidateId: string,
+  jobOrderId: string,
+  status: OnboardingStatus,
+): Promise<WorkerOnboardingRecord> {
+  const existing = await scopedDb.workerOnboarding.findFirst({ where: { candidateId, jobOrderId } });
+  if (!existing) throw AppError.notFound("Worker onboarding not found");
+
+  const currentStatus = existing.status as OnboardingStatus;
+  if (!isValidOnboardingTransition(currentStatus, status)) {
+    throw AppError.badRequest(`Invalid onboarding status transition: ${currentStatus} -> ${status}`);
+  }
+
+  // Re-vincula workerId por si se convirtió el Candidate en Worker
+  // DESPUÉS de iniciar el onboarding (F5.2, flujo separado) -- nunca lo
+  // crea acá, solo lee la relación ya existente. Se resuelve ANTES del
+  // guard de ACTIVE para no depender del valor ya persistido (que puede
+  // seguir en null si la conversión ocurrió después del último cambio
+  // de estado registrado).
+  const candidate = await scopedDb.candidate.findUnique({ where: { id: candidateId }, include: { worker: true } });
+  const workerId = candidate?.worker?.id ?? existing.workerId;
+
+  if (status === "ACTIVE" && !workerId) {
+    throw AppError.badRequest(
+      "Cannot activate onboarding: no Worker exists yet for this Candidate -- convert the Candidate to a Worker first",
+      { candidateId },
+    );
+  }
+
+  const signals = await computeOnboardingSignals(candidateId, jobOrderId, status);
+
+  const updated = await scopedDb.workerOnboarding.update({
+    where: { id: existing.id },
+    data: {
+      status,
+      workerId,
+      progress: signals.progress,
+      blockers: signals.blockers,
+      warnings: signals.warnings,
+      nextBestAction: signals.nextBestAction,
+      rulesVersion: signals.rulesVersion,
+    },
+  });
+
+  await logAuditEvent({
+    action: "worker.onboarding_status_changed",
+    entityType: "worker_onboarding",
+    entityId: existing.id,
+    before: { status: currentStatus },
+    after: { status },
+  });
+
+  return toOnboardingRecord(updated);
 }

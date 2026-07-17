@@ -845,6 +845,7 @@ model Candidate {
   screeningPlans  ScreeningPlan[]
   interviewPreviews InterviewPreview[]
   placementReadiness PlacementReadiness[]
+  onboardings      WorkerOnboarding[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -874,6 +875,7 @@ model Worker {
   assignments      Assignment[]
   payrollItems     PayrollItem[]
   alerts           ComplianceAlert[]
+  onboardings      WorkerOnboarding[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -920,6 +922,7 @@ model JobOrder {
   screeningPlans   ScreeningPlan[]
   interviewPreviews InterviewPreview[]
   placementReadiness PlacementReadiness[]
+  onboardings      WorkerOnboarding[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -1180,6 +1183,53 @@ model PlacementReadiness {
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, readinessStatus])
+}
+
+// F9.1: lifecycle explícito del proceso de onboarding de un Candidate
+// hacia convertirse en Worker operativo -- distinto de `Worker.status`
+// (disponibilidad operativa) y `Worker.complianceStatus` (cumplimiento).
+// `OFFBOARDED` es terminal (una desvinculación real no se reabre con el
+// mismo registro); `BLOCKED` siempre puede reabrirse a `IN_PROGRESS`.
+enum OnboardingStatus {
+  INVITED
+  IN_PROGRESS
+  DOCUMENTS_PENDING
+  COMPLIANCE_REVIEW
+  READY
+  ACTIVE
+  BLOCKED
+  OFFBOARDED
+}
+
+// F9.1: Worker Onboarding -- un registro por par (candidateId,
+// jobOrderId), mismo patrón de upsert que el resto de F8. `workerId` es
+// nullable hasta que el Candidate se convierte en Worker vía el flujo
+// YA EXISTENTE `convertCandidateToWorker` (F5.2) -- este modelo nunca
+// crea ni activa un Worker por sí mismo. `INVITED` es un estado
+// interno/preview, nunca implica una invitación real enviada.
+model WorkerOnboarding {
+  id             String           @id @default(cuid())
+  tenantId       String
+  candidateId    String
+  candidate      Candidate        @relation(fields: [candidateId], references: [id])
+  jobOrderId     String
+  jobOrder       JobOrder         @relation(fields: [jobOrderId], references: [id])
+  workerId       String?
+  worker         Worker?          @relation(fields: [workerId], references: [id])
+  status         OnboardingStatus @default(INVITED)
+  progress       Int
+  blockers       String[]         @default([])
+  warnings       String[]         @default([])
+  nextBestAction String
+  rulesVersion   Int
+  // F9.1: quién inició el onboarding -- del contexto de tenancy, nunca
+  // del body (mismo patrón que Candidate.createdById, F5.2).
+  startedById    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId, status])
 }
 
 model Project {

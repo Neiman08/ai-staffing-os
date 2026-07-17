@@ -6,6 +6,7 @@ import {
   workerQuerySchema,
 } from "@ai-staffing-os/shared";
 import { requireAllPermissions, requirePermission } from "../../core/rbac/require-permission";
+import { AppError } from "../../core/errors";
 import * as workersService from "./service";
 
 // F5.3: CRUD completo aprobado (docs/F5_STAFFING_OPERATIONS_PLAN.md §5).
@@ -72,3 +73,69 @@ workersRouter.patch("/workers/:id/status", requirePermission("workers.update"), 
     next(err);
   }
 });
+
+// F9.1: Worker Onboarding -- POST inicia (idempotente) el onboarding de
+// un Candidate ya evaluado por Placement Readiness (F8.10, exigida como
+// prerequisito, nunca recalculada acá); requiere workers.update (no
+// workers.create -- iniciar onboarding nunca crea un Worker por sí
+// mismo, ver worker-onboarding.ts). GET solo lee. PATCH es el único
+// camino para cambiar el estado -- ACTIVE se rechaza sin un Worker ya
+// existente.
+workersRouter.post(
+  "/candidates/:candidateId/onboarding/:jobOrderId",
+  requireAllPermissions(["workers.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await workersService.startWorkerOnboarding(req.params.candidateId!, req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+workersRouter.get(
+  "/candidates/:candidateId/onboarding/:jobOrderId",
+  requireAllPermissions(["workers.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      const record = await workersService.getWorkerOnboarding(req.params.candidateId!, req.params.jobOrderId!);
+      if (!record) throw AppError.notFound("No onboarding found for this candidate and job order");
+      res.json(record);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const ONBOARDING_STATUSES = new Set([
+  "INVITED",
+  "IN_PROGRESS",
+  "DOCUMENTS_PENDING",
+  "COMPLIANCE_REVIEW",
+  "READY",
+  "ACTIVE",
+  "BLOCKED",
+  "OFFBOARDED",
+]);
+
+workersRouter.patch(
+  "/candidates/:candidateId/onboarding/:jobOrderId/status",
+  requireAllPermissions(["workers.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      const { status } = req.body as { status?: unknown };
+      if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status)) {
+        throw AppError.badRequest("Invalid onboarding status", { allowed: [...ONBOARDING_STATUSES] });
+      }
+      res.json(
+        await workersService.updateWorkerOnboardingStatus(
+          req.params.candidateId!,
+          req.params.jobOrderId!,
+          status as never,
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);

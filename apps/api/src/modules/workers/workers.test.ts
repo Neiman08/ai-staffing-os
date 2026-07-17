@@ -15,9 +15,12 @@ const OPERATIONS_HEADERS = { "x-dev-user": "operations@titan.dev", "content-type
 const SALES_HEADERS = { "x-dev-user": "sales@titan.dev", "content-type": "application/json" };
 
 const REAL_CATEGORY_ID = "category-general-labor";
+const REAL_FORKLIFT_CATEGORY_ID = "category-forklift-operator";
+const REAL_COMPANY_ID = "company-01";
 
 const createdCandidateIds: string[] = [];
 const createdWorkerIds: string[] = [];
+const createdJobOrderIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -30,14 +33,58 @@ before(async () => {
 });
 
 after(async () => {
+  // F9.1: WorkerOnboarding tiene FKs ON DELETE RESTRICT hacia Candidate/
+  // JobOrder, así que debe borrarse primero (mismo patrón que
+  // CandidateQualification en F8.5).
+  if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.workerOnboarding.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
+    await prisma.placementReadiness.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
+  }
   if (createdWorkerIds.length > 0) {
     await prisma.worker.deleteMany({ where: { id: { in: createdWorkerIds } } });
   }
   if (createdCandidateIds.length > 0) {
     await prisma.candidate.deleteMany({ where: { id: { in: createdCandidateIds } } });
   }
+  if (createdJobOrderIds.length > 0) {
+    await prisma.jobOrder.deleteMany({ where: { id: { in: createdJobOrderIds } } });
+  }
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
+
+async function createValidJobOrder(overrides: Record<string, unknown> = {}) {
+  const res = await fetch(`${baseUrl}/api/v1/job-orders`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({
+      companyId: REAL_COMPANY_ID,
+      categoryId: REAL_FORKLIFT_CATEGORY_ID,
+      title: "F9.1 test — Forklift Operator",
+      workersNeeded: 2,
+      billRate: 30,
+      payRate: 20,
+      startDate: new Date().toISOString(),
+      requirements: ["forklift_cert"],
+      ...overrides,
+    }),
+  });
+  const body = (await res.json()) as { id: string };
+  if (res.status === 201) createdJobOrderIds.push(body.id);
+  return body;
+}
+
+/** F9.1: onboarding exige una PlacementReadiness YA evaluada -- se genera vía el endpoint real de F8.10, nunca un fixture inventado. */
+async function ensurePlacementReadiness(candidateId: string, jobOrderId: string) {
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/placement-readiness/${jobOrderId}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  return (await res.json()) as { readinessStatus: string };
+}
 
 // F5.3: crea un Candidate real y lo mueve hasta QUALIFIED, listo para
 // convertir — mismo fixture pattern que talent.test.ts.
@@ -453,4 +500,212 @@ test("editing a Worker writes Activity + AuditLog with before/after", async () =
   assert.ok(audit);
   assert.equal((audit?.before as { defaultPayRate: string }).defaultPayRate, "20");
   assert.equal((audit?.after as { defaultPayRate: string }).defaultPayRate, "35");
+});
+
+// ---------- F9.1: Worker Onboarding ----------
+
+test("POST /candidates/:candidateId/onboarding/:jobOrderId as sales@titan.dev returns 403 (no workers.update)", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST returns 400 when no Placement Readiness was evaluated yet (enforces pipeline order)", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST starts a real onboarding at INVITED, consumes Placement Readiness as a signal, never changes Candidate.status", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { status: string; progress: number; workerId: string | null; requiresApproval: boolean };
+  assert.equal(body.status, "INVITED");
+  assert.equal(body.progress, 10);
+  assert.equal(body.workerId, null, "candidate has no Worker yet -- must never be auto-created");
+  assert.equal(body.requiresApproval, true);
+
+  const candidate = await prisma.candidate.findUniqueOrThrow({ where: { id: candidateId } });
+  assert.equal(candidate.status, "QUALIFIED", "starting onboarding must never change Candidate.status");
+});
+
+test("POST is idempotent: re-running returns the same onboarding record, never creates a second one", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+
+  const first = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const firstBody = (await first.json()) as { id: string };
+  const second = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const secondBody = (await second.json()) as { id: string };
+  assert.equal(firstBody.id, secondBody.id);
+
+  const count = await prisma.workerOnboarding.count({ where: { candidateId, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1);
+});
+
+test("GET returns 404 before onboarding started, 200 with real data after", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+
+  const notYet = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { headers: OPERATIONS_HEADERS });
+  assert.equal(notYet.status, 404);
+
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { method: "POST", headers: OPERATIONS_HEADERS });
+
+  const afterRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { headers: OPERATIONS_HEADERS });
+  assert.equal(afterRes.status, 200);
+});
+
+test("PATCH status: full path INVITED -> IN_PROGRESS -> DOCUMENTS_PENDING -> COMPLIANCE_REVIEW -> READY succeeds; skipping a stage is rejected with 400", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { method: "POST", headers: OPERATIONS_HEADERS });
+
+  for (const status of ["IN_PROGRESS", "DOCUMENTS_PENDING", "COMPLIANCE_REVIEW"]) {
+    const res = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+    assert.equal(res.status, 200, `expected 200 moving to ${status}`);
+  }
+
+  const skipRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "ACTIVE" }),
+  });
+  assert.equal(skipRes.status, 400, "COMPLIANCE_REVIEW -> ACTIVE skips READY, must be rejected");
+});
+
+test("PATCH status: moving to ACTIVE without an existing Worker is rejected with 400 -- never auto-creates or auto-activates a Worker", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { method: "POST", headers: OPERATIONS_HEADERS });
+
+  for (const status of ["IN_PROGRESS", "DOCUMENTS_PENDING", "COMPLIANCE_REVIEW", "READY"]) {
+    await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  const activateRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "ACTIVE" }),
+  });
+  assert.equal(activateRes.status, 400);
+
+  const worker = await prisma.worker.findUnique({ where: { candidateId } });
+  assert.equal(worker, null, "no Worker must ever be created as a side effect of onboarding status changes");
+});
+
+test("PATCH status: ACTIVE succeeds once a real Worker exists (converted via the existing, separate F5.2 flow), and workerId gets linked", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { method: "POST", headers: OPERATIONS_HEADERS });
+
+  for (const status of ["IN_PROGRESS", "DOCUMENTS_PENDING", "COMPLIANCE_REVIEW", "READY"]) {
+    await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  // Conversión real vía el endpoint YA EXISTENTE de F5.2 -- nunca duplicado acá.
+  const convertRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/convert-to-worker`, {
+    method: "POST",
+    headers: CEO_HEADERS,
+    body: JSON.stringify({ employmentType: "W2", defaultPayRate: 20 }),
+  });
+  const convertBody = (await convertRes.json()) as { worker: { id: string } };
+  createdWorkerIds.push(convertBody.worker.id);
+
+  const activateRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "ACTIVE" }),
+  });
+  assert.equal(activateRes.status, 200);
+  const body = (await activateRes.json()) as { status: string; workerId: string | null; progress: number };
+  assert.equal(body.status, "ACTIVE");
+  assert.equal(body.workerId, convertBody.worker.id);
+  assert.equal(body.progress, 100);
+});
+
+test("PATCH status: BLOCKED is reachable and reversible to IN_PROGRESS -- never a permanent rejection", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, { method: "POST", headers: OPERATIONS_HEADERS });
+
+  const blockRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "BLOCKED" }),
+  });
+  assert.equal(blockRes.status, 200);
+
+  const reopenRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "IN_PROGRESS" }),
+  });
+  assert.equal(reopenRes.status, 200);
+});
+
+test("starting onboarding and changing its status write AuditLog entries", async () => {
+  const candidateId = await createQualifiedCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const jobOrder = await createValidJobOrder();
+  await ensurePlacementReadiness(candidateId, jobOrder.id);
+
+  const startRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const startBody = (await startRes.json()) as { id: string };
+
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/onboarding/${jobOrder.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "IN_PROGRESS" }),
+  });
+
+  const startedAudit = await prisma.auditLog.findFirst({
+    where: { action: "worker.onboarding_started", entityType: "worker_onboarding", entityId: startBody.id },
+  });
+  const statusAudit = await prisma.auditLog.findFirst({
+    where: { action: "worker.onboarding_status_changed", entityType: "worker_onboarding", entityId: startBody.id },
+  });
+  assert.ok(startedAudit);
+  assert.ok(statusAudit);
 });
