@@ -32,6 +32,11 @@ import {
   normalizeCandidatePhone as normalizePhone,
   buildCandidateIdentityKeys,
 } from "../recruiting-intelligence/candidate-identity";
+import {
+  buildShortlistEntries,
+  isValidShortlistTransition,
+  type ShortlistReviewStatus,
+} from "../recruiting-intelligence/candidate-shortlist";
 
 // ================= Candidates =================
 
@@ -852,6 +857,169 @@ export async function getPersistedCandidateMatching(jobOrderId: string): Promise
   const calculatedAt = mapped.reduce((latest, r) => (r.calculatedAt > latest ? r.calculatedAt : latest), mapped[0]!.calculatedAt);
 
   return { jobOrderId, ranked, excluded, rulesVersion, calculatedAt };
+}
+
+export interface ShortlistEntryRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  rank: number;
+  score: number;
+  normalizedScore: number;
+  qualificationStatus: PersistedQualificationStatus;
+  confidence: MatchConfidence;
+  reasons: string[];
+  gaps: string[];
+  risks: string[];
+  reviewStatus: ShortlistReviewStatus;
+  addedById: string | null;
+  addedAt: string;
+  updatedAt: string;
+}
+
+function toShortlistEntryRecord(record: {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  rank: number;
+  score: number;
+  normalizedScore: number;
+  qualificationStatus: string;
+  confidence: string;
+  reasons: string[];
+  gaps: string[];
+  risks: string[];
+  reviewStatus: string;
+  addedById: string | null;
+  addedAt: Date;
+  updatedAt: Date;
+}): ShortlistEntryRecord {
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    rank: record.rank,
+    score: record.score,
+    normalizedScore: record.normalizedScore,
+    qualificationStatus: record.qualificationStatus as PersistedQualificationStatus,
+    confidence: record.confidence as MatchConfidence,
+    reasons: record.reasons,
+    gaps: record.gaps,
+    risks: record.risks,
+    reviewStatus: record.reviewStatus as ShortlistReviewStatus,
+    addedById: record.addedById,
+    addedAt: record.addedAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F8.7: Candidate Shortlist -- wiring impuro entre
+ * `recruiting-intelligence/candidate-shortlist.ts` (puro) y el ranking
+ * YA persistido por F8.6 (nunca recalcula matching acá -- si no hay una
+ * corrida de matching, `getPersistedCandidateMatching` ya lanza 404,
+ * forzando el orden correcto del pipeline). Regenerar la shortlist
+ * actualiza el snapshot (rank/score/qualificationStatus/confidence/
+ * reasons/gaps/risks) de entradas YA existentes pero NUNCA toca su
+ * `reviewStatus` -- una decisión humana ya tomada (APPROVED/HOLD/
+ * REMOVED) nunca se revierte automáticamente al refrescar.
+ */
+export async function generateShortlistForJobOrder(jobOrderId: string): Promise<ShortlistEntryRecord[]> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const matching = await getPersistedCandidateMatching(jobOrderId);
+  const drafts = buildShortlistEntries(
+    matching.ranked.map((r) => ({
+      candidateId: r.candidateId,
+      rank: r.rank!,
+      score: r.score,
+      normalizedScore: r.normalizedScore,
+      qualificationStatus: r.qualificationStatus,
+      confidence: r.confidence,
+      explanation: r.explanation,
+      risks: r.risks,
+      missingData: r.missingData,
+    })),
+  );
+
+  const records: ShortlistEntryRecord[] = [];
+  for (const draft of drafts) {
+    const existing = await scopedDb.candidateShortlistEntry.findFirst({
+      where: { candidateId: draft.candidateId, jobOrderId },
+    });
+
+    const snapshot = {
+      rank: draft.rank,
+      score: draft.score,
+      normalizedScore: draft.normalizedScore,
+      qualificationStatus: draft.qualificationStatus,
+      confidence: draft.confidence,
+      reasons: draft.reasons,
+      gaps: draft.gaps,
+      risks: draft.risks,
+    };
+
+    const record = existing
+      ? await scopedDb.candidateShortlistEntry.update({ where: { id: existing.id }, data: snapshot })
+      : await scopedDb.candidateShortlistEntry.create({
+          data: { tenantId: ctx.tenantId, candidateId: draft.candidateId, jobOrderId, addedById: ctx.userId, ...snapshot },
+        });
+    records.push(toShortlistEntryRecord(record));
+  }
+
+  await logAuditEvent({
+    action: "candidate.shortlist_generated",
+    entityType: "job_order_shortlist",
+    entityId: jobOrderId,
+    after: { jobOrderId, entryCount: records.length },
+  });
+
+  return records.sort((a, b) => a.rank - b.rank);
+}
+
+/** Lee la shortlist YA persistida, ordenada por rank. Nunca regenera. */
+export async function getShortlistForJobOrder(jobOrderId: string): Promise<ShortlistEntryRecord[]> {
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, select: { id: true } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const records = await scopedDb.candidateShortlistEntry.findMany({ where: { jobOrderId }, orderBy: { rank: "asc" } });
+  return records.map(toShortlistEntryRecord);
+}
+
+/**
+ * Único camino para cambiar `reviewStatus` -- valida la transición
+ * (`isValidShortlistTransition`, F8.7) antes de escribir. `id` es la PK
+ * simple de la tabla, no una clave compuesta -- `findUnique`/`update`
+ * funcionan normalmente acá (a diferencia de `findFirst`-por-campos-
+ * planos que usan las búsquedas por (candidateId, jobOrderId)).
+ */
+export async function updateShortlistEntryReviewStatus(
+  entryId: string,
+  reviewStatus: ShortlistReviewStatus,
+): Promise<ShortlistEntryRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.candidateShortlistEntry.findUnique({ where: { id: entryId } });
+  if (!existing) throw AppError.notFound("Shortlist entry not found");
+
+  const currentStatus = existing.reviewStatus as ShortlistReviewStatus;
+  if (!isValidShortlistTransition(currentStatus, reviewStatus)) {
+    throw AppError.badRequest(`Invalid shortlist review status transition: ${currentStatus} -> ${reviewStatus}`);
+  }
+
+  const updated = await scopedDb.candidateShortlistEntry.update({ where: { id: entryId }, data: { reviewStatus } });
+
+  await logAuditEvent({
+    action: "candidate.shortlist_review_status_changed",
+    entityType: "candidate_shortlist_entry",
+    entityId: entryId,
+    before: { reviewStatus: currentStatus },
+    after: { reviewStatus },
+  });
+
+  return toShortlistEntryRecord(updated);
 }
 
 /**

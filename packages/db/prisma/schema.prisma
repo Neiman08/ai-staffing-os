@@ -841,6 +841,7 @@ model Candidate {
   worker          Worker?
   qualifications  CandidateQualification[]
   matches         CandidateMatch[]
+  shortlistEntries CandidateShortlistEntry[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -912,6 +913,7 @@ model JobOrder {
   pricingScenarios PricingScenario[]
   qualifications   CandidateQualification[]
   matches          CandidateMatch[]
+  shortlistEntries CandidateShortlistEntry[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -988,6 +990,52 @@ model CandidateMatch {
   calculatedAt        DateTime
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId, rank])
+}
+
+// F8.7: estado de revisión de una entrada de shortlist -- `REMOVED`
+// nunca es un rechazo definitivo (ver comentario del modelo), siempre
+// puede reabrirse a `DRAFT`.
+enum ShortlistReviewStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  APPROVED
+  HOLD
+  REMOVED
+}
+
+// F8.7: Candidate Shortlist -- lista revisable de candidatos para UN
+// JobOrder, construida a partir del ranking YA calculado por F8.6
+// (`CandidateMatch`). Un registro por par (candidateId, jobOrderId),
+// mismo patrón de upsert que CandidateQualification/CandidateMatch.
+// `rank/score/qualificationStatus/confidence/reasons/gaps/risks` son un
+// SNAPSHOT del momento en que se generó/actualizó la shortlist (no un
+// join en vivo) -- se refresca explícitamente al regenerar, nunca
+// automáticamente. Nunca contacta a nadie, nunca cambia
+// `Candidate.status`; `REMOVED` es reversible, no un rechazo permanente.
+model CandidateShortlistEntry {
+  id                  String                @id @default(cuid())
+  tenantId            String
+  candidateId         String
+  candidate           Candidate             @relation(fields: [candidateId], references: [id])
+  jobOrderId          String
+  jobOrder            JobOrder              @relation(fields: [jobOrderId], references: [id])
+  rank                Int
+  score               Float
+  normalizedScore     Float
+  qualificationStatus QualificationStatus
+  confidence          MatchConfidence
+  reasons             String[]              @default([])
+  gaps                String[]              @default([])
+  risks               String[]              @default([])
+  reviewStatus        ShortlistReviewStatus @default(DRAFT)
+  // F8.7: quién generó/agregó la entrada -- del contexto de tenancy,
+  // nunca del body (mismo patrón que Candidate.createdById, F5.2).
+  addedById           String?
+  addedAt             DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, rank])

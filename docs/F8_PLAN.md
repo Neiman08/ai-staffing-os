@@ -313,3 +313,52 @@ Ninguna en esta subfase -- se surfacea en F8.11.
 `feat: F8.6 — candidate matching and ranking`.
 
 **F8.6 completo.**
+
+## 13. Resultado de F8.7 — Candidate Shortlist
+
+### 13.1 Arquitectura
+
+- **`recruiting-intelligence/candidate-shortlist.ts`** (nuevo, puro): `buildShortlistEntries()` mapea el ranking YA calculado por F8.6 (solo `ranked`, nunca `excluded`/NOT_QUALIFIED) a drafts de shortlist, siempre arrancando en `DRAFT`. `SHORTLIST_REVIEW_TRANSITIONS` (grafo explícito, mismo criterio que `CANDIDATE_STATUS_TRANSITIONS` de F5.2) + `isValidShortlistTransition()` + `isShortlistReviewStatus()` (type guard de runtime para validar el body de un request). `REMOVED` SIEMPRE puede reabrirse a `DRAFT` -- nunca un rechazo permanente, cumpliendo la restricción explícita de esta subfase.
+- **Nuevo modelo `CandidateShortlistEntry`** (schema, aditivo, mismo patrón que `CandidateQualification`/`CandidateMatch`): un registro por par `(candidateId, jobOrderId)`. Los campos `rank/score/qualificationStatus/confidence/reasons/gaps/risks` son un SNAPSHOT del momento de generación/regeneración -- nunca un join en vivo contra `CandidateMatch`.
+- **`talent/service.ts` → `generateShortlistForJobOrder()`** (impuro, nuevo): reutiliza `getPersistedCandidateMatching` (F8.6, sin duplicar) -- si nunca se corrió matching para el Job Order, esto ya lanza 404, forzando el orden correcto del pipeline (matching antes de shortlist). Al regenerar, actualiza el snapshot de entradas ya existentes pero **nunca toca `reviewStatus`** -- una decisión humana ya tomada nunca se revierte automáticamente (verificado con test de integración real). **`getShortlistForJobOrder()`** (solo lectura) y **`updateShortlistEntryReviewStatus()`** (único camino para cambiar el estado, valida la transición antes de escribir).
+- **`POST /job-orders/:jobOrderId/shortlist`** (genera/refresca, `candidates.update`+`jobOrders.view`), **`GET /job-orders/:jobOrderId/shortlist`** (solo lectura, `candidates.view`+`jobOrders.view`), **`PATCH /shortlist/:entryId/review-status`** (`candidates.update`, valida transición, 400 si es inválida o el valor no es uno de los 5 estados reales).
+- **Reordenamiento**: no se implementó un reorder manual (drag-and-drop) separado -- el orden ya es determinista de origen (F8.6) y regenerar la shortlist resincroniza `rank` desde el ranking más reciente. Decisión conservadora: agregar reorder manual habría requerido decidir qué pasa cuando un humano reordena mid-review sin invalidar el ranking subyacente, sin alcance claro en la instrucción; se documenta como deuda técnica, no como bloqueo.
+
+### 13.2 Archivos modificados
+
+- Nuevo: `candidate-shortlist.ts`, `candidate-shortlist.test.ts`, migración `20260717140000_f8_7_candidate_shortlist`.
+- Modificado: `schema.prisma` (enum `ShortlistReviewStatus` + modelo `CandidateShortlistEntry` + back-relations), `core/tenancy/prisma-extension.ts` (+1 línea), `talent/service.ts`, `talent/router.ts`, `talent/talent.test.ts`.
+
+### 13.3 Contratos
+
+DTOs locales al service (mismo criterio que el resto de F8). `POST`/`GET` devuelven un arreglo de `ShortlistEntryRecord` (`id/candidateId/jobOrderId/rank/score/normalizedScore/qualificationStatus/confidence/reasons/gaps/risks/reviewStatus/addedById/addedAt/updatedAt`). `PATCH` recibe `{ reviewStatus }` en el body, devuelve la entrada actualizada.
+
+### 13.4 UI
+
+Ninguna en esta subfase -- se surfacea en F8.11.
+
+### 13.5 Tests — 24 nuevos (todos passing)
+
+`candidate-shortlist.test.ts` (14): mapeo 1:1 desde el ranking siempre arrancando en DRAFT; preserva rank/score/qualificationStatus/confidence; mapea risks/missingData/explanation a risks/gaps/reasons; orden preservado; lista vacía; transiciones válidas/inválidas (idempotencia, REMOVED reabre a DRAFT pero nunca salta directo a APPROVED, DRAFT nunca salta directo a APPROVED, todo estado puede llegar a REMOVED); type guard de reviewStatus. `talent.test.ts` (+10): RBAC 403; 404 si no se corrió matching antes (orden del pipeline); genera shortlist excluyendo NOT_QUALIFIED, nunca toca `Candidate.status`; idempotencia + preserva un reviewStatus ya establecido manualmente al regenerar (bug real encontrado y corregido durante la implementación, ver más abajo); transición inválida rechazada con 400; REMOVED reabre a DRAFT; reviewStatus inválido rechazado con 400; GET ordenado por rank; AuditLog en generación y en cambio de reviewStatus.
+
+**Hallazgo real durante la implementación (bug de test, no de producción)**: el primer test de idempotencia asumía que la entrada `[0]` de la shortlist correspondía siempre al candidato recién creado por el test -- falso, porque el tenant de test ya tiene múltiples candidatos reales de la categoría forklift-operator desde el seed de F0, así que la shortlist de cualquier Job Order de esa categoría tiene más de una entrada. Diagnosticado con un script de reproducción aislado (llamando directamente a las funciones del service, sin HTTP) que confirmó que el código de producción preserva `reviewStatus` correctamente; el test se corrigió para ubicar la entrada por `candidateId` exacto en vez de asumir la primera posición del arreglo.
+
+### 13.6 Suite completa
+
+903 tests, 897 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 13.7 Migraciones
+
+`20260717140000_f8_7_candidate_shortlist` -- 100% aditiva: 1 enum nuevo (`ShortlistReviewStatus`), 1 tabla nueva (`CandidateShortlistEntry`) con 2 FKs (`ON DELETE RESTRICT`), 1 índice compuesto, 1 índice único compuesto. Cero columnas nuevas en tablas existentes.
+
+### 13.8 Limitaciones conocidas
+
+- Sin reorder manual independiente del ranking (ver §13.1) -- deuda técnica documentada, no bloqueo.
+- Igual que F8.5/F8.6, las FKs son `ON DELETE RESTRICT` -- requiere borrar la shortlist antes que el Candidate/JobOrder.
+- Regenerar la shortlist nunca elimina una entrada cuyo candidato dejó de estar en `ranked` (p.ej. si una recalificación posterior lo vuelve NOT_QUALIFIED) -- la entrada existente queda intacta con su snapshot antiguo hasta que un humano la mueva a `REMOVED`; decisión conservadora (nunca borrar trabajo humano en curso automáticamente), documentada explícitamente.
+
+### 13.9 Commit
+
+`feat: F8.7 — reviewable candidate shortlists`.
+
+**F8.7 completo.**

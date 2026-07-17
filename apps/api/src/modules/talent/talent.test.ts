@@ -35,11 +35,15 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2/F8.2/F8.5/F8.6: limpieza — todo lo creado por esta suite queda
-  // claramente identificado (nombre/prefijo de test) y se borra al
-  // terminar. CandidateQualification/CandidateMatch tienen FKs ON DELETE
-  // RESTRICT hacia Candidate/JobOrder, así que deben borrarse primero.
+  // F5.2/F8.2/F8.5/F8.6/F8.7: limpieza — todo lo creado por esta suite
+  // queda claramente identificado (nombre/prefijo de test) y se borra al
+  // terminar. CandidateQualification/CandidateMatch/
+  // CandidateShortlistEntry tienen FKs ON DELETE RESTRICT hacia
+  // Candidate/JobOrder, así que deben borrarse primero.
   if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.candidateShortlistEntry.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
     await prisma.candidateMatch.deleteMany({
       where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
     });
@@ -881,6 +885,163 @@ test("computing matching writes an AuditLog entry", async () => {
     orderBy: { createdAt: "desc" },
   });
   assert.ok(auditEntry);
+});
+
+// ---------- F8.7: Candidate Shortlist ----------
+
+test("POST /job-orders/:jobOrderId/shortlist as sales@titan.dev returns 403 (no candidates.update)", async () => {
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: SALES_HEADERS });
+  assert.equal(res.status, 403);
+});
+
+test("POST /job-orders/:jobOrderId/shortlist returns 404 when matching was never run for this Job Order (enforces pipeline order)", async () => {
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 404);
+});
+
+test("POST generates a shortlist from the persisted ranking, never includes a NOT_QUALIFIED candidate, never changes Candidate.status", async () => {
+  const jobOrder = await createValidJobOrder();
+  const { body: qualified } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  const { body: wrongCategory } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID] });
+
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as Array<{ candidateId: string; reviewStatus: string; rank: number }>;
+
+  assert.ok(body.some((e) => e.candidateId === qualified.id));
+  assert.ok(!body.some((e) => e.candidateId === wrongCategory.id), "a NOT_QUALIFIED candidate must never be shortlisted");
+  assert.ok(body.every((e) => e.reviewStatus === "DRAFT"), "a freshly generated shortlist entry always starts at DRAFT");
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: qualified.id } });
+  assert.equal(stillNew.status, "NEW", "generating a shortlist must never change Candidate.status");
+});
+
+test("POST is idempotent and preserves a manually-set reviewStatus on regeneration", async () => {
+  const jobOrder = await createValidJobOrder();
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  // Nota: la categoría forklift ya tiene candidatos del seed de F0 en
+  // este tenant, así que la shortlist tiene más de una entrada -- hay
+  // que ubicar la entrada de ESTE candidato específico, nunca asumir
+  // que es la primera del arreglo.
+  const firstRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  const firstBody = (await firstRes.json()) as Array<{ id: string; candidateId: string }>;
+  const entry = firstBody.find((e) => e.candidateId === candidate.id);
+  assert.ok(entry);
+
+  const patchRes = await fetch(`${baseUrl}/api/v1/shortlist/${entry!.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "READY_FOR_REVIEW" }),
+  });
+  assert.equal(patchRes.status, 200);
+
+  // Regenerar no debe revertir la decisión humana ya tomada.
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const count = await prisma.candidateShortlistEntry.count({ where: { candidateId: candidate.id, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1, "regenerating must upsert, never duplicate");
+
+  const refreshed = await prisma.candidateShortlistEntry.findFirstOrThrow({ where: { candidateId: candidate.id, jobOrderId: jobOrder.id } });
+  assert.equal(refreshed.reviewStatus, "READY_FOR_REVIEW", "a manually-set reviewStatus must survive regeneration");
+});
+
+test("PATCH review-status rejects an invalid transition (DRAFT -> APPROVED, must pass through READY_FOR_REVIEW)", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  const shortlistRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  const [entry] = (await shortlistRes.json()) as Array<{ id: string }>;
+  assert.ok(entry);
+
+  const res = await fetch(`${baseUrl}/api/v1/shortlist/${entry.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "APPROVED" }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("PATCH review-status: REMOVED is reversible -- can reopen to DRAFT, never a permanent rejection", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  const shortlistRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  const [entry] = (await shortlistRes.json()) as Array<{ id: string }>;
+  assert.ok(entry);
+
+  const removeRes = await fetch(`${baseUrl}/api/v1/shortlist/${entry.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "REMOVED" }),
+  });
+  assert.equal(removeRes.status, 200);
+
+  const reopenRes = await fetch(`${baseUrl}/api/v1/shortlist/${entry.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "DRAFT" }),
+  });
+  assert.equal(reopenRes.status, 200);
+});
+
+test("PATCH review-status rejects an invalid reviewStatus value with 400", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  const shortlistRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  const [entry] = (await shortlistRes.json()) as Array<{ id: string }>;
+  assert.ok(entry);
+
+  const res = await fetch(`${baseUrl}/api/v1/shortlist/${entry.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "NOT_A_REAL_STATUS" }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("GET /job-orders/:jobOrderId/shortlist returns the persisted shortlist sorted by rank", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as Array<{ rank: number }>;
+  const ranks = body.map((e) => e.rank);
+  assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b));
+});
+
+test("shortlist generation and review-status changes write AuditLog entries", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  const shortlistRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/shortlist`, { method: "POST", headers: RECRUITER_HEADERS });
+  const [entry] = (await shortlistRes.json()) as Array<{ id: string }>;
+  assert.ok(entry);
+
+  await fetch(`${baseUrl}/api/v1/shortlist/${entry.id}/review-status`, {
+    method: "PATCH",
+    headers: RECRUITER_HEADERS,
+    body: JSON.stringify({ reviewStatus: "READY_FOR_REVIEW" }),
+  });
+
+  const generatedAudit = await prisma.auditLog.findFirst({
+    where: { action: "candidate.shortlist_generated", entityType: "job_order_shortlist", entityId: jobOrder.id },
+  });
+  const statusAudit = await prisma.auditLog.findFirst({
+    where: { action: "candidate.shortlist_review_status_changed", entityType: "candidate_shortlist_entry", entityId: entry.id },
+  });
+  assert.ok(generatedAudit);
+  assert.ok(statusAudit);
 });
 
 // ---------- F8.3: Candidate Sourcing ----------

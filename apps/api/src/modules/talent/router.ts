@@ -8,6 +8,7 @@ import {
 } from "@ai-staffing-os/shared";
 import { requirePermission, requireAllPermissions, requireAnyPermission } from "../../core/rbac/require-permission";
 import { AppError } from "../../core/errors";
+import { isShortlistReviewStatus } from "../recruiting-intelligence/candidate-shortlist";
 import * as talentService from "./service";
 
 export const talentRouter = Router();
@@ -189,3 +190,47 @@ talentRouter.get(
     }
   },
 );
+
+// F8.7: Candidate Shortlist -- POST genera/refresca desde el ranking YA
+// persistido de F8.6 (requiere update porque escribe); GET solo lee.
+talentRouter.post(
+  "/job-orders/:jobOrderId/shortlist",
+  requireAllPermissions(["candidates.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await talentService.generateShortlistForJobOrder(req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+talentRouter.get(
+  "/job-orders/:jobOrderId/shortlist",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.json(await talentService.getShortlistForJobOrder(req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// F8.7: único camino para cambiar el reviewStatus de una entrada de
+// shortlist -- valida la transición antes de escribir (ver
+// candidate-shortlist.ts), nunca contacta a nadie, nunca es un rechazo
+// permanente (REMOVED siempre puede reabrirse a DRAFT).
+talentRouter.patch("/shortlist/:entryId/review-status", requirePermission("candidates.update"), async (req, res, next) => {
+  try {
+    const { reviewStatus } = req.body as { reviewStatus?: unknown };
+    if (!isShortlistReviewStatus(reviewStatus)) {
+      throw AppError.badRequest("Invalid reviewStatus", {
+        allowed: ["DRAFT", "READY_FOR_REVIEW", "APPROVED", "HOLD", "REMOVED"],
+      });
+    }
+    res.json(await talentService.updateShortlistEntryReviewStatus(req.params.entryId!, reviewStatus));
+  } catch (err) {
+    next(err);
+  }
+});
