@@ -862,3 +862,23 @@ Ninguno nuevo (fase de UI pura, sin lógica de backend) -- verificación fue vis
 `feat: F7.11 — mission review and approval UI`.
 
 **F7.11 completo.**
+
+---
+
+## 24. Resultado de F7.12 — Hardening y cierre de F7
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+Checklist de hardening verificado contra las 11 subfases anteriores: schemas versionados (todo módulo puro tiene su constante `*_VERSION`), compatibilidad histórica (guardias defensivas de F7.11 + confirmado que la API no valida la respuesta con Zod en runtime, así que datos históricos nunca rompen el backend), observabilidad (logging estructurado `[modulo] evento` en cada módulo impuro desde F7.4), idempotencia (dedup ya establecido desde F7.3/F7.4/F7.7), reintentos seguros y circuit breakers (ya en `people-data-labs.ts`/`provider-health.ts` desde F4.6, reutilizados sin cambios), enforcement de presupuesto (`data-provider-budget.ts` verificado antes de Google Places y antes de People Data Labs), tenancy (`scopedDb` en toda escritura nueva, tests explícitos), RBAC (cero endpoints nuevos en F7.5-F7.11, todos los existentes ya guardados), rollback (única migración de F7.5-F7.12 es F7.8, aditiva pura, revisada), tests end-to-end (el test de F7.9 que integra las 10 piezas). Un gap real encontrado y corregido: el audit log de creación de Contact (F7.7) no incluía el resultado del ranking (F7.8) -- agregado al mismo evento existente (`contact.discovered_by_agent`), sin crear uno nuevo.
+
+Reporte de cierre completo: `docs/F7_FINAL_REPORT.md` — veredicto: **F7 completo**.
+
+### 24.1 Suite completa
+
+773 tests, 767 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`), 5 skip (4 gateados por el fix de real-provider-tests + 1 preexistente sin relación) -- sin cambio respecto a F7.11, confirmando que el hardening no introdujo regresiones.
+
+### 24.2 Commit
+
+`chore: F7.12 — harden and close autonomous acquisition`.
+
+**F7.12 completo. F7 completo.**

@@ -263,7 +263,18 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
       action: "contact.discovered_by_agent",
       entityType: "contact",
       entityId: contact.id,
-      after: { firstName: candidate.firstName, lastName: candidate.lastName, title: candidate.title, matchedRole, confidenceScore },
+      after: {
+        firstName: candidate.firstName,
+        lastName: candidate.lastName,
+        title: candidate.title,
+        matchedRole,
+        confidenceScore,
+        // F7.12: agregado al audit log ya existente en vez de crear uno
+        // nuevo -- el ranking (F7.8) es un atributo del MISMO evento de
+        // descubrimiento, no una acción separada.
+        rankingTier: ranking.tier,
+        rankingScore: ranking.score,
+      },
     });
 
     log(params.taskId, "contact persisted", { contactId: contact.id, matchedRole, confidenceScore, rankingTier: ranking.tier, rankingScore: ranking.score });
