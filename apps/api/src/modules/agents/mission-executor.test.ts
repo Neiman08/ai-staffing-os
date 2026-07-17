@@ -9,6 +9,9 @@ import { emptyResult, type ProviderCandidate, type ProviderSearchResult } from "
 import { executeDiscoveryPlan, buildFinalQueries, type DiscoveryProviderPort } from "./mission-executor";
 import { emptyWebsiteIntelligenceResult } from "./tools/website-intelligence/types";
 import type { WebsiteIntelligencePort } from "./company-enrichment";
+import type { ContactProviderPort } from "./contact-enrichment";
+import { emptyContactResult } from "./tools/contact-providers/types";
+import type { ContactCandidate } from "./tools/contact-providers/types";
 
 /**
  * F7.3: tests del ejecutor real de descubrimiento. Cero llamadas
@@ -367,6 +370,7 @@ async function runWithHiring(
   websiteIntelligence: WebsiteIntelligencePort,
   targetJobTitles: string[] = [],
   decisionRoles: string[] = [],
+  contactProvider?: ContactProviderPort,
 ) {
   return runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] }, async () => {
     const missionTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "daily_revenue_mission" } });
@@ -379,10 +383,30 @@ async function runWithHiring(
       websiteIntelligence,
       targetJobTitles,
       decisionRoles,
+      contactProvider,
+      peopleDataLabsApiKey: contactProvider ? "fake-pdl-key-for-tests" : undefined,
     });
     createdCompanyIds.push(...report.createdCompanyIds);
     return report;
   });
+}
+
+function contactCandidateFixture(overrides: Partial<ContactCandidate> = {}): ContactCandidate {
+  return {
+    firstName: "Jane",
+    lastName: "Doe",
+    title: "HR Manager",
+    fields: {
+      firstName: { status: "CONFIRMED", value: "Jane" },
+      lastName: { status: "CONFIRMED", value: "Doe" },
+      title: { status: "CONFIRMED", value: "HR Manager" },
+      linkedinUrl: { status: "NOT_FOUND", value: null },
+      email: { status: "NOT_FOUND", value: null },
+      phone: { status: "NOT_FOUND", value: null },
+    },
+    sourceUrl: null,
+    ...overrides,
+  };
 }
 
 test("hiring signals: nunca corre cuando el plan no declara find_hiring_signals", async () => {
@@ -486,4 +510,143 @@ test("role plan: sin roles explicitos, usa los decisionMakers de la taxonomia re
   assert.ok(rolePlan);
   assert.ok(rolePlan!.targetRoles.length > 0);
   assert.ok(rolePlan!.targetRoles.every((r) => r.source === "taxonomy"));
+});
+
+// ---------- F7.7: Contact Intelligence wiring ----------
+
+function contactPlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
+  return manufacturingPlan({
+    steps: ["discover_companies", "find_contacts"],
+    requiredSteps: ["discover_companies"],
+    optionalSteps: ["find_contacts"],
+    ...overrides,
+  });
+}
+
+test("contact intelligence: nunca llama al proveedor cuando rolePlan no tiene roles planificados", async () => {
+  const tenantId = await setupTenant("contacts-no-roleplan");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  let called = false;
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => {
+      called = true;
+      return emptyContactResult();
+    },
+  };
+  // Plan sin find_contacts -> rolePlan queda null -> Contact Intelligence no corre.
+  const report = await runWithHiring(tenantId, manufacturingPlan({ steps: ["discover_companies"] }), providers, NO_OP_WEBSITE_INTELLIGENCE, [], [], contactProvider);
+  assert.equal(called, false);
+  assert.equal(report.contactsCreatedTotal, 0);
+  assert.equal(report.companyValidations[0]!.contactsFound, 0);
+});
+
+test("contact intelligence: crea un Contact real cuando PDL devuelve un candidato con nombre y rol matcheado", async () => {
+  const tenantId = await setupTenant("contacts-created");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => ({
+      candidates: [contactCandidateFixture()],
+      costUsd: 0.05,
+      sourcesUsed: ["People Data Labs (test)"],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+    }),
+  };
+  const report = await runWithHiring(tenantId, contactPlan(), providers, NO_OP_WEBSITE_INTELLIGENCE, [], ["HR Manager"], contactProvider);
+
+  assert.equal(report.contactsCreatedTotal, 1);
+  assert.equal(report.companiesWithContactsFound, 1);
+  assert.equal(report.companyValidations[0]!.contactsFound, 1);
+  // El rolePlan real (F7.6) agrega también los decisionMakers de la
+  // taxonomía de manufacturing además del rol explícito pedido -- solo
+  // "HR Manager" tuvo un candidato real, el resto queda honestamente
+  // sin contacto (nunca se inventa uno para completarlos).
+  assert.ok(!report.companyValidations[0]!.rolesWithoutContact.includes("HR Manager"));
+  assert.ok(report.costUsd >= 0.05);
+
+  const contact = await prisma.contact.findFirstOrThrow({ where: { companyId: report.createdCompanyIds[0]! } });
+  assert.equal(contact.firstName, "Jane");
+  assert.equal(contact.lastName, "Doe");
+  assert.equal(contact.source, "People Data Labs");
+  assert.equal(contact.verificationStatus, "CONFIRMED");
+});
+
+test("contact intelligence: candidato sin apellido se descarta (insufficientDataSkipped), nunca crea Contact sin nombre real", async () => {
+  const tenantId = await setupTenant("contacts-insufficient-data");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => ({
+      candidates: [contactCandidateFixture({ lastName: null })],
+      costUsd: 0,
+      sourcesUsed: [],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+    }),
+  };
+  const report = await runWithHiring(tenantId, contactPlan(), providers, NO_OP_WEBSITE_INTELLIGENCE, [], ["HR Manager"], contactProvider);
+  assert.equal(report.contactsCreatedTotal, 0);
+  // Ningún candidato con nombre real -> ningún rol planificado (incluido
+  // "HR Manager") recibió contacto -- honesto, nunca se inventa uno.
+  assert.ok(report.companyValidations[0]!.rolesWithoutContact.includes("HR Manager"));
+});
+
+test("contact intelligence: candidato con nombre pero rol irrelevante se descarta (roleMismatchSkipped), nunca se persiste fuera del rolePlan", async () => {
+  const tenantId = await setupTenant("contacts-role-mismatch");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => ({
+      candidates: [contactCandidateFixture({ title: "Accounts Receivable Associate" })],
+      costUsd: 0,
+      sourcesUsed: [],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+    }),
+  };
+  const report = await runWithHiring(tenantId, contactPlan(), providers, NO_OP_WEBSITE_INTELLIGENCE, [], ["HR Manager"], contactProvider);
+  assert.equal(report.contactsCreatedTotal, 0);
+  assert.equal(report.contactRoleMismatchSkipped, 1);
+
+  const contacts = await prisma.contact.count({ where: { companyId: report.createdCompanyIds[0]! } });
+  assert.equal(contacts, 0);
+});
+
+test("contact intelligence: un contacto ya existente (mismo nombre+empresa) se deduplica, nunca se crea dos veces", async () => {
+  const tenantId = await setupTenant("contacts-dedup");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => ({
+      candidates: [contactCandidateFixture()],
+      costUsd: 0.05,
+      sourcesUsed: ["People Data Labs (test)"],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+    }),
+  };
+  const report = await runWithHiring(tenantId, contactPlan(), providers, NO_OP_WEBSITE_INTELLIGENCE, [], ["HR Manager"], contactProvider);
+  assert.equal(report.contactsCreatedTotal, 1);
+
+  // Segunda misión, mismo tenant/Company no aplica (Company nueva cada
+  // vez) -- se verifica la deduplicación directamente contra un Contact
+  // ya presente en la MISMA Company creada arriba, simulando una
+  // segunda corrida de Contact Intelligence sobre la misma Company.
+  const contactEnrichment = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] }, async () => {
+    const { enrichCompanyWithDecisionContacts } = await import("./contact-enrichment");
+    return enrichCompanyWithDecisionContacts({
+      taskId: "fake-task-id",
+      companyId: report.createdCompanyIds[0]!,
+      companyName: "Acme Manufacturing",
+      companyWebsite: null,
+      companyState: "IL",
+      companyCity: null,
+      industryName: "Manufacturing",
+      rolePlan: { companyId: report.createdCompanyIds[0]!, targetRoles: [{ role: "HR Manager", priority: 1, rationale: "test", source: "intent" }], excludedRoles: [], confidence: 0.9, taxonomySource: "test", hiringSignalSource: null, planVersion: 1 },
+      contactProvider,
+    });
+  });
+  assert.equal(contactEnrichment.duplicatesSkipped, 1);
+  assert.equal(contactEnrichment.contactsCreated.length, 0);
 });

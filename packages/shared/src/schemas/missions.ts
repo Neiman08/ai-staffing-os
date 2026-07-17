@@ -447,6 +447,10 @@ export const companyValidationRecordSchema = z.object({
       planVersion: z.number(),
     })
     .nullable(),
+  // F7.7: contactos personales reales creados (People Data Labs) y
+  // roles planificados sin match -- nunca un contacto inventado.
+  contactsFound: z.number(),
+  rolesWithoutContact: z.array(z.string()),
 });
 export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
@@ -487,6 +491,12 @@ export const discoveryExecutionReportSchema = z.object({
   companiesNoHiringSignal: z.number(),
   // F7.6: cuántas Companies recibieron un Decision-Maker Role Plan.
   rolePlansBuilt: z.number(),
+  // F7.7: agregados de Contact Intelligence.
+  contactCandidatesFound: z.number(),
+  contactsCreatedTotal: z.number(),
+  contactDuplicatesSkipped: z.number(),
+  contactRoleMismatchSkipped: z.number(),
+  companiesWithContactsFound: z.number(),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

@@ -27,6 +27,7 @@ import { getDataProviderBudgetStatus } from "./data-provider-budget";
 import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } from "./company-enrichment";
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
+import { enrichCompanyWithDecisionContacts, type ContactProviderPort } from "./contact-enrichment";
 
 /**
  * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
@@ -91,6 +92,11 @@ export interface ExecuteDiscoveryPlanParams {
   // — nunca se llama al crawler real en un test unitario. Default: el
   // módulo real.
   websiteIntelligence?: WebsiteIntelligencePort;
+  // F7.7: inyección para tests de Contact Intelligence (contact-enrichment.ts)
+  // — nunca se llama a People Data Labs real en un test unitario.
+  // Default: el módulo real.
+  contactProvider?: ContactProviderPort;
+  peopleDataLabsApiKey?: string;
 }
 
 export interface QueryExecutionRecord {
@@ -150,6 +156,12 @@ export interface CompanyValidationRecord {
   // F7.6: null cuando el plan no declaró find_contacts -- Decision-Maker
   // Role Planning solo corre en preparación de ese paso futuro (F7.7).
   rolePlan: DecisionRolePlan | null;
+  // F7.7: contactos personales reales creados para esta Company (People
+  // Data Labs, matcheados contra rolePlan.targetRoles) y los roles
+  // planificados para los que ningún candidato real matcheó -- nunca se
+  // inventa un contacto de relleno para esos roles.
+  contactsFound: number;
+  rolesWithoutContact: string[];
 }
 
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
@@ -203,6 +215,14 @@ export interface DiscoveryExecutionReport {
   companiesNoHiringSignal: number;
   // F7.6: cuántas Companies recibieron un Decision-Maker Role Plan.
   rolePlansBuilt: number;
+  // F7.7: agregados de Contact Intelligence -- todos en 0 cuando ninguna
+  // Company tuvo un rolePlan con roles planificados (nunca corre "por
+  // si acaso").
+  contactCandidatesFound: number;
+  contactsCreatedTotal: number;
+  contactDuplicatesSkipped: number;
+  contactRoleMismatchSkipped: number;
+  companiesWithContactsFound: number;
 }
 
 interface FinalQuery {
@@ -378,7 +398,6 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const googlePlacesApiKey = params.googlePlacesApiKey ?? env.GOOGLE_PLACES_API_KEY;
   const requestedCompanyCount = params.plan.stopConditions.maxCompanies;
   const limitations: string[] = [
-    "Contact Intelligence (contactos personales) no fue ejecutado en esta fase.",
     "Business Validation no incluye provider types ni descripción pública — ningún proveedor conectado los popula todavía (evidencia limitada a nombre/dominio/query).",
   ];
 
@@ -414,6 +433,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesPossibleHiring: 0,
     companiesNoHiringSignal: 0,
     rolePlansBuilt: 0,
+    contactCandidatesFound: 0,
+    contactsCreatedTotal: 0,
+    contactDuplicatesSkipped: 0,
+    contactRoleMismatchSkipped: 0,
+    companiesWithContactsFound: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -488,6 +512,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let hiringSignalsChecked = 0;
   const hiringStatusCounts: Partial<Record<HiringSignalResult["hiringStatus"], number>> = {};
   let rolePlansBuilt = 0;
+  let contactCandidatesFoundTotal = 0;
+  let contactsCreatedTotal = 0;
+  let contactDuplicatesSkippedTotal = 0;
+  let contactRoleMismatchSkippedTotal = 0;
+  let companiesWithContactsFoundTotal = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -737,6 +766,39 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           });
         }
 
+        // F7.7: Contact Intelligence -- QUIÉN (persona real), solo
+        // cuando F7.6 planificó al menos un rol para esta Company.
+        // Nunca busca con una lista de cargos genérica ni "por si
+        // acaso" -- si rolePlan es null o no tiene roles, el paso ni
+        // siquiera llama al proveedor (costo real $0 en ese caso).
+        let contactsFoundForCompany = 0;
+        let rolesWithoutContactForCompany: string[] = [];
+        if (rolePlan && rolePlan.targetRoles.length > 0) {
+          const contactEnrichment = await enrichCompanyWithDecisionContacts({
+            taskId: childTask.id,
+            companyId: company.id,
+            companyName: candidate.raw.name!,
+            companyWebsite: company.website,
+            companyState: company.state,
+            companyCity: company.city,
+            industryName: industry.name,
+            rolePlan,
+            abortSignal: params.abortSignal,
+            contactProvider: params.contactProvider,
+            peopleDataLabsApiKey: params.peopleDataLabsApiKey,
+          });
+          if (contactEnrichment.costUsd > 0) totalCostUsd += contactEnrichment.costUsd;
+          if (contactEnrichment.sourcesUsed.length > 0) providersUsed.add("People Data Labs");
+          contactCandidatesFoundTotal += contactEnrichment.candidatesFound;
+          contactsCreatedTotal += contactEnrichment.contactsCreated.length;
+          contactDuplicatesSkippedTotal += contactEnrichment.duplicatesSkipped;
+          contactRoleMismatchSkippedTotal += contactEnrichment.roleMismatchSkipped;
+          contactsFoundForCompany = contactEnrichment.contactsCreated.length;
+          rolesWithoutContactForCompany = contactEnrichment.rolesWithoutContact;
+          if (contactsFoundForCompany > 0) companiesWithContactsFoundTotal += 1;
+          for (const failure of contactEnrichment.patternsFailed) validationWarnings.add(failure);
+        }
+
         companyValidations.push({
           companyId: company.id,
           name: candidate.raw.name!,
@@ -756,6 +818,8 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           hiringConfidence: hiringSignal?.confidence ?? null,
           targetTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
           rolePlan,
+          contactsFound: contactsFoundForCompany,
+          rolesWithoutContact: rolesWithoutContactForCompany,
         });
       }
     }
@@ -829,6 +893,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesPossibleHiring: hiringStatusCounts.POSSIBLE_HIRING ?? 0,
     companiesNoHiringSignal: hiringStatusCounts.NO_SIGNAL ?? 0,
     rolePlansBuilt,
+    contactCandidatesFound: contactCandidatesFoundTotal,
+    contactsCreatedTotal,
+    contactDuplicatesSkipped: contactDuplicatesSkippedTotal,
+    contactRoleMismatchSkipped: contactRoleMismatchSkippedTotal,
+    companiesWithContactsFound: companiesWithContactsFoundTotal,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,

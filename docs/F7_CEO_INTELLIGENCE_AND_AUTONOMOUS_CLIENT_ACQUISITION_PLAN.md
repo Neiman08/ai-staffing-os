@@ -619,3 +619,68 @@ No aplica — `role-planning.ts` es puro (sin Prisma fuera del wiring ya cubiert
 `feat: F7.6 — decision-maker role planning`.
 
 **F7.6 completo.**
+
+---
+
+## Hallazgo intermedio: gateo de llamadas reales en tests (commit separado, `test: gate real external-provider calls...`)
+
+Durante la auditoría inicial de F7.7 se encontró que 4 tests de integración preexistentes (F4.5 `discovery.test.ts` x2, F4.6 `contact-intelligence.test.ts` x2) y 1 más de F7.3 (`missions-dynamic-discovery.test.ts`) llamaban a Google Places/People Data Labs/Hunter.io de forma **incondicional** cada vez que corría `pnpm test` completo — violando la regla explícita "los tests unitarios/integración deben tener CERO llamadas reales" y arriesgando consumir presupuesto real en cada una de las ~40 subfases restantes que exigen correr la suite completa. Verificado contra la base real (`AgentTask.costUsd`): $8.04 acumulado histórico, ~$0.77 solo el día de hoy antes del fix (mayormente Google Places, $0.096/corrida). Se corrigió con un gate explícito (`test-helpers/real-provider-tests.ts`, `RUN_REAL_PROVIDER_TESTS=1`, default OFF) usando la opción `skip` de `node:test` — los 4 tests siguen existiendo íntegros, solo se saltan por default. Verificado: cero costo nuevo de Google Places/PDL/Hunter tras el fix (consulta directa a la base). Commit independiente, `test`-only, documentado — consistente con la regla "no cambios a GitHub Actions salvo estrictamente relacionados con tests, documentados" (este no toca CI, solo el comportamiento default de la suite local).
+
+---
+
+## 19. Resultado de F7.7 — Contact Intelligence
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+### 19.1 Hallazgo de auditoría
+
+Al auditar el estado existente antes de implementar, se encontró que F4.6 YA había construido un Contact Intelligence Agent completo (`contact-intelligence-tools.impl.ts`, `contact-providers/people-data-labs.ts`) para el flujo CLÁSICO (AgentTool `find_contacts`, orquestado por LLM) — con dedup, scoring, People Data Labs, `mapTitleToDecisionRole`. Ese flujo nunca estaba conectado al ejecutor NUEVO y determinista de F7.3+ (`mission-executor.ts`). En vez de reimplementar la lógica de PDL/dedup/scoring desde cero, F7.7 **reutiliza directamente** `searchPeopleDataLabs`, `mapTitleToDecisionRole` y `computeContactConfidenceScore` (importados, no duplicados) y agrega únicamente lo genuinamente nuevo: wiring hacia el pipeline nuevo, y una clasificación de rol PLANIFICADO (F7.6) en vez de la lista fija `PRIORITY_TITLES` del agente clásico.
+
+### 19.2 Arquitectura
+
+- **`contact-role-match.ts`** (`ceo-intelligence/`, puro) — `matchTitleToPlannedRole(title, targetRoles, mapTitleToDecisionRole)`: decide si el `title` real de un candidato de PDL corresponde a alguno de los roles que F7.6 planificó buscar, con dos criterios en orden (substring normalizado, luego fallback por `decisionRole` compartido). Nunca inventa un match; sin título o sin roles planificados, siempre `null`.
+- **`contact-enrichment.ts`** (`agents/`, impuro) — `enrichCompanyWithDecisionContacts()`: corre ÚNICAMENTE cuando `rolePlan` (F7.6) tiene al menos un `targetRole` — nunca busca con una lista de cargos genérica ni "por si acaso" (costo real $0 en cualquier otro caso, cero llamada al proveedor). Llama a `searchPeopleDataLabs` con `priorityTitles: rolePlan.targetRoles.map(r => r.role)` (búsqueda dirigida por el plan, no por la lista fija clásica), filtra candidatos sin nombre real (`insufficientDataSkipped`) o sin rol matcheado (`roleMismatchSkipped`), deduplica contra `Contact` existentes (email/LinkedIn/nombre+empresa — mismo criterio que el agente clásico), y persiste solo los que pasan ambos filtros. Reporta `emailDomainTrust` por contacto (reutiliza `email-trust.ts` de F7.4 sobre el email personal si vino, informativo — nunca se persiste como `emailVerificationStatus`, esa verificación real de entregabilidad sigue siendo trabajo separado de `findEmail`/F4.7).
+- **`mission-executor.ts`** — tras el bloque de Decision-Maker Role Planning (F7.6), si `rolePlan && rolePlan.targetRoles.length > 0`, corre `enrichCompanyWithDecisionContacts` y acumula costo real (primera llamada realmente paga del pipeline nuevo desde F7.3).
+
+### 19.3 Separación explícita de "formas de contacto" (nunca mezcladas)
+
+- **Email organizacional** (info@, hr@...) — `CompanyContactPoint`, F7.4, sin dueño humano.
+- **Contacto genérico** — mismo `CompanyContactPoint`.
+- **Rol sin persona identificada** — un `targetRole` de F7.6 para el que ningún candidato real matcheó (`rolesWithoutContact`, honesto, nunca relleno inventado).
+- **Contacto personal** — `Contact`, F7.7, solo cuando PDL devuelve `firstName`+`lastName` real matcheando un rol planificado. Nunca se convierte un email organizacional en persona: la única fuente de nombre es el proveedor de personas.
+
+### 19.4 Persistencia
+
+Nuevos `Contact` reales (modelo ya existente desde F1, sin migración) — mismo patrón que el agente clásico (`source: "People Data Labs"`, `verificationStatus: "CONFIRMED"`, `discoveredByAgentTaskId`). Sin modelo nuevo.
+
+### 19.5 Executive Report — campos nuevos
+
+`CompanyValidationRecord.contactsFound`/`rolesWithoutContact`; `DiscoveryExecutionReport.contactCandidatesFound`/`contactsCreatedTotal`/`contactDuplicatesSkipped`/`contactRoleMismatchSkipped`/`companiesWithContactsFound`. Espejo Zod agregado a `packages/shared/src/schemas/missions.ts`.
+
+### 19.6 UI
+
+Extendida la sección "Validación" (por Company: "Contactos personales encontrados"/"Sin contacto identificado"; agregado de misión: candidatos evaluados/contactos creados/empresas con contacto). Corregido además un mensaje ahora obsoleto en la sección clásica "Contact Intelligence" de Mission Detail (decía "pendiente de una fase posterior" — F7.7 ya lo implementa para el pipeline nuevo; ahora redirige a "Validación").
+
+### 19.7 Tests — 21 nuevos (todos passing)
+
+`contact-role-match.test.ts` (8): substring en ambas direcciones, sin título/sin roles nunca matchea, fallback por `decisionRole` compartido, ningún criterio matchea → `null`, determinismo. `contact-enrichment.test.ts` (8, integración directa): `rolePlan` null o sin roles → nunca llama al proveedor; sin `PEOPLEDATALABS_API_KEY` → motivo honesto; `emailDomainTrust` VERIFIED/INVALID según dominio; cancelación honesta; nunca crea Lead/Opportunity/Campaign; tenancy. `mission-executor.test.ts` (+5): nunca llama al proveedor sin `rolePlan` con roles; crea `Contact` real con rol matcheado; descarta candidato sin apellido (`insufficientDataSkipped`); descarta rol irrelevante (`roleMismatchSkipped`), nunca se persiste fuera del plan; deduplica un contacto ya existente.
+
+### 19.8 Suite completa
+
+743 tests, 737 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`), 5 skip (4 gateados por el fix de real-provider-tests + 1 preexistente sin relación).
+
+### 19.9 Prueba real controlada
+
+Ninguna nueva — el gate de real-provider-tests (ver arriba) deja `missions-dynamic-discovery.test.ts` disponible para ejercitar el pipeline completo real (incluido F7.7) activando `RUN_REAL_PROVIDER_TESTS=1` cuando haga falta verificarlo end-to-end; no se activó en esta subfase para mantener el costo real de la sesión en $0 acumulado desde la autorización (F7.5 en adelante). Toda la lógica de F7.7 quedó cubierta por los 21 tests deterministas con proveedor inyectado.
+
+### 19.10 Limitaciones conocidas
+
+- No verifica entregabilidad real del email personal del contacto (solo confianza de dominio, heurística) — la verificación real (Hunter) sigue siendo trabajo de `findEmail`/F4.7, no duplicado acá.
+- El matching título↔rol planificado es heurístico (substring + mapeo cerrado), no semántico — un título muy inusual no reconocido por ninguno de los dos criterios se descarta (`roleMismatchSkipped`) en vez de intentar una inferencia más agresiva — decisión conservadora deliberada ("nunca inventar").
+- Sin ranking/ordenamiento de contactos por confianza — eso es F7.8 (Contact Verification and Ranking), siguiente subfase.
+
+### 19.11 Commit
+
+`feat: F7.7 — contact intelligence`.
+
+**F7.7 completo.**

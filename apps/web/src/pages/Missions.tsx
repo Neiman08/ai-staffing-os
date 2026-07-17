@@ -542,6 +542,12 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
                 Roles a buscar: {v.rolePlan.targetRoles.map((r) => r.role).join(", ")}
               </p>
             )}
+            {v.contactsFound > 0 && (
+              <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">Contactos personales encontrados: {v.contactsFound}</p>
+            )}
+            {v.rolesWithoutContact.length > 0 && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Sin contacto identificado: {v.rolesWithoutContact.join(", ")}</p>
+            )}
           </div>
         ))}
       </div>
@@ -557,6 +563,13 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
       {report.rolePlansBuilt > 0 && (
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
           <span>Planes de roles construidos: {report.rolePlansBuilt}</span>
+        </div>
+      )}
+      {report.rolePlansBuilt > 0 && (
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <span>Candidatos evaluados (People Data Labs): {report.contactCandidatesFound}</span>
+          <span>Contactos creados: {report.contactsCreatedTotal}</span>
+          <span>Empresas con contacto: {report.companiesWithContactsFound}</span>
         </div>
       )}
     </div>
@@ -734,16 +747,17 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           {detail.discoveryExecution && <OrganizationalEmailsSection report={detail.discoveryExecution} />}
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Contact Intelligence</p>
-            {/* F7.4: Contact Intelligence (contactos PERSONALES nombrados)
-                nunca corrió para una misión ejecutada por el nuevo
-                ejecutor dinámico — solo Email Trust sobre emails
-                organizacionales (ver OrganizationalEmailsSection arriba).
-                Mostrar "0 contactos" acá sería engañoso (parecería que sí
-                se buscó y no encontró nada). Mensaje explícito en su
-                lugar. */}
+            {/* F7.7: para una misión ejecutada por el nuevo ejecutor
+                dinámico, Contact Intelligence (contactos PERSONALES
+                nombrados) corre dentro del pipeline nuevo y se muestra en
+                la sección "Validación" arriba (por Company: contactos
+                encontrados / roles sin contacto; agregado de misión:
+                candidatos evaluados / contactos creados / empresas con
+                contacto) -- este bloque de abajo es exclusivo del flujo
+                CLÁSICO (mission-orchestrator sin ejecutor dinámico). */}
             {detail.discoveryExecution ? (
               <p className="rounded-md border border-border p-2 text-xs text-muted-foreground">
-                Contact Intelligence (contactos personales) pendiente de una fase posterior.
+                Ver contactos personales encontrados en la sección "Validación" arriba.
               </p>
             ) : (
               <>
