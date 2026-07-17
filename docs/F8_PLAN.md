@@ -506,3 +506,57 @@ Ninguna en esta subfase -- se surfacea en F8.11.
 `feat: F8.10 — placement readiness`.
 
 **F8.10 completo.**
+
+## 17. Resultado de F8.11 — Recruiting Mission UI
+
+### 17.1 Arquitectura
+
+- **Sin app/página separada** (mismo criterio que F6.7/MatchingPanel): dos componentes nuevos embebidos en `JobOrderDetail.tsx` real, justo debajo de `MatchingPanel`.
+  - **`components/recruiting/RecruitingMissionPanel.tsx`**: sección "Candidate Matching & Ranking" (F8.6 -- calcular/leer, ranking + excluidos, nunca muestra un NOT_QUALIFIED como recomendado) + sección "Shortlist" (F8.7 -- generar/leer + cambiar `reviewStatus` inline).
+  - **`components/recruiting/CandidatePipelineDrawer.tsx`**: drawer lateral (reutiliza el componente `Drawer` ya existente, F5.x) que se abre al hacer click en cualquier candidato -- Calificación (F8.2, solo lectura), Screening (F8.8, generar+ver preguntas), Entrevista (F8.9, generar+ver+cambiar estado, con el aviso "Solo PREVIEW -- nunca se envía una invitación real ni se modifica un calendario" SIEMPRE visible), Placement Readiness (F8.10, evaluar+ver blockers/warnings/nextBestAction, con el aviso "requiere aprobación humana explícita" siempre visible).
+  - **`components/recruiting/types.ts`**: tipos locales al frontend para los DTOs de F8.6-F8.10 (esos endpoints devuelven DTOs locales al service de la API, nunca se agregaron a `@ai-staffing-os/shared` -- mismo criterio que F8.2/F8.3).
+- **`lib/status.ts`** (modificado, aditivo): se agregaron los nuevos valores de estado de F8.5-F8.10 (`POSSIBLY_QUALIFIED`, `NEEDS_REVIEW`, `NOT_QUALIFIED`, `READY_FOR_REVIEW`, `HOLD`, `REMOVED`, `NEEDS_AVAILABILITY`, `READY_FOR_APPROVAL`, `APPROVED_FOR_SEND`, `CONDITIONALLY_READY`, `NOT_READY`, `HIGH`/`MEDIUM`/`LOW` de confianza) a los sets ya existentes `SUCCESS`/`WARNING`/`DANGER` -- cero valores existentes modificados, solo términos nuevos agregados.
+- Todas las acciones sensibles (calcular matching, generar shortlist/screening/interview/readiness, cambiar reviewStatus/status) están gateadas por `candidates.update`/`candidates.view` reales del usuario autenticado (`useCurrentUser().permissions`) -- si falta el permiso de view, la sección entera no se renderiza (`return null`); si falta el de update, solo los botones de escritura desaparecen (solo lectura), igual que `MatchingPanel`.
+
+### 17.2 Archivos modificados
+
+- Nuevo: `components/recruiting/RecruitingMissionPanel.tsx`, `components/recruiting/CandidatePipelineDrawer.tsx`, `components/recruiting/types.ts`, `e2e/recruiting-mission.spec.ts`.
+- Modificado: `pages/JobOrderDetail.tsx` (+2 líneas: import + `<RecruitingMissionPanel />`), `lib/status.ts` (nuevos valores de estado).
+
+### 17.3 Verificación real en navegador (Playwright, contra los dev servers ya corriendo, dev-bypass real, datos reales del seed de tenant-titan)
+
+- **Calcular Matching** en un Job Order real (`joborder-01`, Forklift Operator) → 8 candidatos reales recomendados, ordenados por score, ninguno NOT_QUALIFIED en la lista de recomendados (los NOT_QUALIFIED quedan en "no recomendados", colapsados por defecto).
+- **Generar Shortlist** desde ese ranking real → entradas reales con `rank`/`reviewStatus=DRAFT`, selector inline para cambiar estado (backend valida la transición, ver F8.7).
+- **Drawer de candidato**: Calificación muestra razones/documentos faltantes REALES del candidato (`forklift_cert`, `drug_test`); **Screening** genera un plan real con preguntas interpolando la categoría real ("Forklift Operator") y la pregunta de documentos con los keys reales faltantes; **Entrevista** genera un preview real (`READY_FOR_APPROVAL`, modalidad/ventana propuesta reales) con el aviso de PREVIEW siempre visible; **Placement Readiness** evalúa y muestra el estado real (`NEEDS_REVIEW`, coherente con los documentos faltantes) con blockers/nextBestAction reales.
+- **RBAC**: con `x-dev-user=sales`/`payroll` (sin `candidates.view`), ni "Candidate Matching & Ranking" ni "Shortlist" se renderizan -- el resto del Job Order Order (Detalles/Assignments) sigue funcionando normal. Verificado tanto manualmente (Playwright ad-hoc con route interception) como en el e2e formal.
+- **Estados vacíos**: un Job Order que nunca corrió el pipeline muestra "Todavía no se calculó el matching..."/"Sin shortlist todavía..." con los botones de acción, nunca una tabla vacía sin explicación.
+- **Dark mode**: todos los badges/cards nuevos mantienen contraste correcto (verificado con captura real en modo oscuro).
+- **Responsive**: viewport móvil (390px) -- los badges hacen wrap correctamente, el botón de acción principal permanece alcanzable sin overflow horizontal (verificado con captura real y con el e2e `toBeInViewport()`).
+- **Consola**: cero errores de JS/React en cualquiera de los flujos -- los únicos mensajes de red son 404s ESPERADOS (recursos que aún no se generaron), explícitamente filtrados/documentados, nunca errores reales.
+- **Cero efectos secundarios de negocio**: la ocupación (`workersFilled/workersNeeded`) del Job Order no cambia al usar ninguna parte del pipeline de reclutamiento (verificado en el e2e).
+
+### 17.4 Tests — 7 nuevos (e2e, todos passing en aislamiento)
+
+`e2e/recruiting-mission.spec.ts` (mismo patrón que `job-order-matching.spec.ts`, F6.7, contra dev-bypass real y `joborder-01` real): calcular matching sin errores de consola; NOT_QUALIFIED nunca en recomendados; generar shortlist real; drawer completo (calificación+screening+entrevista+readiness) contra backend real; RBAC (Payroll sin acceso, sin errores); cero creación de Assignment; mobile viewport.
+
+**Hallazgo durante la implementación (bug de test, no de producción)**: al correr la suite completa de e2e en paralelo (5 workers), el spec PRE-EXISTENTE `job-order-matching.spec.ts` (F6.7, sin relación con F8) falló por el mismo patrón ("Failed to load resource: 404" contado como error de consola en el primer load antes de correr matching por primera vez). Se confirmó mediante ejecución aislada (solo ese archivo, 1 worker, sin `recruiting-mission.spec.ts` presente) que la falla es 100% preexistente e independiente de F8.11 -- no se modificó ese archivo ni ningún código de F6, se documenta acá como hallazgo, no como regresión introducida.
+
+### 17.5 Suite completa
+
+`e2e/recruiting-mission.spec.ts` en aislamiento: 7/7 passing. Backend: sin cambios en esta subfase (F8.11 es 100% frontend) -- la suite completa de `apps/api` ya quedó verde al cierre de F8.10 (977 tests, 971 pass, 1 fail preexistente, 5 skip) y no se tocó ningún archivo de `apps/api` en F8.11. `apps/web`: typecheck limpio, lint limpio (0 errores, 2 warnings preexistentes sin relación en `toast.tsx`/`theme.tsx`), build de producción exitoso.
+
+### 17.6 Migraciones
+
+Ninguna -- F8.11 es 100% frontend, cero cambios de schema.
+
+### 17.7 Limitaciones conocidas
+
+- El nombre/apellido real del candidato no se muestra en las filas de ranking/shortlist (solo el `candidateId`, con link a `/candidates/:id` para el perfil completo) -- los endpoints de F8.6/F8.7 no devuelven `displayName` (serían campos nuevos en un DTO ya cerrado de una subfase anterior); se documenta como limitación conocida en vez de reabrir F8.6/F8.7 sin necesidad.
+- No hay reorder manual de la shortlist en la UI (coherente con la limitación ya documentada en F8.7 -- el orden viene determinista del ranking).
+- El botón "Generar preview de entrevista" usa una ventana propuesta simple por defecto (mañana+2 días, 30 min, teléfono) como punto de partida rápido -- un formulario completo para editar todos los campos (múltiples ventanas, modalidad, ubicación/enlace, participantes, restricciones) queda como mejora futura, no bloqueante (el backend ya soporta todos esos campos vía la API).
+
+### 17.8 Commit
+
+`feat: F8.11 — recruiting mission UI`.
+
+**F8.11 completo.**

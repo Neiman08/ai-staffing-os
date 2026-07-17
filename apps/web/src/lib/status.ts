@@ -15,6 +15,9 @@ const SUCCESS = new Set([
   // F6.7: matching (eligibility/availability de WorkerMatchResult)
   "ELIGIBLE",
   "AVAILABLE",
+  // F8.11: qualification/interview (F8.5/F8.9) -- estado ya aprobado/listo
+  "HIGH",
+  "APPROVED_FOR_SEND",
 ]);
 
 const WARNING = new Set([
@@ -31,6 +34,15 @@ const WARNING = new Set([
   // F6.7
   "REVIEW_REQUIRED",
   "DATE_CONFLICT",
+  // F8.11: qualification/shortlist/interview/placement readiness (F8.5-F8.10)
+  "POSSIBLY_QUALIFIED",
+  "NEEDS_REVIEW",
+  "READY_FOR_REVIEW",
+  "HOLD",
+  "NEEDS_AVAILABILITY",
+  "READY_FOR_APPROVAL",
+  "CONDITIONALLY_READY",
+  "MEDIUM",
 ]);
 
 const DANGER = new Set([
@@ -48,6 +60,11 @@ const DANGER = new Set([
   // F6.7
   "INELIGIBLE",
   "WORKER_UNAVAILABLE",
+  // F8.11: qualification/shortlist/placement readiness (F8.5/F8.7/F8.10)
+  "NOT_QUALIFIED",
+  "REMOVED",
+  "NOT_READY",
+  "LOW",
 ]);
 
 const INFO = new Set(["LEAD", "NEW", "OPEN", "DRAFT", "SCHEDULED", "MANUAL", "FULL_AUTO", "SENT"]);
