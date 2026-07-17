@@ -451,6 +451,19 @@ export const companyValidationRecordSchema = z.object({
   // roles planificados sin match -- nunca un contacto inventado.
   contactsFound: z.number(),
   rolesWithoutContact: z.array(z.string()),
+  // F7.10: recomendación determinista, nunca crea una Opportunity
+  // automáticamente -- espejo de OpportunityRecommendationResult
+  // (apps/api/.../ceo-intelligence/opportunity-recommendation.ts).
+  opportunityRecommendation: z.object({
+    recommendation: z.enum(["CREATE_OPPORTUNITY", "INVESTIGATE_MORE", "ARCHIVE", "MANUAL_REVIEW"]),
+    score: z.number(),
+    reasons: z.array(z.string()),
+    risks: z.array(z.string()),
+    missingEvidence: z.array(z.string()),
+    nextBestAction: z.string(),
+    requiresApproval: z.literal(true),
+    recommendationVersion: z.number(),
+  }),
 });
 export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
@@ -503,6 +516,11 @@ export const discoveryExecutionReportSchema = z.object({
   contactsMediumConfidence: z.number(),
   contactsLowConfidence: z.number(),
   contactsRejected: z.number(),
+  // F7.10: agregados de Opportunity Recommendation.
+  companiesRecommendedForOpportunity: z.number(),
+  companiesRecommendedToInvestigate: z.number(),
+  companiesRecommendedToArchive: z.number(),
+  companiesRecommendedForManualReview: z.number(),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

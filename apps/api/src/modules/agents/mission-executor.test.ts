@@ -723,4 +723,40 @@ test("reporte final integra las 10 piezas: intent -> plan -> discovery -> busine
   // el agregado del reporte final (10), nunca 0 cuando sí se creó un contacto.
   const totalRanked = report.contactsHighConfidence + report.contactsMediumConfidence + report.contactsLowConfidence + report.contactsRejected;
   assert.equal(totalRanked, 1);
+
+  // Regresión: hiringSignal, rolePlan y opportunityRecommendation deben
+  // coexistir en discoveryMetadata -- un bug real encontrado durante
+  // F7.10 hacía que cada escritura pisara la anterior (company nunca se
+  // refrescaba entre updates), dejando solo la ÚLTIMA clave escrita.
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: report.createdCompanyIds[0]! } });
+  const metadata = company.discoveryMetadata as { hiringSignal?: unknown; rolePlan?: unknown; opportunityRecommendation?: unknown } | null;
+  assert.ok(metadata?.hiringSignal, "hiringSignal no debe perderse tras escrituras posteriores");
+  assert.ok(metadata?.rolePlan, "rolePlan no debe perderse tras escrituras posteriores");
+  assert.ok(metadata?.opportunityRecommendation, "opportunityRecommendation debe persistirse");
+});
+
+// ---------- F7.10: Opportunity Recommendation ----------
+
+test("opportunity recommendation: corre siempre (no depende de un paso opcional del plan), nunca crea una Opportunity", async () => {
+  const tenantId = await setupTenant("opportunity-recommendation-always");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const report = await runWithHiring(tenantId, manufacturingPlan({ steps: ["discover_companies"] }), providers, NO_OP_WEBSITE_INTELLIGENCE);
+
+  const rec = report.companyValidations[0]!.opportunityRecommendation;
+  assert.ok(rec);
+  assert.equal(rec.requiresApproval, true);
+  assert.ok(["CREATE_OPPORTUNITY", "INVESTIGATE_MORE", "ARCHIVE", "MANUAL_REVIEW"].includes(rec.recommendation));
+
+  const opportunities = await prisma.opportunity.count({ where: { companyId: report.createdCompanyIds[0]! } });
+  assert.equal(opportunities, 0);
+});
+
+test("opportunity recommendation: evidencia debil (sin email, sin señales) nunca recomienda CREATE_OPPORTUNITY", async () => {
+  const tenantId = await setupTenant("opportunity-recommendation-weak");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture({ name: "Weak Evidence Co" })]) });
+  const report = await runWithHiring(tenantId, manufacturingPlan({ steps: ["discover_companies"] }), providers, NO_OP_WEBSITE_INTELLIGENCE);
+
+  const rec = report.companyValidations[0]!.opportunityRecommendation;
+  assert.notEqual(rec.recommendation, "CREATE_OPPORTUNITY");
+  assert.ok(rec.risks.length > 0);
 });

@@ -492,6 +492,16 @@ const HIRING_STATUS_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   UNKNOWN: "neutral",
 };
 
+// F7.10: badges de Opportunity Recommendation -- nunca implica que la
+// Opportunity ya se creó, solo qué recomienda el sistema (el CEO
+// humano decide, ver F7.11).
+const OPPORTUNITY_RECOMMENDATION_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  CREATE_OPPORTUNITY: "success",
+  INVESTIGATE_MORE: "warning",
+  MANUAL_REVIEW: "warning",
+  ARCHIVE: "danger",
+};
+
 /**
  * F7.4: "Validación" — Business Validation (Parte A) + Email Trust
  * (Parte B) por cada Company realmente creada por esta misión. Presente
@@ -548,6 +558,17 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
             {v.rolesWithoutContact.length > 0 && (
               <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Sin contacto identificado: {v.rolesWithoutContact.join(", ")}</p>
             )}
+            <div className="mt-1.5 flex items-center gap-2">
+              <Badge variant={OPPORTUNITY_RECOMMENDATION_VARIANTS[v.opportunityRecommendation.recommendation] ?? "neutral"}>
+                {formatStatusLabel(v.opportunityRecommendation.recommendation)}
+              </Badge>
+              <span className="text-[11px] text-muted-foreground">
+                {v.opportunityRecommendation.nextBestAction}
+              </span>
+            </div>
+            {v.opportunityRecommendation.risks.length > 0 && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Riesgos: {v.opportunityRecommendation.risks.join(" ")}</p>
+            )}
           </div>
         ))}
       </div>
@@ -578,6 +599,14 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
           <span>Media: {report.contactsMediumConfidence}</span>
           <span>Baja: {report.contactsLowConfidence}</span>
           <span>Rechazados: {report.contactsRejected}</span>
+        </div>
+      )}
+      {report.companyValidations.length > 0 && (
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <span>Recomendación — Crear Opportunity: {report.companiesRecommendedForOpportunity}</span>
+          <span>Investigar más: {report.companiesRecommendedToInvestigate}</span>
+          <span>Archivar: {report.companiesRecommendedToArchive}</span>
+          <span>Revisión manual: {report.companiesRecommendedForManualReview}</span>
         </div>
       )}
     </div>

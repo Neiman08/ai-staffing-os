@@ -771,3 +771,49 @@ No aplica — el fix es de control de flujo puro (comparación de un booleano ya
 `feat: F7.9 — propagate cancellation across paid steps and complete mission report`.
 
 **F7.9 completo.**
+
+---
+
+## 22. Resultado de F7.10 — Opportunity Recommendation (sin creación automática)
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+### 22.1 Arquitectura
+
+- **`opportunity-recommendation.ts`** (`ceo-intelligence/`, puro) — `recommendOpportunityAction()`: combina TODA la evidencia ya reunida por F7.4-F7.8 (business confidence, email válido, hiring status, contactos encontrados + su mejor tier de ranking, roles sin contacto) en una recomendación de 4 estados cerrados: `CREATE_OPPORTUNITY`, `INVESTIGATE_MORE`, `ARCHIVE`, `MANUAL_REVIEW`. `requiresApproval` es **siempre `true`** por contrato de tipos (`z.literal(true)`/`true` literal en TS) -- la función nunca crea nada, solo prepara la decisión con `score`, `reasons`, `risks`, `missingEvidence` y `nextBestAction` explícitos. Reglas críticas: `businessConfidence` `WEAK`/`REJECTED` siempre fuerza `ARCHIVE`, sin importar el resto de la evidencia.
+- **`mission-executor.ts`** — corre SIEMPRE para toda Company aceptada (a diferencia de F7.5-F7.7, no depende de un paso opcional del plan, porque Business Validation, su insumo mínimo, también corre siempre). Persiste en `Company.discoveryMetadata.opportunityRecommendation`.
+
+### 22.2 Bug real encontrado y corregido: escrituras de `discoveryMetadata` se pisaban entre sí
+
+Al conectar la tercera escritura de `discoveryMetadata` (tras `hiringSignal` de F7.5 y `rolePlan` de F7.6), un test existente (`hiring signals: CONFIRMED_HIRING se persiste...`) empezó a fallar: `metadata.hiringSignal` venía `undefined`. Causa raíz: cada uno de los tres bloques hacía `{ ...(company.discoveryMetadata as object), <clave> }`, pero `company` es la variable ORIGINAL devuelta por `persistAcceptedCandidate` -- nunca se reasignaba tras un `update()`, así que cada escritura posterior partía del mismo objeto viejo y **pisaba** la clave que el paso anterior acababa de guardar (el bug ya existía desde F7.6 para la combinación hiringSignal+rolePlan, pero ningún test verificaba ambas claves a la vez; F7.10, al correr siempre, lo hizo visible de inmediato). Corregido con un acumulador local (`currentDiscoveryMetadata`) que se actualiza y se usa en las tres escrituras -- nunca más una lee un estado desactualizado. Test de regresión agregado verificando que `hiringSignal`, `rolePlan` y `opportunityRecommendation` coexisten en la misma fila.
+
+### 22.3 Contratos
+
+`CompanyValidationRecord.opportunityRecommendation` (siempre presente, nunca null). `DiscoveryExecutionReport` ganó 4 agregados: `companiesRecommendedForOpportunity`/`ToInvestigate`/`ToArchive`/`ForManualReview` -- nunca cuentan Opportunities reales creadas (eso no ocurre nunca automáticamente), solo cuántas Companies recibieron cada recomendación. Espejo Zod en `packages/shared`.
+
+### 22.4 UI
+
+Extendida la sección "Validación": cada Company muestra un badge de recomendación (verde=crear, ámbar=investigar/revisión manual, rojo=archivar) junto al `nextBestAction` en texto, y los riesgos si los hay. Agregado de misión con el conteo de cada recomendación.
+
+### 22.5 Tests — 14 nuevos (todos passing)
+
+`opportunity-recommendation.test.ts` (12): evidencia fuerte y completa -> `CREATE_OPPORTUNITY`; `businessConfidence` `WEAK`/`REJECTED` siempre `ARCHIVE` sin importar el resto; sin contactos/señal -> nunca `CREATE_OPPORTUNITY`; único contacto rechazado por el ranking -> nunca `CREATE_OPPORTUNITY`; roles sin contacto como riesgo explícito; `missingEvidence` combina lo ya reportado por F7.4 con los gaps nuevos; score acotado [0,1]; solo las 4 acciones cerradas; determinismo; versión estable; `nextBestAction` siempre no vacío. `mission-executor.test.ts` (+2): corre siempre (no depende de un paso opcional), nunca crea una Opportunity real; evidencia débil nunca recomienda crear.
+
+### 22.6 Suite completa
+
+773 tests, 767 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`), 5 skip (4 gateados por el fix de real-provider-tests + 1 preexistente sin relación).
+
+### 22.7 Prueba real controlada
+
+No aplica — módulo puro, sin proveedor externo, sin costo.
+
+### 22.8 Limitaciones conocidas
+
+- El umbral de score (0.75 para `CREATE_OPPORTUNITY`, 0.45 para `INVESTIGATE_MORE`) es una heurística fija, no calibrada contra resultados comerciales reales -- decisión conservadora documentada, ajustable en el futuro con datos reales de conversión.
+- La recomendación se calcula una sola vez, al momento del descubrimiento -- si la evidencia mejora después (ej. F4.7 verifica un email más tarde), la recomendación no se recalcula automáticamente.
+
+### 22.9 Commit
+
+`feat: F7.10 — opportunity recommendation`.
+
+**F7.10 completo.**

@@ -28,6 +28,7 @@ import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } f
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { enrichCompanyWithDecisionContacts, type ContactProviderPort } from "./contact-enrichment";
+import { recommendOpportunityAction, type OpportunityRecommendationResult, type BestContactRankingTier } from "../ceo-intelligence/opportunity-recommendation";
 
 /**
  * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
@@ -162,6 +163,10 @@ export interface CompanyValidationRecord {
   // inventa un contacto de relleno para esos roles.
   contactsFound: number;
   rolesWithoutContact: string[];
+  // F7.10: recomendación determinista sobre qué hacer con esta Company
+  // -- NUNCA crea una Opportunity automáticamente, solo la prepara para
+  // que el CEO (humano) decida (requiresApproval siempre true).
+  opportunityRecommendation: OpportunityRecommendationResult;
 }
 
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
@@ -233,6 +238,13 @@ export interface DiscoveryExecutionReport {
   contactsMediumConfidence: number;
   contactsLowConfidence: number;
   contactsRejected: number;
+  // F7.10: agregados de Opportunity Recommendation -- nunca cuenta
+  // Opportunities realmente creadas (eso nunca ocurre automáticamente),
+  // solo cuántas Companies recibieron cada recomendación.
+  companiesRecommendedForOpportunity: number;
+  companiesRecommendedToInvestigate: number;
+  companiesRecommendedToArchive: number;
+  companiesRecommendedForManualReview: number;
 }
 
 interface FinalQuery {
@@ -452,6 +464,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     contactsMediumConfidence: 0,
     contactsLowConfidence: 0,
     contactsRejected: 0,
+    companiesRecommendedForOpportunity: 0,
+    companiesRecommendedToInvestigate: 0,
+    companiesRecommendedToArchive: 0,
+    companiesRecommendedForManualReview: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -535,6 +551,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let contactsMediumConfidenceTotal = 0;
   let contactsLowConfidenceTotal = 0;
   let contactsRejectedTotal = 0;
+  let companiesRecommendedForOpportunityTotal = 0;
+  let companiesRecommendedToInvestigateTotal = 0;
+  let companiesRecommendedToArchiveTotal = 0;
+  let companiesRecommendedForManualReviewTotal = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -712,6 +732,15 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         acceptedResults += 1;
         record.acceptedCount += 1;
 
+        // F7.10 fix: los pasos F7.5/F7.6/F7.10 escriben cada uno su
+        // propia clave en Company.discoveryMetadata -- `company` nunca
+        // se refresca tras un update, así que sin este acumulador
+        // local cada escritura pisaba la anterior (ej. rolePlan
+        // borraba hiringSignal, opportunityRecommendation borraba
+        // ambos). Se mantiene una única fuente de verdad en memoria y
+        // se persiste completa en cada paso.
+        let currentDiscoveryMetadata = (company.discoveryMetadata as object | null) ?? {};
+
         // F7.4 Parte B, pasos 7-10 del pipeline: inspeccionar website ->
         // extraer emails -> validar -> persistir CompanyContactPoint —
         // solo para Companies genuinamente nuevas (no se re-enriquece
@@ -765,12 +794,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           hiringSignalsChecked += 1;
           hiringStatusCounts[hiringSignal.hiringStatus] = (hiringStatusCounts[hiringSignal.hiringStatus] ?? 0) + 1;
           for (const warning of hiringSignal.warnings) validationWarnings.add(warning);
-          // `company.discoveryMetadata` ya trae el objeto que
-          // persistAcceptedCandidate acaba de escribir (Prisma devuelve
-          // la fila creada) -- se extiende in-memory, sin un fetch extra.
+          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, hiringSignal };
           await scopedDb.company.update({
             where: { id: company.id },
-            data: { discoveryMetadata: { ...(company.discoveryMetadata as object), hiringSignal } as never },
+            data: { discoveryMetadata: currentDiscoveryMetadata as never },
           });
         }
 
@@ -790,9 +817,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             missionExclusions: params.plan.exclusions,
           });
           rolePlansBuilt += 1;
+          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, rolePlan };
           await scopedDb.company.update({
             where: { id: company.id },
-            data: { discoveryMetadata: { ...(company.discoveryMetadata as object), rolePlan } as never },
+            data: { discoveryMetadata: currentDiscoveryMetadata as never },
           });
         }
 
@@ -803,6 +831,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         // siquiera llama al proveedor (costo real $0 en ese caso).
         let contactsFoundForCompany = 0;
         let rolesWithoutContactForCompany: string[] = [];
+        let bestContactRankingTierForCompany: BestContactRankingTier = null;
         if (!cancelled && rolePlan && rolePlan.targetRoles.length > 0) {
           const contactEnrichment = await enrichCompanyWithDecisionContacts({
             taskId: childTask.id,
@@ -826,11 +855,20 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           contactsFoundForCompany = contactEnrichment.contactsCreated.length;
           rolesWithoutContactForCompany = contactEnrichment.rolesWithoutContact;
           if (contactsFoundForCompany > 0) companiesWithContactsFoundTotal += 1;
+          const tierRank: Record<Exclude<BestContactRankingTier, null>, number> = {
+            HIGH_CONFIDENCE: 3,
+            MEDIUM_CONFIDENCE: 2,
+            LOW_CONFIDENCE: 1,
+            REJECTED: 0,
+          };
           for (const created of contactEnrichment.contactsCreated) {
             if (created.rankingTier === "HIGH_CONFIDENCE") contactsHighConfidenceTotal += 1;
             else if (created.rankingTier === "MEDIUM_CONFIDENCE") contactsMediumConfidenceTotal += 1;
             else if (created.rankingTier === "LOW_CONFIDENCE") contactsLowConfidenceTotal += 1;
             else if (created.rankingTier === "REJECTED") contactsRejectedTotal += 1;
+            if (bestContactRankingTierForCompany === null || tierRank[created.rankingTier] > tierRank[bestContactRankingTierForCompany]) {
+              bestContactRankingTierForCompany = created.rankingTier;
+            }
           }
           for (const failure of contactEnrichment.patternsFailed) validationWarnings.add(failure);
           // F7.9: misma razón que enrichment.cancelled arriba -- People
@@ -842,6 +880,31 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             stopReason = "cancelled";
           }
         }
+
+        // F7.10: Opportunity Recommendation -- combina TODA la evidencia
+        // ya reunida arriba en una recomendación auditable. Corre
+        // siempre (a diferencia de F7.5-F7.7, no depende de un paso
+        // opcional del plan) porque Business Validation (F7.4) también
+        // corre siempre. Nunca crea una Opportunity -- requiresApproval
+        // siempre true, la decisión real queda para el CEO humano.
+        const opportunityRecommendation = recommendOpportunityAction({
+          businessConfidence: validation.confidence,
+          missingEvidence: validation.missingEvidence,
+          hasValidEmail,
+          hiringStatus: hiringSignal?.hiringStatus ?? null,
+          contactsFound: contactsFoundForCompany,
+          bestContactRankingTier: bestContactRankingTierForCompany,
+          rolesWithoutContact: rolesWithoutContactForCompany,
+        });
+        if (opportunityRecommendation.recommendation === "CREATE_OPPORTUNITY") companiesRecommendedForOpportunityTotal += 1;
+        else if (opportunityRecommendation.recommendation === "INVESTIGATE_MORE") companiesRecommendedToInvestigateTotal += 1;
+        else if (opportunityRecommendation.recommendation === "ARCHIVE") companiesRecommendedToArchiveTotal += 1;
+        else if (opportunityRecommendation.recommendation === "MANUAL_REVIEW") companiesRecommendedForManualReviewTotal += 1;
+        currentDiscoveryMetadata = { ...currentDiscoveryMetadata, opportunityRecommendation };
+        await scopedDb.company.update({
+          where: { id: company.id },
+          data: { discoveryMetadata: currentDiscoveryMetadata as never },
+        });
 
         companyValidations.push({
           companyId: company.id,
@@ -864,6 +927,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           rolePlan,
           contactsFound: contactsFoundForCompany,
           rolesWithoutContact: rolesWithoutContactForCompany,
+          opportunityRecommendation,
         });
         // F7.9: cortar el loop de candidatos de ESTA query inmediatamente
         // al detectar cancelación -- sin este break, el resto de
@@ -952,6 +1016,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     contactsMediumConfidence: contactsMediumConfidenceTotal,
     contactsLowConfidence: contactsLowConfidenceTotal,
     contactsRejected: contactsRejectedTotal,
+    companiesRecommendedForOpportunity: companiesRecommendedForOpportunityTotal,
+    companiesRecommendedToInvestigate: companiesRecommendedToInvestigateTotal,
+    companiesRecommendedToArchive: companiesRecommendedToArchiveTotal,
+    companiesRecommendedForManualReview: companiesRecommendedForManualReviewTotal,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,
