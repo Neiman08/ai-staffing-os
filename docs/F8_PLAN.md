@@ -560,3 +560,15 @@ Ninguna -- F8.11 es 100% frontend, cero cambios de schema.
 `feat: F8.11 — recruiting mission UI`.
 
 **F8.11 completo.**
+
+## 18. Resultado de F8.12 — Hardening y cierre F8
+
+Auditoría completa F8.1-F8.11 (schemas versionados, idempotencia, retry safety, RBAC, tenancy, audit logs, migraciones, validación de inputs, error handling, accesibilidad básica, E2E) -- ver el detalle completo en `docs/F8_FINAL_REPORT.md` (17 secciones: resumen ejecutivo, arquitectura, subfases, endpoints, modelos/migraciones, UI, RBAC, tenancy, audit logs, tests, bugs encontrados, deuda técnica, decisiones pendientes, riesgos, limitaciones, estado real, recomendación F9).
+
+Verificación final: suite completa de `apps/api` (977 tests, 971 pass, 1 fail preexistente confirmado no relacionado, 5 skip), suite e2e completa de `apps/web` (26 tests, 25 pass, 1 fail preexistente confirmado reproducible sin código de F8), typecheck y lint limpios en ambos paquetes. Cero migraciones destructivas en las 6 aplicadas durante F8 (verificado por grep explícito). RBAC 100% explícito en los 17 endpoints nuevos. Audit log en las 8 funciones de escritura.
+
+**Estado final: F8 COMPLETE.**
+
+`chore: F8.12 — harden and close autonomous recruiting`.
+
+**F8 completo -- F9 NO iniciado.**
