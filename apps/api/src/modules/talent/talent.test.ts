@@ -35,11 +35,14 @@ before(async () => {
 });
 
 after(async () => {
-  // F5.2/F8.2/F8.5: limpieza — todo lo creado por esta suite queda
+  // F5.2/F8.2/F8.5/F8.6: limpieza — todo lo creado por esta suite queda
   // claramente identificado (nombre/prefijo de test) y se borra al
-  // terminar. CandidateQualification tiene FKs ON DELETE RESTRICT hacia
-  // Candidate/JobOrder, así que debe borrarse primero.
+  // terminar. CandidateQualification/CandidateMatch tienen FKs ON DELETE
+  // RESTRICT hacia Candidate/JobOrder, así que deben borrarse primero.
   if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.candidateMatch.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
     await prisma.candidateQualification.deleteMany({
       where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
     });
@@ -790,6 +793,91 @@ test("persisting a qualification writes an AuditLog entry", async () => {
 
   const auditEntry = await prisma.auditLog.findFirst({
     where: { action: "candidate.qualification_evaluated", entityType: "candidate_qualification" },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.ok(auditEntry);
+});
+
+// ---------- F8.6: Matching and Ranking ----------
+
+test("POST /job-orders/:jobOrderId/matching as sales@titan.dev returns 403 (no candidates.update)", async () => {
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: SALES_HEADERS });
+  assert.equal(res.status, 403);
+});
+
+test("GET /job-orders/:jobOrderId/matching returns 404 before any matching run has been computed", async () => {
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 404);
+});
+
+test("POST computes matching: NOT_QUALIFIED (wrong category) is excluded and never ranked, qualified candidate is ranked, never changes Candidate.status", async () => {
+  const jobOrder = await createValidJobOrder();
+  const documentType = await prisma.documentType.findFirstOrThrow({ where: { key: "forklift_cert" } });
+
+  const { body: qualified } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID], state: "IL" });
+  const document = await prisma.document.create({
+    data: {
+      tenantId: (await prisma.candidate.findUniqueOrThrow({ where: { id: qualified.id } })).tenantId,
+      candidateId: qualified.id,
+      documentTypeId: documentType.id,
+      status: "VERIFIED",
+    },
+  });
+  createdDocumentIds.push(document.id);
+
+  const { body: wrongCategory } = await createValidCandidate({ categoryIds: [REAL_CATEGORY_ID] });
+
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    ranked: Array<{ candidateId: string; rank: number; qualificationStatus: string }>;
+    excluded: Array<{ candidateId: string; rank: number | null; qualificationStatus: string }>;
+  };
+
+  assert.ok(body.ranked.some((r) => r.candidateId === qualified.id && r.qualificationStatus === "QUALIFIED"));
+  assert.ok(!body.ranked.some((r) => r.candidateId === wrongCategory.id), "a NOT_QUALIFIED candidate must never appear in ranked");
+
+  const stillNew = await prisma.candidate.findUniqueOrThrow({ where: { id: qualified.id } });
+  assert.equal(stillNew.status, "NEW", "computing matching must never change Candidate.status");
+});
+
+test("POST is idempotent: re-running upserts the same CandidateMatch row instead of creating a second one", async () => {
+  const jobOrder = await createValidJobOrder();
+  const { body: candidate } = await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+
+  const firstRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(firstRes.status, 201);
+  const secondRes = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+  assert.equal(secondRes.status, 201);
+
+  const count = await prisma.candidateMatch.count({ where: { candidateId: candidate.id, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1);
+});
+
+test("GET returns the persisted ranking without recomputing, sorted by rank", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { headers: RECRUITER_HEADERS });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ranked: Array<{ rank: number }> };
+  const ranks = body.ranked.map((r) => r.rank);
+  assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b), "ranked results must come back sorted by rank ascending");
+});
+
+test("computing matching writes an AuditLog entry", async () => {
+  const jobOrder = await createValidJobOrder();
+  await createValidCandidate({ categoryIds: [REAL_FORKLIFT_CATEGORY_ID] });
+
+  await fetch(`${baseUrl}/api/v1/job-orders/${jobOrder.id}/matching`, { method: "POST", headers: RECRUITER_HEADERS });
+
+  const auditEntry = await prisma.auditLog.findFirst({
+    where: { action: "candidate.matching_computed", entityType: "job_order_matching", entityId: jobOrder.id },
     orderBy: { createdAt: "desc" },
   });
   assert.ok(auditEntry);

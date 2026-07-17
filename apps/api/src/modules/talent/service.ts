@@ -22,6 +22,12 @@ import { evaluateCandidateQualification, type QualificationEvaluationResult } fr
 import { deriveQualificationStatus, type PersistedQualificationStatus } from "../recruiting-intelligence/qualification-status";
 import { sourceCandidatesForJob, type CandidateSourcingResult } from "../recruiting-intelligence/candidate-sourcing";
 import {
+  computeCandidateMatching,
+  type CandidateForMatching,
+  type CandidateMatchResult,
+  type MatchConfidence,
+} from "../recruiting-intelligence/candidate-matching";
+import {
   normalizeCandidateEmail as normalizeEmail,
   normalizeCandidatePhone as normalizePhone,
   buildCandidateIdentityKeys,
@@ -646,6 +652,206 @@ export async function getCandidateQualification(
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
+}
+
+export interface CandidateMatchRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  qualificationStatus: PersistedQualificationStatus;
+  recommendable: boolean;
+  needsReview: boolean;
+  hardConstraints: string[];
+  softPreferences: unknown;
+  score: number;
+  normalizedScore: number;
+  rank: number | null;
+  explanation: string;
+  confidence: MatchConfidence;
+  missingData: string[];
+  risks: string[];
+  evidence: string[];
+  rulesVersion: number;
+  calculatedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CandidateMatchingApiResult {
+  jobOrderId: string;
+  ranked: CandidateMatchRecord[];
+  excluded: CandidateMatchRecord[];
+  rulesVersion: number;
+  calculatedAt: string;
+}
+
+function toCandidateMatchRecord(record: {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  qualificationStatus: string;
+  recommendable: boolean;
+  needsReview: boolean;
+  hardConstraints: string[];
+  softPreferences: unknown;
+  score: number;
+  normalizedScore: number;
+  rank: number | null;
+  explanation: string;
+  confidence: string;
+  missingData: string[];
+  risks: string[];
+  evidence: string[];
+  rulesVersion: number;
+  calculatedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}): CandidateMatchRecord {
+  return {
+    id: record.id,
+    candidateId: record.candidateId,
+    jobOrderId: record.jobOrderId,
+    qualificationStatus: record.qualificationStatus as PersistedQualificationStatus,
+    recommendable: record.recommendable,
+    needsReview: record.needsReview,
+    hardConstraints: record.hardConstraints,
+    softPreferences: record.softPreferences,
+    score: record.score,
+    normalizedScore: record.normalizedScore,
+    rank: record.rank,
+    explanation: record.explanation,
+    confidence: record.confidence as MatchConfidence,
+    missingData: record.missingData,
+    risks: record.risks,
+    evidence: record.evidence,
+    rulesVersion: record.rulesVersion,
+    calculatedAt: record.calculatedAt.toISOString(),
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F8.6: Matching and Ranking -- wiring impuro entre
+ * `recruiting-intelligence/candidate-matching.ts` (puro) y los datos
+ * reales del tenant. Reutiliza DIRECTAMENTE `runQualificationEvaluation`
+ * (F8.2/F8.5, sin duplicar su lógica) para cada candidato de la misma
+ * categoría del Job Order -- mismo filtro de categoría que F8.3
+ * (candidate-sourcing) para no evaluar el pool completo del tenant.
+ *
+ * Limitación conocida y documentada: `runQualificationEvaluation` vuelve
+ * a leer el JobOrder desde la DB en cada llamada (una por candidato) --
+ * redundante pero deliberado: reutilizar la función tal cual (en vez de
+ * duplicar su lógica de evaluación acá) es más seguro que optimizar
+ * prematuramente, dado el volumen bajo de candidatos por categoría en
+ * este CRM.
+ *
+ * Persiste un `CandidateMatch` por par (candidateId, jobOrderId) --
+ * mismo patrón de upsert-vía-findFirst que `persistCandidateQualification`
+ * (F8.5), por el mismo límite de la extensión de tenancy con claves
+ * únicas compuestas. Nunca cambia `Candidate.status`.
+ */
+export async function computeAndPersistCandidateMatching(jobOrderId: string): Promise<CandidateMatchingApiResult> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const candidates = await scopedDb.candidate.findMany({
+    where: { categories: { some: { id: jobOrder.categoryId } } },
+  });
+
+  const requiredDocumentCount = Array.isArray(jobOrder.requirements) ? jobOrder.requirements.length : 0;
+  const jobLocation = jobOrder.location as { state?: string | null } | null;
+
+  const forMatching: CandidateForMatching[] = [];
+  for (const candidate of candidates) {
+    const evaluation = await runQualificationEvaluation(candidate.id, jobOrderId);
+    const derived = deriveQualificationStatus(evaluation);
+    forMatching.push({
+      candidateId: candidate.id,
+      qualification: evaluation,
+      qualificationStatus: derived.status,
+      yearsExperience: candidate.yearsExperience,
+      state: candidate.state,
+      languages: candidate.languages,
+      candidateUpdatedAt: candidate.updatedAt,
+    });
+  }
+
+  const matching = computeCandidateMatching(forMatching, {
+    jobOrderId,
+    state: jobLocation?.state ?? null,
+    requiredDocumentCount,
+  });
+
+  const allResults: CandidateMatchResult[] = [...matching.ranked, ...matching.excluded];
+  const records: CandidateMatchRecord[] = [];
+  for (const r of allResults) {
+    const existing = await scopedDb.candidateMatch.findFirst({ where: { candidateId: r.candidateId, jobOrderId } });
+    const data = {
+      qualificationStatus: r.qualificationStatus,
+      recommendable: r.recommendable,
+      needsReview: r.needsReview,
+      hardConstraints: r.hardConstraints,
+      softPreferences: r.softPreferences as never,
+      score: r.score,
+      normalizedScore: r.normalizedScore,
+      rank: r.rank,
+      explanation: r.explanation,
+      confidence: r.confidence,
+      missingData: r.missingData,
+      risks: r.risks,
+      evidence: r.evidence,
+      rulesVersion: r.rulesVersion,
+      calculatedAt: new Date(r.calculatedAt),
+    };
+    const record = existing
+      ? await scopedDb.candidateMatch.update({ where: { id: existing.id }, data })
+      : await scopedDb.candidateMatch.create({ data: { tenantId: ctx.tenantId, candidateId: r.candidateId, jobOrderId, ...data } });
+    records.push(toCandidateMatchRecord(record));
+  }
+
+  await logAuditEvent({
+    action: "candidate.matching_computed",
+    entityType: "job_order_matching",
+    entityId: jobOrderId,
+    after: {
+      jobOrderId,
+      rankedCount: matching.ranked.length,
+      excludedCount: matching.excluded.length,
+      rulesVersion: matching.rulesVersion,
+    },
+  });
+
+  return {
+    jobOrderId,
+    ranked: records.filter((r) => r.rank !== null).sort((a, b) => a.rank! - b.rank!),
+    excluded: records.filter((r) => r.rank === null),
+    rulesVersion: matching.rulesVersion,
+    calculatedAt: matching.calculatedAt,
+  };
+}
+
+/**
+ * Lee el matching YA persistido para un Job Order -- nunca recalcula.
+ * 404 si nunca se corrió `computeAndPersistCandidateMatching`.
+ */
+export async function getPersistedCandidateMatching(jobOrderId: string): Promise<CandidateMatchingApiResult> {
+  const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, select: { id: true } });
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const records = await scopedDb.candidateMatch.findMany({ where: { jobOrderId } });
+  if (records.length === 0) throw AppError.notFound("No matching run found for this Job Order");
+
+  const mapped = records.map(toCandidateMatchRecord);
+  const ranked = mapped.filter((r) => r.rank !== null).sort((a, b) => a.rank! - b.rank!);
+  const excluded = mapped.filter((r) => r.rank === null);
+  const rulesVersion = mapped[0]?.rulesVersion ?? 0;
+  const calculatedAt = mapped.reduce((latest, r) => (r.calculatedAt > latest ? r.calculatedAt : latest), mapped[0]!.calculatedAt);
+
+  return { jobOrderId, ranked, excluded, rulesVersion, calculatedAt };
 }
 
 /**

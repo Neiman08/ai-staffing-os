@@ -840,6 +840,7 @@ model Candidate {
   documents       Document[]
   worker          Worker?
   qualifications  CandidateQualification[]
+  matches         CandidateMatch[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -910,6 +911,7 @@ model JobOrder {
   assignments      Assignment[]
   pricingScenarios PricingScenario[]
   qualifications   CandidateQualification[]
+  matches          CandidateMatch[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -942,6 +944,53 @@ model CandidateQualification {
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, status])
+}
+
+// F8.6: nivel de confianza del match -- basado en cuánta información
+// clave falta del perfil del candidato (missingData), no en el score en
+// sí. Enum separado de RiskLevel (ya existe, pero se usa para otro
+// dominio -- urgencia de JobOrder) para no acoplar conceptos distintos.
+enum MatchConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// F8.6: resultado ACTUAL de matching/ranking de UN Candidate contra UN
+// JobOrder (etapa de reclutamiento) -- mismo patrón que
+// CandidateQualification (un registro por par, upsert en cada
+// recálculo, historial vía AuditLog). `softPreferences` es Json porque
+// es un arreglo de factores heterogéneo (key/label/maxWeight/score/
+// evidence) -- mismo criterio ya usado para JobOrder.requirements y
+// AgentTask.output. `rank` es null para candidatos NOT_QUALIFIED
+// (excluidos, nunca aparecen en un ranking).
+model CandidateMatch {
+  id                  String              @id @default(cuid())
+  tenantId            String
+  candidateId         String
+  candidate           Candidate           @relation(fields: [candidateId], references: [id])
+  jobOrderId          String
+  jobOrder            JobOrder            @relation(fields: [jobOrderId], references: [id])
+  qualificationStatus QualificationStatus
+  recommendable       Boolean
+  needsReview         Boolean
+  hardConstraints     String[]            @default([])
+  softPreferences     Json
+  score               Float
+  normalizedScore     Float
+  rank                Int?
+  explanation         String
+  confidence          MatchConfidence
+  missingData         String[]            @default([])
+  risks               String[]            @default([])
+  evidence            String[]            @default([])
+  rulesVersion        Int
+  calculatedAt        DateTime
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId, rank])
 }
 
 model Project {

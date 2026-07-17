@@ -162,3 +162,30 @@ talentRouter.get(
     }
   },
 );
+
+// F8.6: Matching and Ranking -- POST calcula Y persiste (upsert) el
+// ranking completo; requiere update porque escribe. GET solo lee lo ya
+// persistido, sin recalcular.
+talentRouter.post(
+  "/job-orders/:jobOrderId/matching",
+  requireAllPermissions(["candidates.update", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await talentService.computeAndPersistCandidateMatching(req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+talentRouter.get(
+  "/job-orders/:jobOrderId/matching",
+  requireAllPermissions(["candidates.view", "jobOrders.view"]),
+  async (req, res, next) => {
+    try {
+      res.json(await talentService.getPersistedCandidateMatching(req.params.jobOrderId!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);

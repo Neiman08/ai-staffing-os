@@ -262,3 +262,54 @@ Ninguna en esta subfase -- igual que F8.1-F8.4, se surfacea en F8.11.
 `feat: F8.5 — persisted qualification status with auditable reasons`.
 
 **F8.5 completo.**
+
+## 12. Resultado de F8.6 — Matching and Ranking
+
+### 12.1 Decisión de arquitectura (documentada antes de implementar)
+
+Auditoría previa: `matching/scoring.ts` (F6.3) puntúa `Worker` YA contratados -- requiere `complianceStatus`, `defaultPayRate`, `assignmentHistory` y disponibilidad por fechas de `Assignment`, ninguno de los cuales existe para un `Candidate` en etapa de reclutamiento (anterior a convertirse en `Worker`, mismo criterio ya establecido en F8.2). Extender/reescribir ese motor habría exigido fabricar valores falsos para esos campos -- inventar datos en un score que se presenta como real, explícitamente prohibido por la autorización de esta sesión. **Decisión (conservadora, documentada, no una reescritura innecesaria)**: nuevo módulo puro `recruiting-intelligence/candidate-matching.ts` que REUTILIZA el patrón arquitectónico de F6.3 (constraints duros antes de puntuar, factores blandos ponderados con evidencia, empate determinista) y REUTILIZA DIRECTAMENTE -- sin duplicar -- la salida ya calculada por F8.2 (`QualificationEvaluationResult`) y F8.5 (`PersistedQualificationStatus`) como únicos insumos de "hard constraints". `matching/scoring.ts` queda sin tocar.
+
+### 12.2 Arquitectura
+
+- **`recruiting-intelligence/candidate-matching.ts`** (nuevo, puro): `computeCandidateMatch()` (un candidato) + `computeCandidateMatching()` (batch, rankea). 5 factores blandos ponderados sumando 100 (documentReadiness 30, experience 25, location 20, languages 15, dataRecency 10 -- fórmulas mirror de F6.3 donde aplica, adaptadas a los datos disponibles de un Candidate pre-hire). Un candidato `NOT_QUALIFIED` nunca se puntúa parcialmente: score 0, `rank: null`, va a `excluded`, nunca a `ranked`. `NEEDS_REVIEW` rankea normal con `needsReview: true`. `POSSIBLY_QUALIFIED` rankea con sus gaps listados en `risks`. Empate resuelto por `normalizedScore` desc, luego `candidateId` asc.
+- **Nuevo modelo `CandidateMatch`** (schema, aditivo, mismo patrón que `CandidateQualification`): un registro por par `(candidateId, jobOrderId)`, `softPreferences` en `Json` (arreglo heterogéneo de factores, mismo criterio que `JobOrder.requirements`/`AgentTask.output`).
+- **`talent/service.ts` → `computeAndPersistCandidateMatching()`** (impuro, nuevo): filtra candidatos por la categoría del Job Order (mismo criterio que F8.3), reutiliza `runQualificationEvaluation` (F8.2, sin duplicar) por candidato, deriva estado (F8.5, sin duplicar), calcula el ranking y hace upsert de un `CandidateMatch` por candidato. **`getPersistedCandidateMatching()`** (nuevo): solo lee lo ya persistido, nunca recalcula.
+- Mismo workaround ya documentado en F8.5 para el constraint único compuesto (`findFirst` por campos planos + `update`/`create` por `id`, nunca `upsert`/`findUnique` con el nombre compuesto).
+- **`POST /job-orders/:jobOrderId/matching`** (nuevo, `candidates.update`+`jobOrders.view`, calcula y persiste) y **`GET /job-orders/:jobOrderId/matching`** (nuevo, `candidates.view`+`jobOrders.view`, solo lectura, 404 si nunca se corrió).
+
+### 12.3 Archivos modificados
+
+- Nuevo: `candidate-matching.ts`, `candidate-matching.test.ts`, migración `20260717130000_f8_6_candidate_matching`.
+- Modificado: `schema.prisma` (enum `MatchConfidence` + modelo `CandidateMatch` + back-relations), `core/tenancy/prisma-extension.ts` (+1 línea), `talent/service.ts`, `talent/router.ts`, `talent/talent.test.ts`.
+
+### 12.4 Contratos
+
+DTOs locales al service (mismo criterio que F8.2/F8.3/F8.5, sin cambios en `@ai-staffing-os/shared`). `POST` devuelve 201 con `{ jobOrderId, ranked[], excluded[], rulesVersion, calculatedAt }`; cada item incluye `candidateId/qualificationStatus/recommendable/needsReview/hardConstraints/softPreferences/score/normalizedScore/rank/explanation/confidence/missingData/risks/evidence/rulesVersion/calculatedAt`.
+
+### 12.5 UI
+
+Ninguna en esta subfase -- se surfacea en F8.11.
+
+### 12.6 Tests — 25 nuevos (todos passing)
+
+`candidate-matching.test.ts` (19): pesos suman 100; NOT_QUALIFIED nunca recomendable/rankeado/puntuado; NEEDS_REVIEW/POSSIBLY_QUALIFIED/QUALIFIED se comportan según la regla; cada factor blando aislado (documentReadiness, experience, location, languages, dataRecency); missingData/confidence; hardConstraints pasa sin re-derivar; evidence auditable; determinismo (mismo input -> mismo output); empate resuelto por candidateId; fairness (ninguna clave del input/output referencia un atributo protegido). `talent.test.ts` (+6): RBAC 403; NOT_QUALIFIED excluido nunca rankeado + `Candidate.status` intacto; idempotencia (upsert, nunca duplica fila); GET lee lo persistido ordenado por rank; AuditLog escrito.
+
+### 12.7 Suite completa
+
+880 tests, 874 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 12.8 Migraciones
+
+`20260717130000_f8_6_candidate_matching` -- 100% aditiva: 1 enum nuevo (`MatchConfidence`), 1 tabla nueva (`CandidateMatch`) con 2 FKs (`ON DELETE RESTRICT`, mismo default que F8.5), 1 índice compuesto, 1 índice único compuesto. Cero columnas nuevas en tablas existentes.
+
+### 12.9 Limitaciones conocidas
+
+- `computeAndPersistCandidateMatching` vuelve a leer el `JobOrder` desde la DB en cada llamada a `runQualificationEvaluation` (una por candidato) -- redundante pero deliberado: reutilizar la función tal cual es más seguro que duplicar su lógica para optimizar, dado el volumen bajo de candidatos por categoría en este CRM.
+- El filtro de candidatos es por categoría exacta (mismo criterio que F8.3) -- un candidato sin ninguna categoría asociada al Job Order nunca se evalúa ni aparece en `excluded`, ni siquiera con razón "category_mismatch" (evita evaluar el pool completo del tenant en cada corrida).
+- Las FKs son `ON DELETE RESTRICT` -- mismo tradeoff ya documentado en F8.5 (preferir un borrado explícito primero antes que perder auditoría con cascada silenciosa).
+
+### 12.10 Commit
+
+`feat: F8.6 — candidate matching and ranking`.
+
+**F8.6 completo.**
