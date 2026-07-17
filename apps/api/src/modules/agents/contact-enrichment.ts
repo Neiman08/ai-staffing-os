@@ -10,6 +10,7 @@ import { mapTitleToDecisionRole, computeContactConfidenceScore } from "./tools/c
 import { matchTitleToPlannedRole } from "../ceo-intelligence/contact-role-match";
 import { validateEmailTrust } from "../ceo-intelligence/email-trust";
 import type { DecisionRolePlan } from "../ceo-intelligence/role-planning";
+import { rankContact, classifyAuthorityLevel } from "../ceo-intelligence/contact-ranking";
 import type { ProviderStatusValue } from "@ai-staffing-os/agents";
 
 /**
@@ -69,6 +70,9 @@ export interface CreatedContactRecord {
   matchedRole: string;
   confidenceScore: number;
   emailDomainTrust: "VERIFIED" | "RISKY" | "INVALID" | "UNKNOWN" | null;
+  // F7.8
+  rankingTier: "HIGH_CONFIDENCE" | "MEDIUM_CONFIDENCE" | "LOW_CONFIDENCE" | "REJECTED";
+  rankingScore: number;
 }
 
 export interface ContactEnrichmentReport {
@@ -211,6 +215,25 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
     const phone = candidate.fields.phone?.status === "CONFIRMED" ? (candidate.fields.phone.value as string) : null;
     const decisionRole = mapTitleToDecisionRole(candidate.title);
 
+    // F7.8: Contact Verification and Ranking -- determinista, calculado
+    // con la MISMA evidencia ya reunida acá (nunca una segunda pasada ni
+    // un dato adicional inventado). companyMatch: true -- la búsqueda de
+    // PDL ya estaba escopeada a esta Company por nombre (people-data-labs.ts).
+    const now = new Date();
+    const rolePriority = params.rolePlan!.targetRoles.find((r) => r.role === matchedRole)?.priority ?? null;
+    const ranking = rankContact({
+      companyMatch: true,
+      domainTrust: emailDomainTrust,
+      roleMatch: true,
+      rolePriority,
+      authorityLevel: classifyAuthorityLevel(decisionRole),
+      emailVerificationStatus: "NOT_VERIFIED",
+      discoveryConfidenceScore: confidenceScore,
+      providerStatus: result.providerStatus,
+      discoveredAt: now,
+      now,
+    });
+
     const contact = await scopedDb.contact.create({
       data: {
         tenantId: ctx.tenantId,
@@ -224,9 +247,13 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
         decisionRole: decisionRole as never,
         source: "People Data Labs",
         confidenceScore,
-        discoveredAt: new Date(),
+        discoveredAt: now,
         discoveredByAgentTaskId: params.taskId,
         verificationStatus: "CONFIRMED",
+        rankingTier: ranking.tier,
+        rankingScore: ranking.score,
+        rankingReasons: ranking.reasons,
+        rankedAt: now,
       },
     });
 
@@ -239,7 +266,7 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
       after: { firstName: candidate.firstName, lastName: candidate.lastName, title: candidate.title, matchedRole, confidenceScore },
     });
 
-    log(params.taskId, "contact persisted", { contactId: contact.id, matchedRole, confidenceScore });
+    log(params.taskId, "contact persisted", { contactId: contact.id, matchedRole, confidenceScore, rankingTier: ranking.tier, rankingScore: ranking.score });
     contactsCreated.push({
       contactId: contact.id,
       firstName: candidate.firstName,
@@ -248,6 +275,8 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
       matchedRole,
       confidenceScore,
       emailDomainTrust,
+      rankingTier: ranking.tier,
+      rankingScore: ranking.score,
     });
   }
 

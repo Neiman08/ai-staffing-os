@@ -183,6 +183,10 @@ export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
       emailConfidenceScore: c.emailConfidenceScore,
       emailVerifiedAt: c.emailVerifiedAt?.toISOString() ?? null,
       doNotContact: c.doNotContact,
+      rankingTier: c.rankingTier,
+      rankingScore: c.rankingScore,
+      rankingReasons: c.rankingReasons,
+      rankedAt: c.rankedAt?.toISOString() ?? null,
     })),
     opportunities: company.opportunities.map((o) => ({
       id: o.id,
@@ -295,6 +299,7 @@ export async function listContacts(query: ContactQuery): Promise<Paginated<Conta
       verificationStatus: query.verificationStatus,
       emailVerificationStatus: query.emailVerificationStatus,
       confidenceScore: query.minConfidence != null ? { gte: query.minConfidence } : undefined,
+      rankingTier: query.rankingTier, // F7.8
       company: {
         state: query.companyState,
         industry: query.industryName ? { name: query.industryName } : undefined,
@@ -329,6 +334,10 @@ export async function listContacts(query: ContactQuery): Promise<Paginated<Conta
       emailConfidenceScore: c.emailConfidenceScore,
       emailVerifiedAt: c.emailVerifiedAt?.toISOString() ?? null,
       doNotContact: c.doNotContact,
+      rankingTier: c.rankingTier,
+      rankingScore: c.rankingScore,
+      rankingReasons: c.rankingReasons,
+      rankedAt: c.rankedAt?.toISOString() ?? null,
       companyId: c.companyId,
       companyName: c.company.name,
       industryName: c.company.industry.name,

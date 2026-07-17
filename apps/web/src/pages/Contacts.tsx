@@ -38,11 +38,21 @@ const CONFIDENCE_FLOORS = [
   { label: "≥ 70%", value: "0.7" },
   { label: "≥ 90%", value: "0.9" },
 ];
+// F7.8: Contact Verification and Ranking.
+const RANKING_TIERS = ["HIGH_CONFIDENCE", "MEDIUM_CONFIDENCE", "LOW_CONFIDENCE", "REJECTED"];
 
 function emailVerificationBadgeVariant(status: string): "success" | "warning" | "danger" | "neutral" {
   if (status === "VERIFIED") return "success";
   if (status === "RISKY" || status === "UNKNOWN") return "warning";
   if (status === "INVALID") return "danger";
+  return "neutral";
+}
+
+function rankingTierBadgeVariant(tier: string | null): "success" | "warning" | "danger" | "neutral" {
+  if (tier === "HIGH_CONFIDENCE") return "success";
+  if (tier === "MEDIUM_CONFIDENCE") return "warning";
+  if (tier === "LOW_CONFIDENCE") return "warning";
+  if (tier === "REJECTED") return "danger";
   return "neutral";
 }
 
@@ -54,6 +64,7 @@ interface ContactFilters {
   emailVerificationStatus: string;
   minConfidence: string;
   companyName: string;
+  rankingTier: string;
 }
 
 const EMPTY_FILTERS: ContactFilters = {
@@ -64,6 +75,7 @@ const EMPTY_FILTERS: ContactFilters = {
   emailVerificationStatus: "",
   minConfidence: "",
   companyName: "",
+  rankingTier: "",
 };
 
 export default function Contacts() {
@@ -89,6 +101,7 @@ export default function Contacts() {
   if (filters.emailVerificationStatus) queryParams.set("emailVerificationStatus", filters.emailVerificationStatus);
   if (filters.minConfidence) queryParams.set("minConfidence", filters.minConfidence);
   if (filters.companyName) queryParams.set("companyName", filters.companyName);
+  if (filters.rankingTier) queryParams.set("rankingTier", filters.rankingTier);
   if (excludeDemo) queryParams.set("excludeDemo", "true");
 
   const { data, isLoading } = useQuery({
@@ -197,6 +210,17 @@ export default function Contacts() {
               onChange={(e) => updateFilter("companyName", e.target.value)}
             />
           </div>
+          <div>
+            <Label>Ranking</Label>
+            <Select value={filters.rankingTier} onChange={(e) => updateFilter("rankingTier", e.target.value)}>
+              <option value="">Todos</option>
+              {RANKING_TIERS.map((t) => (
+                <option key={t} value={t}>
+                  {formatStatusLabel(t)}
+                </option>
+              ))}
+            </Select>
+          </div>
         </CardContent>
       </Card>
 
@@ -216,6 +240,7 @@ export default function Contacts() {
                 <TableHead>LinkedIn</TableHead>
                 <TableHead>Confidence</TableHead>
                 <TableHead>Estado</TableHead>
+                <TableHead>Ranking</TableHead>
                 <TableHead>Fuente</TableHead>
                 <TableHead>Fecha</TableHead>
               </TableRow>
@@ -287,6 +312,16 @@ export default function Contacts() {
                       {formatStatusLabel(contact.verificationStatus)}
                     </Badge>
                   </TableCell>
+                  <TableCell>
+                    {contact.rankingTier ? (
+                      <Badge variant={rankingTierBadgeVariant(contact.rankingTier)} title={contact.rankingReasons.join(" · ")}>
+                        {formatStatusLabel(contact.rankingTier)}
+                        {contact.rankingScore != null && ` (${Math.round(contact.rankingScore * 100)}%)`}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Sin rankear</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{contact.source ?? "Manual"}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {contact.discoveredAt ? new Date(contact.discoveredAt).toLocaleDateString() : "—"}
@@ -295,7 +330,7 @@ export default function Contacts() {
               ))}
               {data?.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={12} className="text-center text-sm text-muted-foreground">
                     Sin contactos que coincidan con estos filtros.
                   </TableCell>
                 </TableRow>

@@ -684,3 +684,49 @@ Ninguna nueva — el gate de real-provider-tests (ver arriba) deja `missions-dyn
 `feat: F7.7 — contact intelligence`.
 
 **F7.7 completo.**
+
+---
+
+## 20. Resultado de F7.8 — Contact Verification and Ranking
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+### 20.1 Arquitectura
+
+- **`contact-ranking.ts`** (`ceo-intelligence/`, puro) — `rankContact()`: combina la evidencia YA reunida por F7.7 (nunca un dato nuevo/inventado) en un score 0-1 y un tier auditable (`HIGH_CONFIDENCE`/`MEDIUM_CONFIDENCE`/`LOW_CONFIDENCE`/`REJECTED`), con una razón textual por cada punto sumado/restado (`reasons`). Tres señales críticas fuerzan `REJECTED` sin importar el resto: `companyMatch: false`, `domainTrust: "INVALID"`, `emailVerificationStatus: "INVALID"`. El resto pondera: role match + prioridad del rol en el plan (F7.6), nivel de autoridad (`classifyAuthorityLevel`, derivado de `ContactDecisionRole`), confianza de dominio (F7.4), verificación de email (F4.7), evidencia de descubrimiento (`confidenceScore`, F4.6), confiabilidad del proveedor (provider-health.ts), y recencia (`discoveredAt`).
+- **`contact-enrichment.ts`** (F7.7, extendido) — tras crear cada `Contact`, calcula el ranking con la evidencia ya disponible en ese mismo momento (sin una segunda pasada ni una llamada extra) y lo persiste en el mismo `create()`.
+
+### 20.2 Persistencia (migración aditiva)
+
+Nuevos campos en `Contact` (todos nullable/con default, cero impacto en filas existentes): `rankingTier` (`ContactRankingTier?`), `rankingScore` (`Float?`), `rankingReasons` (`String[]`, default `[]`), `rankedAt` (`DateTime?`) + índice `[tenantId, rankingTier]`. Nuevo enum `ContactRankingTier` (espejo literal de `ContactRankingTier` en `contact-ranking.ts`). Migración `20260717090000_f7_8_contact_ranking` — generada vía `prisma migrate diff` (el entorno no soporta `migrate dev` interactivo) y aplicada con `migrate deploy`; SQL revisado antes de aplicar: 1 `CREATE TYPE`, 4 `ADD COLUMN` (todas nullable o con default), 1 `CREATE INDEX` — sin drops, sin renames, sin pérdida de datos. Verificado antes/después: 10 Contact preexistentes intactos, columnas nuevas presentes y consultables.
+
+### 20.3 Contratos y superficie expuesta
+
+`ContactSummary` (`packages/shared`, usado tanto por `CompanyDetail.contacts` como por `ContactListItem`) extendido con `rankingTier`/`rankingScore`/`rankingReasons`/`rankedAt`. `ContactQuery` ganó un filtro opcional `rankingTier`. `crm/service.ts` (`listContacts`, `getCompanyDetail`) actualizado para filtrar y devolver los campos nuevos — sin endpoint nuevo, reutiliza `/contacts` y `/companies/:id` ya existentes.
+
+### 20.4 UI
+
+Página `Contacts.tsx` (ya existente, F4.6): nueva columna "Ranking" (badge con tier + score%, tooltip con las razones completas) y nuevo filtro "Ranking" en la barra de filtros. Contacto sin ranking (creado antes de F7.8, o por otra vía) muestra "Sin rankear" honesto en vez de un badge vacío o inventado.
+
+### 20.5 Tests — 22 nuevos (todos passing)
+
+`contact-ranking.test.ts` (14): las 3 señales críticas fuerzan `REJECTED` cada una por separado; evidencia completa/fuerte → `HIGH_CONFIDENCE`; evidencia mínima sin rol matcheado → `LOW_CONFIDENCE` (nunca `REJECTED` solo por eso); evidencia intermedia → `MEDIUM_CONFIDENCE`; `rolePriority` 1 > 2 > sin bono; orden estricto de autoridad EXECUTIVE > MANAGER > SPECIALIST > UNKNOWN (con el resto de factores deliberadamente bajos para que ningún caso sature el score en 1 y oculte la diferencia); recencia influye el score sin forzar `REJECTED`; score siempre acotado [0,1]; `classifyAuthorityLevel` nunca inventa una categoría para un valor no reconocido; `reasons` siempre no vacío; determinismo; `rankingVersion` estable. `contact-enrichment.test.ts` (+2): buena evidencia (dominio propio + rol de prioridad máxima) → `HIGH_CONFIDENCE` persistido y consistente entre el reporte y la fila real de `Contact`; dominio ajeno → `REJECTED` (el Contact igual se crea, con el nombre real como evidencia honesta, pero queda marcado como no confiable).
+
+### 20.6 Suite completa
+
+757 tests, 751 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`), 5 skip (4 gateados por el fix de real-provider-tests + 1 preexistente sin relación).
+
+### 20.7 Prueba real controlada
+
+No aplica — `contact-ranking.ts` es puro (sin Prisma/fetch/proveedor externo, sin costo). El wiring en `contact-enrichment.ts` ya está cubierto por la prueba real controlada de F7.7 (disponible bajo `RUN_REAL_PROVIDER_TESTS=1`, no activada en esta subfase).
+
+### 20.8 Limitaciones conocidas
+
+- El ranking se calcula UNA vez, al momento de la creación del Contact — si su email se verifica después (flujo separado `findEmail`/F4.7) o si su rol cambia de prioridad en una misión futura, el ranking no se recalcula automáticamente. Recalculo periódico/bajo demanda queda como mejora futura, fuera de alcance de F7.8.
+- `authorityLevel` depende de `ContactDecisionRole`, un vocabulario cerrado — un título real que `mapTitleToDecisionRole` no reconozca cae en `UNKNOWN`, nunca en una categoría inventada, pero tampoco recibe el bono de autoridad correspondiente.
+
+### 20.9 Commit
+
+`feat: F7.8 — contact verification and ranking`.
+
+**F7.8 completo.**

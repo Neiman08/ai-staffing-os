@@ -580,10 +580,28 @@ model Contact {
   bouncedAt                 DateTime?
   unsubscribedAt            DateTime?
   createdAt               DateTime                  @default(now())
+  // F7.8: Contact Verification and Ranking — determinista (contact-ranking.ts),
+  // nunca decidido por un LLM. Null cuando el Contact no pasó todavía por
+  // el ranking (ej. contactos creados antes de F7.8, o por otra vía).
+  rankingTier             ContactRankingTier?
+  rankingScore            Float?
+  rankingReasons          String[]                  @default([])
+  rankedAt                DateTime?
 
   @@index([tenantId])
   @@index([companyId])
   @@index([tenantId, emailVerificationStatus])
+  @@index([tenantId, rankingTier])
+}
+
+// F7.8: espeja literalmente ContactRankingTier de
+// apps/api/.../ceo-intelligence/contact-ranking.ts (mismo criterio de
+// "mirror the shape" ya establecido para EmailTrustOutcome).
+enum ContactRankingTier {
+  HIGH_CONFIDENCE
+  MEDIUM_CONFIDENCE
+  LOW_CONFIDENCE
+  REJECTED
 }
 
 // Tipo de punto de contacto organizacional — nunca un nombre de

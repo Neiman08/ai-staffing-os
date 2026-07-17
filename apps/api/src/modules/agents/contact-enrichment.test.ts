@@ -175,6 +175,16 @@ test("candidato con email de dominio oficial: emailDomainTrust VERIFIED, nunca c
   assert.equal(report.contactsCreated[0]!.emailDomainTrust, "VERIFIED");
   const contactPoints = await prisma.companyContactPoint.count({ where: { companyId } });
   assert.equal(contactPoints, 0);
+
+  // F7.8: buena evidencia (email de dominio propio, rol de prioridad
+  // máxima) -> ranking persistido y consistente con lo devuelto en el
+  // reporte -- nunca decidido por un LLM.
+  assert.equal(report.contactsCreated[0]!.rankingTier, "HIGH_CONFIDENCE");
+  const contactRow = await prisma.contact.findUniqueOrThrow({ where: { id: report.contactsCreated[0]!.contactId } });
+  assert.equal(contactRow.rankingTier, "HIGH_CONFIDENCE");
+  assert.equal(contactRow.rankingScore, report.contactsCreated[0]!.rankingScore);
+  assert.ok(contactRow.rankingReasons.length > 0);
+  assert.ok(contactRow.rankedAt);
 });
 
 test("candidato con email de dominio ajeno: emailDomainTrust INVALID, el Contact igual se crea (el nombre es real, el email se reporta honestamente)", async () => {
@@ -196,6 +206,13 @@ test("candidato con email de dominio ajeno: emailDomainTrust INVALID, el Contact
   );
   assert.equal(report.contactsCreated.length, 1);
   assert.equal(report.contactsCreated[0]!.emailDomainTrust, "INVALID");
+
+  // F7.8: un dominio de email ajeno fuerza REJECTED en el ranking -- el
+  // Contact se sigue creando (el nombre real SÍ existe, es evidencia
+  // honesta), pero queda marcado como no confiable para cualquier uso
+  // comercial futuro (F7.9+), nunca oculto ni descartado silenciosamente.
+  assert.equal(report.contactsCreated[0]!.rankingTier, "REJECTED");
+  assert.equal(report.contactsCreated[0]!.rankingScore, 0);
 });
 
 test("cancelación se propaga honestamente, sin crear ningún Contact", async () => {

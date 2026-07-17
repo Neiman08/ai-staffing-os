@@ -35,6 +35,8 @@ export const contactDecisionRoleSchema = z.enum([
   "PURCHASING_MANAGER",
   "DIRECTOR_OF_OPERATIONS",
 ]);
+// F7.8: espeja ContactRankingTier de contact-ranking.ts (apps/api).
+export const contactRankingTierSchema = z.enum(["HIGH_CONFIDENCE", "MEDIUM_CONFIDENCE", "LOW_CONFIDENCE", "REJECTED"]);
 
 export const nextFollowUpSchema = z
   .object({
@@ -99,6 +101,12 @@ export const contactSummarySchema = z.object({
   emailConfidenceScore: z.number().nullable(),
   emailVerifiedAt: z.string().nullable(),
   doNotContact: z.boolean(),
+  // F7.8: Contact Verification and Ranking -- null cuando el Contact no
+  // pasó todavía por el ranking determinista (contact-ranking.ts).
+  rankingTier: contactRankingTierSchema.nullable(),
+  rankingScore: z.number().nullable(),
+  rankingReasons: z.array(z.string()),
+  rankedAt: z.string().nullable(),
 });
 export type ContactSummary = z.infer<typeof contactSummarySchema>;
 
@@ -211,5 +219,6 @@ export const contactQuerySchema = z.object({
   companyId: z.string().optional(),
   companyName: z.string().optional(), // búsqueda parcial, insensible a mayúsculas
   excludeDemo: z.coerce.boolean().optional(), // datos reales por defecto en vistas comerciales
+  rankingTier: contactRankingTierSchema.optional(), // F7.8
 });
 export type ContactQuery = z.infer<typeof contactQuerySchema>;
