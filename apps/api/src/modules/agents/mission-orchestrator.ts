@@ -1,4 +1,5 @@
 import type { AgentTaskDetail, MissionState } from "@ai-staffing-os/shared";
+import { CEO_INTENT_SCHEMA_VERSION, BUSINESS_TAXONOMY_VERSION, MISSION_PLANNER_VERSION } from "@ai-staffing-os/shared";
 import type { InterpretDailyDirectiveResult, MissionRestrictions } from "@ai-staffing-os/agents";
 import { DEFAULT_MISSION_RESTRICTIONS } from "@ai-staffing-os/agents";
 import { getTenancyContext, runWithTenancyContext } from "../../core/tenancy/context";
@@ -7,6 +8,9 @@ import { AppError } from "../../core/errors";
 import { createAndRunTaskSync, createQueuedTask, runCeoToolDirectly, toAgentTaskDetail } from "./task-executor";
 import { computeMissionProgress, computeContactCoverage } from "./tools/ceo-tools.impl";
 import { abortTask } from "./cancellation";
+import { interpretBusinessIntent } from "../ceo-intelligence/intent-interpreter";
+import { buildMissionPlan } from "../ceo-intelligence/mission-planner";
+import { executeDiscoveryPlan } from "./mission-executor";
 
 // F4 addendum: tope general por misión, independiente del desiredVolume
 // interpretado — mismo espíritu que el tope de 15/corrida de F3 y el de
@@ -235,6 +239,25 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     state: interpreted.state ?? null,
   });
 
+  // F7.3: una instrucción que pidió descubrimiento externo ("fuera del
+  // CRM") se desvía acá, ANTES del pipeline fijo de siempre — reemplaza
+  // el patrón "por cada industria: ejecutar todos los search terms" (el
+  // bug estructural reportado) por el ejecutor nuevo (mission-executor.ts),
+  // que corre cada query del MissionPlan una sola vez, deduplica
+  // globalmente, clasifica, y persiste SOLO Company (nunca Lead/
+  // Opportunity/Campaign/Contact). interpretDailyDirective (arriba, ya
+  // corrido en launchMission) sigue siendo el gate que decide ESTE
+  // desvío (useExternalDiscovery) — coexistencia deliberada: el LLM
+  // sigue decidiendo "¿es descubrimiento externo?", pero ya no decide
+  // QUÉ ni CÓMO buscar, eso lo hace el intérprete/planner deterministas
+  // de F7.1 a partir de acá. La rama de búsqueda interna en el CRM
+  // (useExternalDiscovery=false, debajo) sigue exactamente igual que
+  // antes de F7.3.
+  if (interpreted.useExternalDiscovery) {
+    await runDynamicDiscoveryMission(missionTaskId, interpreted.rawInstruction);
+    return;
+  }
+
   const industries = interpreted.industryNames?.length
     ? await scopedDb.industry.findMany({ where: { name: { in: interpreted.industryNames } } })
     : [];
@@ -243,39 +266,8 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     : [];
   const categoryIds = categories.map((c) => c.id);
 
-  // Bugfix multi-sector: una misión de descubrimiento externo (Google
-  // Places/Overpass) SIEMPRE necesita una industria real del CRM bajo la
-  // cual archivar lo que encuentre — Company.industryId es obligatorio.
-  // Antes, si el CEO Agent no lograba mapear la instrucción a ninguna
-  // industria real (típico con instrucciones multi-sector — "contratistas
-  // eléctricos, baja tensión, fibra óptica, ..." no matchea ninguna de
-  // las 4 industrias fijas), el pipeline seguía de largo con
-  // industryTargets=[null], nunca corría discover_companies (el gate de
-  // abajo exige industry != null), y la misión terminaba COMPLETED con 0
-  // empresas sin ningún error visible. Ahora se falla explícito, ACÁ,
-  // antes de crear ninguna campaña — nunca una misión de discovery
-  // externo silenciosamente vacía.
-  if (interpreted.useExternalDiscovery && industries.length === 0) {
-    const unrecognized = interpreted.unrecognizedTerms?.length
-      ? interpreted.unrecognizedTerms.join(", ")
-      : interpreted.externalSearchTerms?.length
-        ? interpreted.externalSearchTerms.join(", ")
-        : "(el CEO Agent no reportó ningún término específico)";
-    await failMission(
-      missionTaskId,
-      `No se pudo interpretar ninguna industria real del CRM para archivar los resultados de esta búsqueda externa. Términos no reconocidos: ${unrecognized}. Agregá una de las industrias existentes explícitamente en la instrucción, o creá la industria correspondiente en el CRM antes de reintentar.`,
-    );
-    return;
-  }
-
   const industryTargets: Array<{ id: string; name: string } | null> = industries.length > 0 ? industries : [null];
   const perCampaignVolume = Math.min(interpreted.desiredVolume ?? MAX_COMPANIES_PER_MISSION, MAX_COMPANIES_PER_MISSION);
-  // Bugfix multi-sector: cuántas búsquedas independientes de proveedor
-  // externo realmente se ejecutaron a lo largo de TODA la misión — si
-  // useExternalDiscovery pidió una búsqueda externa y este número queda
-  // en 0 al terminar el pipeline, la misión nunca debe cerrar COMPLETED
-  // (ver el chequeo justo antes de closeMission, al final).
-  let totalSearchesExecuted = 0;
 
   // Corrección estructural (misión Iowa, 2026-07-13): antes, "no crear
   // campañas/oportunidades" y "no enviar nada" existían solo como texto
@@ -361,101 +353,14 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       log(missionTaskId, "campaign creation skipped by restriction", { industry: industry?.name ?? null });
     }
 
-    // F4.5A: solo cuando el CEO Agent marcó useExternalDiscovery=true (la
-    // instrucción pidió explícitamente empresas FUERA del CRM) y hay
-    // industria+estado concretos (discoverCompanies los necesita, nunca
-    // busca "cualquier industria/estado"). Crea Company nuevas con
-    // origin=EXTERNAL_DISCOVERY — select_target_companies (abajo, sin
-    // cambios) las recoge igual que a cualquier otra porque ya cumplen
-    // los criterios de la campaña. Este paso NUNCA dependió de que exista
-    // una Campaign — discover_companies solo escribe Company, así que
-    // corre igual esté o no permitida la Campaign.
-    let externalNewCompanyIds: string[] = [];
-    if (interpreted.useExternalDiscovery && interpreted.state && industry) {
-      if ((await checkForStop()) === "stop") return;
-      log(missionTaskId, "discovery delegated", {
-        industry: industry.name,
-        state: interpreted.state,
-        searchTerms: interpreted.externalSearchTerms ?? [],
-      });
-      const discoverTask = await createAndRunTaskSync(tenantId, operatorUserId, {
-        agentKey: "discovery",
-        type: "discover_companies",
-        input: {
-          industryNames: [industry.name],
-          // Bugfix multi-sector: si el CEO Agent extrajo varias frases de
-          // búsqueda específicas (electrical contractor, low voltage
-          // contractor, ...), el Discovery Agent corre una búsqueda
-          // independiente por frase — ver discovery-tools.impl.ts. Sin
-          // esto, se preserva el comportamiento de siempre (una sola
-          // búsqueda con el nombre de la industria).
-          searchTerms: interpreted.externalSearchTerms?.length ? interpreted.externalSearchTerms : undefined,
-          state: interpreted.state,
-          city: interpreted.city ?? undefined,
-          limit: perCampaignVolume,
-        },
-        triggeredBy: "AGENT",
-        parentTaskId: missionTaskId,
-      });
-      // Un discover_companies FAILED (ej. estado sin mapeo de área, fuente
-      // caída) no aborta la misión: select_target_companies de abajo
-      // simplemente no encuentra empresas nuevas — resultado real, no se
-      // inventa nada para compensar.
-      totalSearchesExecuted += (discoverTask.output as { searchesExecuted?: number } | null)?.searchesExecuted ?? 0;
-      await syncMissionOutput(missionTaskId, "RUNNING");
-
-      // F4.6: Contact Intelligence corre acá — después de Discovery,
-      // antes de Outreach (que en este piloto ni siquiera llega a correr,
-      // ver más abajo) — solo sobre las Company que ESTA tarea acaba de
-      // crear, nunca sobre empresas ya existentes en el CRM (esas ya
-      // pasaron por su propio ciclo de prospección en F2/F3).
-      const newCompanyIds = (
-        (discoverTask.output as { companiesCreated?: Array<{ companyId: string }> } | null)?.companiesCreated ?? []
-      ).map((c) => c.companyId);
-      externalNewCompanyIds = newCompanyIds;
-      for (const newCompanyId of newCompanyIds) {
-        if ((await checkForStop()) === "stop") return;
-        log(missionTaskId, "contact intelligence delegated", { companyId: newCompanyId });
-        await createAndRunTaskSync(tenantId, operatorUserId, {
-          agentKey: "contact_intelligence",
-          type: "find_contacts",
-          input: { companyId: newCompanyId },
-          triggeredBy: "AGENT",
-          parentTaskId: missionTaskId,
-        });
-        // Un find_contacts FAILED (proveedor caído/sin configurar) no
-        // aborta la misión — la Company queda sin contactos, resultado
-        // real, no se inventa nada para compensar.
-        await syncMissionOutput(missionTaskId, "RUNNING");
-
-        // F4.7: Email Intelligence corre justo después — mismo agente
-        // (Contact Intelligence, ampliado), mismo punto del pipeline
-        // (después de Discovery/find_contacts, antes de Sales Review).
-        // Sin contactId: procesa todos los Contact de esta Company sin
-        // email VERIFIED todavía (incluye los recién creados arriba).
-        if ((await checkForStop()) === "stop") return;
-        log(missionTaskId, "email intelligence delegated", { companyId: newCompanyId });
-        await createAndRunTaskSync(tenantId, operatorUserId, {
-          agentKey: "contact_intelligence",
-          type: "find_email",
-          input: { companyId: newCompanyId },
-          triggeredBy: "AGENT",
-          parentTaskId: missionTaskId,
-        });
-        await syncMissionOutput(missionTaskId, "RUNNING");
-      }
-    }
-
     if ((await checkForStop()) === "stop") return;
 
     // Corrección estructural: select_target_companies exige un campaignId
     // real (CampaignCompany no puede existir sin Campaign) — cuando la
     // Campaign está prohibida, se resuelve la lista de empresas a
-    // procesar sin pasar por ahí. En discovery externo, las empresas ya
-    // se conocen (externalNewCompanyIds); si no es discovery externo, se
-    // consulta directo por industria/estado/ciudad (mismo criterio de
-    // selectTargetCompanies, sin el bookkeeping de CampaignCompany que no
-    // aplica sin campaña).
+    // procesar sin pasar por ahí, consultando directo por industria/
+    // estado/ciudad (mismo criterio de selectTargetCompanies, sin el
+    // bookkeeping de CampaignCompany que no aplica sin campaña).
     let companyIds: string[];
     if (campaignId) {
       const selectTask = await createAndRunTaskSync(tenantId, operatorUserId, {
@@ -468,8 +373,6 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       await syncMissionOutput(missionTaskId, "RUNNING");
       if (selectTask.status === "FAILED" || !selectTask.output) continue;
       companyIds = (selectTask.output as { companyIds: string[] }).companyIds;
-    } else if (interpreted.useExternalDiscovery) {
-      companyIds = externalNewCompanyIds;
     } else {
       companyIds = (
         await scopedDb.company.findMany({
@@ -512,7 +415,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
             industryId: company.industryId,
             city: company.city ?? undefined,
             state: company.state ?? undefined,
-            source: interpreted.useExternalDiscovery ? "external-discovery-mission" : "daily-revenue-mission",
+            source: "daily-revenue-mission",
           },
           triggeredBy: "AGENT",
           parentTaskId: missionTaskId,
@@ -520,17 +423,11 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
         if (leadTask.status !== "FAILED" && leadTask.output) {
           const leadId = (leadTask.output as { leadId: string }).leadId;
           lead = await scopedDb.lead.findUnique({ where: { id: leadId } });
-          // F4.5A §"No crear ni enviar outreach automáticamente en esta
-          // fase piloto": una misión de descubrimiento externo se detiene
-          // acá — califica y crea el Lead, nunca abre Opportunity ni
-          // planifica secuencia/mensaje. El pipeline F4 normal (abajo)
-          // sigue exactamente igual para misiones que no piden discovery.
-          // Corrección estructural: además del caso de discovery externo,
-          // `restrictions.allowOpportunityCreation` bloquea esto para
-          // CUALQUIER misión que lo pida explícitamente — antes solo el
-          // flag de discovery lo protegía, así que una misión normal con
-          // "no crear oportunidades" no tenía ninguna protección real.
-          if (!interpreted.useExternalDiscovery && restrictions.allowOpportunityCreation) {
+          // Corrección estructural: `restrictions.allowOpportunityCreation`
+          // bloquea esto para cualquier misión que lo pida explícitamente
+          // — nunca se abre Opportunity si la instrucción dijo "no crear
+          // oportunidades".
+          if (restrictions.allowOpportunityCreation) {
             await createAndRunTaskSync(tenantId, operatorUserId, {
               agentKey: "sales",
               type: "create_opportunity",
@@ -541,8 +438,6 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
           }
         }
       }
-
-      if (interpreted.useExternalDiscovery) continue;
 
       // Corrección estructural: sin Campaign no hay CampaignCompany —
       // outreach (plan_sequence/personalize_message) es estructuralmente
@@ -589,20 +484,6 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     }
   }
 
-  // Bugfix multi-sector: red de seguridad final — si la instrucción pidió
-  // explícitamente descubrimiento externo pero, al terminar todo el
-  // recorrido, no se ejecutó NINGUNA búsqueda real de proveedor (0
-  // llamadas a Google Places/Overpass, por cualquier motivo: estado
-  // faltante, industria sin resolver a último momento, etc.), la misión
-  // nunca cierra COMPLETED de forma silenciosa — falla explícito.
-  if (interpreted.useExternalDiscovery && totalSearchesExecuted === 0) {
-    await failMission(
-      missionTaskId,
-      "Se pidió una búsqueda externa pero no se ejecutó ninguna búsqueda de proveedor real — revisá que la instrucción incluya un estado soportado y al menos una industria o sector reconocible.",
-    );
-    return;
-  }
-
   // Bugfix de ciclo de vida: antes, terminar de recorrer todas las
   // industrias/empresas dejaba la misión en RUNNING para siempre — nada
   // la cerraba salvo que un humano clickeara "Cerrar ahora" (o pasara la
@@ -614,6 +495,90 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
   // agarra y la misión queda FAILED con el error real — nunca RUNNING.
   await closeMission(missionTaskId);
   log(missionTaskId, "mission completed");
+}
+
+/**
+ * F7.3: reemplazo del pipeline fijo para instrucciones de descubrimiento
+ * externo — delega TODA la lógica de negocio (interpretación, plan,
+ * ejecución de queries, dedup global, clasificación, persistencia) al
+ * módulo determinista F7.1 (ceo-intelligence/) + el ejecutor F7.3
+ * (mission-executor.ts). Esta función es deliberadamente delgada: solo
+ * arma el input, llama al ejecutor, y traduce su reporte al mismo
+ * AgentTask.output que ya usa el resto de Mission Detail — nunca mezcla
+ * lógica de negocio de descubrimiento acá (esa vive en mission-executor.ts,
+ * ver el requisito explícito de no concentrar todo en este archivo).
+ *
+ * Nunca llama a closeMission/closeDailyMission (esa función hace una
+ * llamada real a OpenAI para narrar el Executive Report) — el reporte de
+ * esta fase es 100% estructurado (discoveryExecution), sin narración de
+ * LLM, consistente con que F7.3 tiene prohibido llamar a OpenAI.
+ */
+async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction: string): Promise<void> {
+  const intent = interpretBusinessIntent(rawInstruction);
+  const plan = buildMissionPlan(intent);
+  const restrictions = intent.restrictions;
+  const restrictionNotes = buildRestrictionNotes(restrictions);
+
+  log(missionTaskId, "dynamic discovery mission started", {
+    matchedTaxonomyKeys: intent.matchedTaxonomyKeys,
+    plannedSteps: intent.plannedSteps,
+    searchQueries: plan.searchQueries.length,
+  });
+
+  const report = await executeDiscoveryPlan({ missionTaskId, plan, restrictions });
+
+  const now = new Date();
+  const targetCount = intent.objective.targetCompanyCount;
+  await scopedDb.agentTask.update({
+    where: { id: missionTaskId },
+    data: {
+      status: "DONE",
+      completedAt: now,
+      costUsd: report.costUsd,
+      output: {
+        missionState: report.missionState,
+        missionPhase: "EXECUTING",
+        companiesTargeted: report.companiesCreated,
+        leadsCreated: 0,
+        opportunitiesCreated: 0,
+        sequencesPlanned: 0,
+        draftsAwaitingApproval: 0,
+        costUsdSoFar: report.costUsd,
+        objectiveProgress: {
+          type: "companies_found",
+          target: targetCount,
+          unit: "empresas",
+          current: report.companiesCreated,
+          percentComplete: targetCount ? Math.min(100, Math.round((report.companiesCreated / targetCount) * 100)) : null,
+          rawText: intent.objective.rawText,
+        },
+        progressUpdatedAt: now.toISOString(),
+        error: null,
+        appliedRestrictions: restrictions,
+        restrictionNotes,
+        // F7.3: nunca se narra un Executive Report vía LLM en esta fase —
+        // el reporte estructurado real vive en discoveryExecution.
+        report: null,
+        contactCoverage: null,
+        ceoIntent: intent,
+        missionPlan: plan,
+        ceoIntentMeta: {
+          schemaVersion: CEO_INTENT_SCHEMA_VERSION,
+          taxonomyVersion: BUSINESS_TAXONOMY_VERSION,
+          plannerVersion: MISSION_PLANNER_VERSION,
+          createdAt: now.toISOString(),
+          warnings: intent.ambiguities,
+        },
+        discoveryExecution: report,
+      } as never,
+    },
+  });
+
+  log(missionTaskId, "dynamic discovery mission finished", {
+    missionState: report.missionState,
+    companiesCreated: report.companiesCreated,
+    stopReason: report.stopReason,
+  });
 }
 
 function runMissionPipelineAsync(missionTaskId: string, tenantId: string, operatorUserId: string): void {

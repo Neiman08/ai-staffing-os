@@ -1,6 +1,6 @@
 # F7 — CEO Intelligence & Autonomous Client Acquisition — Plan Técnico
 
-**Estado: F7.0 (auditoría + baseline) completo. Nada más está aprobado todavía.** Este documento entrega exactamente lo pedido por el PO para F7.0: auditoría, causas raíz, fallos reproducidos con datos reales, arquitectura propuesta, fases, cambios de schema candidatos, riesgos, proveedores, tests, decisiones necesarias. **Cero código funcional escrito. Cero llamada nueva a Google Places/PDL/Hunter/OpenAI/Gmail/Twilio/job boards. Cero commit** (se hace commit de este documento solamente si el PO lo autoriza explícitamente, igual que cualquier otro entregable de solo-documentación de este proyecto).
+**Estado: F7.0, F7.1, F7.2 y F7.3 completos y aprobados. A la espera de aprobación del PO para F7.4.** Este documento entrega exactamente lo pedido por el PO para F7.0: auditoría, causas raíz, fallos reproducidos con datos reales, arquitectura propuesta, fases, cambios de schema candidatos, riesgos, proveedores, tests, decisiones necesarias. **Cero código funcional escrito. Cero llamada nueva a Google Places/PDL/Hunter/OpenAI/Gmail/Twilio/job boards. Cero commit** (se hace commit de este documento solamente si el PO lo autoriza explícitamente, igual que cualquier otro entregable de solo-documentación de este proyecto).
 
 No reemplaza a `docs/F7_PLAN.md` — ese documento queda como auditoría histórica (la búsqueda de un plan de F7 ya aprobado, que no existía en ese momento). Este es el plan dedicado para el alcance que el PO aprobó después: CEO Intelligence & Autonomous Client Acquisition.
 
@@ -363,4 +363,78 @@ Suite completa: **44 archivos enumerados explícitamente, 578 tests, 577 pass, 1
 2. **Cero Companies/Leads/Opportunities/Campaigns creados** — verificado por conteo real antes/después contra tenant-titan y contra tenants sintéticos dedicados, y por un test explícito de cero-efectos-secundarios.
 3. Typecheck limpio (6/6 workspace projects), lint limpio (mismos 2 warnings preexistentes de `apps/web`, no relacionados).
 
-**F7.2 completo. A la espera de aprobación del PO para iniciar F7.3.**
+**F7.2 completo.**
+
+---
+
+## 15. Resultado de F7.3 — Dynamic Discovery Orchestration
+
+### 15.1 Arquitectura
+
+Nuevos módulos, ninguno modifica el AgentTool clásico `discover_companies` (`discovery-tools.impl.ts`, sigue existiendo intacto para el flujo `useExternalDiscovery=false`/legacy):
+
+- `apps/api/src/modules/ceo-intelligence/discovery-identity.ts` — puro, cero Prisma: `normalizeCompanyName`, `normalizeDomain`, `normalizePhone`, `extractProviderPlaceId`, `buildCompanyIdentityKeys`, `deduplicateDiscoveryCandidates`. Replica deliberadamente la lógica ya escrita y probada en `packages/db/scripts/illinois-backfill-lib.mjs` (mismo criterio de nombre/dominio/teléfono) en vez de inventar una nueva.
+- `apps/api/src/modules/agents/mission-executor.ts` — el ejecutor real (Prisma + fetch real vía Google Places/Overpass, nunca modifica esos dos proveedores). Separa las 8 responsabilidades pedidas: validación del plan (`buildFinalQueries` + guards `BLOCKED`), selección de proveedor (`executeOneQuery`, con `provider-health.ts` + `data-provider-budget.ts`, ambos reutilizados sin cambios), normalización (`buildCompanyIdentityKeys`), deduplicación global (`deduplicateDiscoveryCandidates`), clasificación (`classifyCandidate` + el stop-condition de bucket de Industry), persistencia (`persistAcceptedCandidate`, solo `Company`), reporte (`DiscoveryExecutionReport`).
+- `mission-orchestrator.ts` — modificado quirúrgicamente: `runMissionPipeline` ahora desvía al inicio (`if (interpreted.useExternalDiscovery) { await runDynamicDiscoveryMission(...); return; }`) hacia una función nueva y delgada (`runDynamicDiscoveryMission`) que arma `StructuredIntent`+`MissionPlan` (F7.1, sin tocar) y llama a `executeDiscoveryPlan`. La rama de búsqueda interna en el CRM (`useExternalDiscovery=false`) queda **completamente intacta** — mismo código, mismos tests, cero regresión (confirmado, ver 15.6).
+
+### 15.2 Reemplazo del loop por-industria
+
+Se eliminó, del flujo nuevo, el patrón "por cada industria: ejecutar todos los search terms" — `buildFinalQueries(plan, primaryState)` toma exclusivamente `plan.searchQueries` (ya resueltas 1:1 contra la taxonomía en F7.1/mission-planner.ts), las combina con `plan.cities` (o una sola entrada sin ciudad si no hay ninguna), recorta, deduplica por texto normalizado, y descarta cualquier query que sea exclusivamente un término de exclusión. Cada query se ejecuta **una sola vez** (`executeOneQuery`), nunca una vez por industria/bucket.
+
+### 15.3 Proveedores, presupuesto y salud
+
+Google Places (primario, si `GOOGLE_PLACES_API_KEY` configurada y presupuesto no excedido vía `getDataProviderBudgetStatus`, reutilizado sin cambios) → Overpass (respaldo, solo cubre `Manufacturing`/`Warehouse-Logistics`/`Construction`, los mismos 3 patrones ya existentes en `overpass.ts`, sin tocar). `provider-health.ts` (existente, antes solo usado por Hunter/PDL) ahora también protege Discovery: el HTTP status se extrae del string de error que ya devuelven `searchGooglePlaces`/`searchOverpass` (regex `HTTP (\d+)`, ninguno de los dos archivos se modificó para exponerlo directamente) y se clasifica/marca con `classifyProviderHttpStatus`/`markProviderStatus`. Cero llamada real en los tests unitarios — `mission-executor.ts` acepta un parámetro `providers` inyectable (`DiscoveryProviderPort`), default los módulos reales.
+
+### 15.4 Deduplicación global y clasificación
+
+Orden fijo, exactamente como pidió el PO: `providerPlaceId` → `canonicalDomain` → `normalizedPhone` → `normalizedNameCityState` (esta última nunca es null — red de seguridad final). Se deduplica dentro de una query, entre queries, y contra **todas** las Companies ya existentes del tenant — **incluyendo `DEMO_SEED`** a propósito: "Prairie Manufacturing Co." (u otra empresa sembrada) nunca se re-crea como si fuera un descubrimiento nuevo si un proveedor devuelve un candidato con la misma identidad (test explícito, ver 15.6). El bucket de Industry real (`crmIndustryBucket`, ya resuelto por la taxonomía F7.1) decide el `industryId` — si es `null` (7 de las 20 categorías de taxonomía no tienen bucket real hoy: Hospitality, Healthcare, Janitorial, Commercial Cleaning, Landscaping, Restaurants, Retail), el candidato se **rechaza sin persistir** (nunca se inventa una Industry, nunca se aborta la misión completa — la query igual se ejecutó y cuenta en el reporte, por honestidad de costo/conteo). Esta decisión (§9.4 del plan original) sigue abierta — documentada, no resuelta acá.
+
+### 15.5 Validación básica, persistencia y estados
+
+Rechazo determinista si: sin nombre utilizable; el nombre coincide con una exclusión explícita de la misión; el nombre coincide con un `negativeKeyword` de la entrada de taxonomía que originó la query (ej. "staffing agency" para una búsqueda de hoteles). Cada Company aceptada persiste `discoveryMetadata` reusando el vocabulario ya documentado en el modelo (`classificationMode: "EXACT"`, `classificationConfidence`, `providerPlaceId`, `canonicalDomain`, `normalizedPhone`, etc.) — **nunca crea Lead/Opportunity/Campaign/Contact/CompanyContactPoint** (test explícito: "Discovery en F7.3 crea Company, pero nunca Lead/Opportunity/Campaign/Contact"). Estados lógicos (`output.missionState`, `AgentTask.status` sigue "DONE", cero cambio de enum real): `COMPLETED` (se alcanzó `requestedCompanyCount`), `PARTIAL` (empresas encontradas, no se alcanzó el número, o cancelada a mitad de camino), `NO_RESULTS` (queries corrieron bien, cero candidatos válidos — nunca `COMPLETED` con 0), `BLOCKED` (sin estado soportado / sin queries / sin proveedor con cobertura, antes de arrancar). `runDynamicDiscoveryMission` nunca llama a `closeMission`/`closeDailyMission` (esa función hace una llamada real a OpenAI para narrar el Executive Report) — el reporte de esta fase es 100% estructurado, `output.report` queda `null` a propósito.
+
+### 15.6 Tests — 35 nuevos (todos passing) + 1 pre-existente sin relación
+
+- `discovery-identity.test.ts` (18): normalización de nombre/dominio/teléfono, extracción de `providerPlaceId`, las 4 claves de identidad, deduplicación en las 4 prioridades + contra claves ya existentes + preservando el orden.
+- `mission-executor.test.ts` (16, providers 100% mockeados, `global.fetch` sobreescrito para explotar si algo intenta red real): query ejecutada una vez, límite global (pide 2, el proveedor devuelve 5 → se crean exactamente 2), fallback real a Overpass tras un 402 (con `markProviderStatus` verificado), `NO_RESULTS` nunca `COMPLETED` con 0, `BLOCKED` (sin estado / sin queries), dedup por `providerPlaceId`/dominio/existente-en-CRM/DEMO_SEED, "crea Company pero nunca Lead", categoría sin bucket (se ejecuta, se rechaza), restricciones aplicadas, tenancy.
+- `missions-dynamic-discovery.test.ts` (1, integración real de punta a punta contra `tenant-titan`, única prueba de esta fase con llamada real a Google Places — ver 15.7): confirma que `POST /missions` con una instrucción de descubrimiento externo real (Manufacturing/IL) ejecuta el nuevo flujo, nunca crea Lead/Opportunity/Campaign/Contact, y expone `discoveryExecution` en `GET /missions/:id`.
+
+Suite completa (`pnpm test` en `apps/api`): **614 tests, 613 pass, 1 fail** — el fallo es `prospecting.test.ts`'s `runProspectingSweep` (real LLM, módulo no tocado por F7.3, falla también corriendo en aislado, confirmado pre-existente y sin relación).
+
+### 15.7 Prueba real controlada (única llamada real de esta fase, además de la de arriba)
+
+Instrucción real contra `tenant-titan` vía el dev server: *"Busca empresas de manufactura en Illinois que estén fuera de nuestro CRM, mediante búsqueda externa en fuentes externas/internet. Quiero encontrar 2 empresas nuevas. No crear campañas ni oportunidades."* — Manufacturing (bucket real aprobado), preferido sobre hoteles (sin bucket) tal como pidió el PO. Resultado real: `missionState: "COMPLETED"`, 2 Companies creadas (Sierra Manufacturing Corporation, Archer Manufacturing Corporation), 1 query ejecutada de 3 planificadas (`stopReason: "limit_reached"`), costo real `$0.032` (un solo request de Google Places), cero Lead/Opportunity/Campaign/Contact creados. Verificado también visualmente en navegador real (Playwright, capturas): secciones "Interpretación del CEO", "Plan de misión", "Plan ejecutado" (queries ejecutadas, proveedores usados, restricciones, limitaciones, motivo de detención), "Empresas seleccionadas" (las 2 reales, con badge de origen/confianza/website/teléfono), y "Contact Intelligence" mostrando el mensaje explícito "Contact Intelligence pendiente de una fase posterior" — nunca un grid de "0 emails/0 contactos" engañoso. Cero errores de consola. Ambas Companies y el AgentTask se limpiaron después de la verificación (no quedó ningún dato de esta prueba en `tenant-titan`).
+
+### 15.8 UI (`apps/web/src/pages/Missions.tsx`)
+
+`MISSION_STATE_VARIANTS` ganó `NO_RESULTS` (neutro) y `BLOCKED` (warning) — nunca confundidos con `COMPLETED`/`FAILED`. `MissionActions.isTerminal` los trata como terminales (el ejecutor corre de punta a punta de forma síncrona, nada que pausar/cancelar al terminar). Sección nueva `DiscoveryExecutionSection` ("Plan ejecutado"): estado + explicación en lenguaje humano, contadores (queries/crudos/aceptados/rechazados/duplicados/costo), detalle por query ejecutada, proveedores usados/omitidos, "Validación" (candidatos rechazados con razón/evidencia/confianza), restricciones aplicadas, limitaciones, motivo de detención. La sección "Contact Intelligence" existente ahora detecta `detail.discoveryExecution` y muestra el mensaje explícito en vez de las métricas (que serían todas 0 y engañosas). "Empresas seleccionadas" reutiliza la infraestructura existente — `missions/service.ts` ahora también agrega `discoveryExecution.createdCompanyIds` a la lista de Companies mostradas, sin inventar una sección paralela.
+
+### 15.9 Contratos (`packages/shared/src/schemas/missions.ts`)
+
+`missionStateSchema` ganó `"NO_RESULTS"`/`"BLOCKED"` (extensión aditiva seria, mismo criterio que `"PLANNED"` en F7.2 — cero migración). Nuevos: `discoveryQueryExecutionSchema`, `discoveryRejectedCandidateSchema`, `discoveryExecutionReportSchema` (espejo exacto de las shapes de `mission-executor.ts`, mismo criterio de "duplicar la forma, no la dependencia"). `missionDetailSchema` ganó `discoveryExecution` (nullable — null en toda misión legacy/planned-only/internal-CRM-search).
+
+### 15.10 Conteos antes/después (tenant-titan, real)
+
+Verificado explícitamente tras la limpieza de la prueba real controlada (15.7): `Company`: 81, `Lead`: 131, `Opportunity`: 53, `Campaign`: 1, `Contact`: 10, `CompanyContactPoint`: 22 — cero artefacto huérfano de F7.3 (confirmado por query directa: cero `AgentTask` de tipo `discover_companies` con `input.source: "mission-executor-f7.3"` remanente, cero Company de la prueba real remanente).
+
+### 15.11 Limitaciones conocidas (documentadas, no resueltas — fuera de alcance de F7.3)
+
+- La decisión de crear Industries reales para las 7 categorías de taxonomía sin bucket (§9.4) sigue abierta — esos candidatos se rechazan, no se persisten.
+- `originalProviderTypes` en `discoveryMetadata` queda siempre `[]` — Google Places sí devuelve `types`, pero `extractFieldsFromGooglePlace` (existente, sin modificar) no los propaga a `ProviderCandidate.fields`; capturarlos requeriría tocar ese archivo, fuera de alcance de "no modificar los proveedores existentes".
+- `providerPlaceId` solo se extrae cuando `sourceUrl` usa el formato de respaldo de `google-places.ts` (`place_id:` en la URL) — cuando la API devuelve `googleMapsUri` real, no hay id extraíble sin tocar ese archivo; limitación documentada, no bloqueante (cae a `canonicalDomain`/`normalizedPhone`/nombre+ciudad+estado).
+- Business Validation es básica (nombre + exclusiones + `negativeKeywords`) — no incluye crawl real del sitio (eso es Website Intelligence, fuera de alcance).
+- Hiring Signal Intelligence, People Data Labs, Hunter.io, Contact Intelligence completo, campañas/oportunidades/mensajes: explícitamente no implementados en esta fase.
+
+### 15.12 Commit
+
+`feat: F7.3 — dynamic CEO discovery orchestration` — únicamente los archivos de esta fase (`ceo-intelligence/discovery-identity.ts(+test)`, `agents/mission-executor.ts(+test)`, `agents/mission-orchestrator.ts`, `missions/service.ts`, `missions/missions-dynamic-discovery.test.ts`, `packages/shared/src/schemas/missions.ts`, `apps/web/src/pages/Missions.tsx`, este documento) — nunca mezclado con Hiring Signals/Contact Intelligence/Hunter/PDL/email validation/Campaign/Sales/Outreach/F7.4+.
+
+### 15.13 Confirmaciones finales de F7.3
+
+1. **Cero Lead/Opportunity/Campaign/Contact/CompanyContactPoint creados automáticamente** por el nuevo flujo — verificado por tests dedicados y por conteo real antes/después.
+2. **Cero llamadas reales en tests unitarios** — solo 2 llamadas reales controladas en todo F7.3 (15.6/15.7), ambas documentadas, ambas limpiadas.
+3. Typecheck limpio (api/web/shared), lint limpio.
+4. Nunca se marcó `COMPLETED` con 0 empresas — confirmado por test y por el diseño de `missionState`.
+5. La rama de búsqueda interna en el CRM (`useExternalDiscovery=false`) quedó intacta — misma suite de `missions.test.ts` (100 tests) pasando sin cambios.
+
+**F7.3 completo. A la espera de aprobación del PO para iniciar F7.4.**

@@ -74,6 +74,12 @@ export type ObjectiveProgress = z.infer<typeof objectiveProgressSchema>;
 // Postgres) -- cero migración, cero cambio de AgentTaskStatus (ese sigue
 // siendo "DONE", ver missionPhaseSchema abajo para la señal explícita
 // adicional que lo distingue de una ejecución real terminada).
+// F7.3: "NO_RESULTS" -- el ejecutor de descubrimiento corrió las queries
+// planificadas correctamente (sin error técnico bloqueante) pero cero
+// candidatos pasaron validación/dedup -- nunca se reporta como COMPLETED
+// con 0 empresas. "BLOCKED" -- no había ninguna capacidad real disponible
+// ANTES de arrancar (sin estado soportado, sin queries, sin ningún
+// proveedor con cobertura) -- ver mission-executor.ts.
 export const missionStateSchema = z.enum([
   "RUNNING",
   "PAUSED_BY_USER",
@@ -81,6 +87,8 @@ export const missionStateSchema = z.enum([
   "CANCELLED",
   "COMPLETED",
   "PARTIAL",
+  "NO_RESULTS",
+  "BLOCKED",
   "FAILED",
   "PLANNED",
 ]);
@@ -341,6 +349,66 @@ export const missionContactCoverageSchema = z.object({
 });
 export type MissionContactCoverage = z.infer<typeof missionContactCoverageSchema>;
 
+// ============================================================
+// F7.3: Dynamic Mission Orchestration — espejo de las shapes de
+// apps/api/src/modules/agents/mission-executor.ts (mismo criterio de
+// "duplicar la forma, no la dependencia" que el resto de este archivo).
+// Solo presente en misiones que pasaron por el nuevo ejecutor
+// (mission-orchestrator.ts's runDynamicDiscoveryMission) — null en
+// cualquier misión legacy, planned-only (F7.2), o interna sin
+// descubrimiento externo.
+// ============================================================
+
+export const discoveryQueryExecutionSchema = z.object({
+  query: z.string(),
+  city: z.string().nullable(),
+  state: z.string().nullable(),
+  taxonomyKey: z.string(),
+  crmIndustryBucket: z.string().nullable(),
+  origin: z.enum(["API_PROVIDER", "EXTERNAL_DISCOVERY"]).nullable(),
+  provider: z.string().nullable(),
+  executedAt: z.string(),
+  rawResultCount: z.number(),
+  acceptedCount: z.number(),
+  rejectedCount: z.number(),
+  duplicateCount: z.number(),
+  error: z.string().nullable(),
+});
+export type DiscoveryQueryExecution = z.infer<typeof discoveryQueryExecutionSchema>;
+
+export const discoveryRejectedCandidateSchema = z.object({
+  name: z.string().nullable(),
+  taxonomyKey: z.string(),
+  reason: z.string(),
+  evidence: z.string(),
+  confidence: z.number(),
+});
+export type DiscoveryRejectedCandidate = z.infer<typeof discoveryRejectedCandidateSchema>;
+
+export const discoveryExecutionReportSchema = z.object({
+  requestedCompanyCount: z.number(),
+  queriesPlanned: z.number(),
+  queriesExecuted: z.number(),
+  rawResults: z.number(),
+  acceptedResults: z.number(),
+  rejectedResults: z.number(),
+  duplicatesWithinMission: z.number(),
+  duplicatesAlreadyInCrm: z.number(),
+  companiesCreated: z.number(),
+  createdCompanyIds: z.array(z.string()),
+  providersUsed: z.array(z.string()),
+  providersOmitted: z.array(z.string()),
+  costUsd: z.number(),
+  durationMs: z.number(),
+  stopReason: z.string(),
+  limitations: z.array(z.string()),
+  missionState: missionStateSchema,
+  restrictionsApplied: z.array(z.string()),
+  queryExecutions: z.array(discoveryQueryExecutionSchema),
+  rejectedCandidates: z.array(discoveryRejectedCandidateSchema),
+});
+export type DiscoveryExecutionReport = z.infer<typeof discoveryExecutionReportSchema>;
+
 export const missionDetailSchema = missionListItemSchema.extend({
   unrecognizedTerms: z.array(z.string()),
   report: z.string().nullable(), // Executive Report — null mientras RUNNING/PAUSED_*
@@ -356,5 +424,12 @@ export const missionDetailSchema = missionListItemSchema.extend({
   ceoIntent: ceoStructuredIntentSchema.nullable(),
   missionPlan: ceoMissionPlanSchema.nullable(),
   ceoIntentMeta: ceoIntentMetaSchema.nullable(),
+  // F7.3: reporte del ejecutor dinámico de descubrimiento — null salvo en
+  // misiones que realmente ejecutaron discover_companies vía el nuevo
+  // ejecutor (mission-executor.ts). "Contact Intelligence no fue
+  // ejecutado en esta fase" se infiere de este reporte existiendo y
+  // contacts/contactStats quedando vacíos — nunca se muestra "0 emails"
+  // como si Contact Intelligence hubiera corrido.
+  discoveryExecution: discoveryExecutionReportSchema.nullable(),
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;

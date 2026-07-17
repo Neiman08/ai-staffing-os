@@ -108,6 +108,7 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     ceoIntent?: MissionDetail["ceoIntent"];
     missionPlan?: MissionDetail["missionPlan"];
     ceoIntentMeta?: MissionDetail["ceoIntentMeta"];
+    discoveryExecution?: MissionDetail["discoveryExecution"];
   };
   const input = detail.input as { unrecognizedTerms?: string[] };
 
@@ -149,6 +150,14 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
       const leadCompanyId = (t.input as { companyId?: string } | null)?.companyId;
       if (leadCompanyId) companyIdsFromChildTasks.add(leadCompanyId);
     }
+  }
+  // F7.3: el ejecutor dinámico (mission-executor.ts) persiste
+  // createdCompanyIds en su propio AgentTask hijo "discover_companies",
+  // con una forma de output distinta a la del AgentTool clásico (arriba)
+  // — se suman acá para que "Empresas seleccionadas" también las
+  // muestre, reusando la misma sección en vez de inventar una nueva.
+  for (const companyId of output.discoveryExecution?.createdCompanyIds ?? []) {
+    companyIdsFromChildTasks.add(companyId);
   }
   const campaignCompanyIds = new Set(campaignCompanies.map((cc) => cc.companyId));
   const extraCompanyIds = Array.from(companyIdsFromChildTasks).filter((id) => !campaignCompanyIds.has(id));
@@ -244,6 +253,9 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     ceoIntent: output.ceoIntent ?? null,
     missionPlan: output.missionPlan ?? null,
     ceoIntentMeta: output.ceoIntentMeta ?? null,
+    // F7.3: null en toda misión que no ejecutó el nuevo ejecutor dinámico
+    // de descubrimiento (legacy, planned-only, o internal-CRM-search).
+    discoveryExecution: output.discoveryExecution ?? null,
   };
 }
 

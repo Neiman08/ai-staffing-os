@@ -29,6 +29,13 @@ const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   // F7.2: un plan generado no es ni un éxito ni una ejecución en curso —
   // badge propio, nunca confundido con COMPLETED/RUNNING.
   PLANNED: "info",
+  // F7.3: el ejecutor dinámico corrió las queries correctamente pero cero
+  // candidatos pasaron validación/dedup — nunca se ve como COMPLETED
+  // (verde) ni como FAILED (rojo), badge neutro propio.
+  NO_RESULTS: "neutral",
+  // F7.3: no había ninguna capacidad real disponible ANTES de arrancar
+  // (sin estado soportado, sin queries, sin proveedor con cobertura).
+  BLOCKED: "warning",
 };
 
 function LaunchMissionForm() {
@@ -153,7 +160,13 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
     // F7.2: un plan generado no tiene nada corriendo que pausar/cancelar
     // — la única forma de "ejecutarlo" de verdad todavía no existe
     // (fuera de alcance de F7.2, ver plan §API).
-    mission.missionState === "PLANNED";
+    mission.missionState === "PLANNED" ||
+    // F7.3: el ejecutor dinámico corre de punta a punta de forma síncrona
+    // (ver mission-executor.ts) — cuando termina, no queda nada en vuelo
+    // que pausar/cancelar/reanudar, sin importar en cuál de estos 2
+    // estados haya cerrado.
+    mission.missionState === "NO_RESULTS" ||
+    mission.missionState === "BLOCKED";
   if (isTerminal) return null;
 
   return (
@@ -344,6 +357,115 @@ function MissionPlanSection({
   );
 }
 
+const DISCOVERY_STATE_LABELS: Record<string, string> = {
+  COMPLETED: "Completado — se alcanzó el número de empresas pedido",
+  PARTIAL: "Parcial — se encontraron empresas, pero no se alcanzó el número pedido",
+  NO_RESULTS: "Sin resultados — las queries corrieron correctamente, cero candidatos válidos",
+  BLOCKED: "Bloqueado — no había capacidad real disponible antes de arrancar",
+  FAILED: "Falló — error técnico inesperado",
+};
+
+/**
+ * F7.3: "Plan ejecutado" — el reporte real del ejecutor dinámico
+ * (mission-executor.ts): qué se ejecutó, cuánto costó, por qué se
+ * detuvo. Presente únicamente cuando la misión pasó por el nuevo
+ * ejecutor (detail.discoveryExecution !== null) — nunca se muestra para
+ * misiones legacy/planned-only.
+ */
+function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDetail["discoveryExecution"]> }) {
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Plan ejecutado</p>
+        <Badge variant={MISSION_STATE_VARIANTS[report.missionState] ?? "neutral"}>
+          {formatStatusLabel(report.missionState)}
+        </Badge>
+      </div>
+      <p className="text-sm">{DISCOVERY_STATE_LABELS[report.missionState] ?? report.missionState}</p>
+
+      <div className="grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-6">
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.queriesExecuted}</p>
+          <p className="text-muted-foreground">Queries</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.rawResults}</p>
+          <p className="text-muted-foreground">Resultados crudos</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.acceptedResults}</p>
+          <p className="text-muted-foreground">Aceptados</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">{report.rejectedResults}</p>
+          <p className="text-muted-foreground">Rechazados</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">
+            {report.duplicatesWithinMission + report.duplicatesAlreadyInCrm}
+          </p>
+          <p className="text-muted-foreground">Duplicados</p>
+        </div>
+        <div>
+          <p className="text-base font-semibold tabular-nums">${report.costUsd.toFixed(4)}</p>
+          <p className="text-muted-foreground">Costo</p>
+        </div>
+      </div>
+
+      {report.queryExecutions.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Queries ejecutadas</p>
+          <div className="space-y-1">
+            {report.queryExecutions.map((q, i) => (
+              <div key={i} className="rounded-md border border-border p-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate" title={q.query}>
+                    {q.query} {q.city ? `· ${q.city}` : ""} {q.state ? `· ${q.state}` : ""}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">{q.provider ?? "sin proveedor"}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+                  <span>Crudos: {q.rawResultCount}</span>
+                  <span>Aceptados: {q.acceptedCount}</span>
+                  <span>Rechazados: {q.rejectedCount}</span>
+                  <span>Duplicados: {q.duplicateCount}</span>
+                  {q.error && <span className="text-amber-600 dark:text-amber-400">Error: {q.error}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <TagList label="Proveedores usados" items={report.providersUsed} variant="info" />
+      <TagList label="Proveedores omitidos" items={report.providersOmitted} variant="warning" />
+
+      {report.rejectedCandidates.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Validación — candidatos rechazados</p>
+          <div className="space-y-1">
+            {report.rejectedCandidates.map((r, i) => (
+              <div key={i} className="rounded-md border border-border p-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate font-medium" title={r.name ?? undefined}>
+                    {r.name ?? "(sin nombre)"}
+                  </span>
+                  <Badge variant="neutral">{Math.round(r.confidence * 100)}%</Badge>
+                </div>
+                <p className="mt-1 text-muted-foreground">{r.reason}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <TagList label="Restricciones aplicadas" items={report.restrictionsApplied} variant="warning" />
+      <TagList label="Limitaciones" items={report.limitations} />
+      <p className="text-xs text-muted-foreground">Motivo de detención: {formatStatusLabel(report.stopReason)}</p>
+    </div>
+  );
+}
+
 function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null; onClose: () => void }) {
   const { data: detail } = useQuery({
     queryKey: ["mission", missionId],
@@ -368,6 +490,7 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           {detail.missionPlan && (
             <MissionPlanSection plan={detail.missionPlan} warnings={detail.ceoIntentMeta?.warnings ?? []} />
           )}
+          {detail.discoveryExecution && <DiscoveryExecutionSection report={detail.discoveryExecution} />}
           {detail.unrecognizedTerms.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Términos no reconocidos</p>
@@ -451,6 +574,17 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           </div>
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Contact Intelligence</p>
+            {/* F7.3: Contact Intelligence nunca corrió para una misión
+                ejecutada por el nuevo ejecutor dinámico — mostrar "0
+                emails"/"0 contactos" acá sería engañoso (parecería que sí
+                se buscó y no encontró nada). Mensaje explícito en su
+                lugar. */}
+            {detail.discoveryExecution ? (
+              <p className="rounded-md border border-border p-2 text-xs text-muted-foreground">
+                Contact Intelligence pendiente de una fase posterior.
+              </p>
+            ) : (
+              <>
             <div className="grid grid-cols-4 gap-2 rounded-md border border-border p-2 text-center text-xs sm:grid-cols-7">
               <div>
                 <p className="text-base font-semibold tabular-nums">{detail.contactStats.companiesDiscovered}</p>
@@ -534,6 +668,8 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
                 <p className="text-xs text-muted-foreground">Sin contactos encontrados todavía.</p>
               )}
             </div>
+              </>
+            )}
           </div>
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
