@@ -497,6 +497,12 @@ export const discoveryExecutionReportSchema = z.object({
   contactDuplicatesSkipped: z.number(),
   contactRoleMismatchSkipped: z.number(),
   companiesWithContactsFound: z.number(),
+  // F7.9: agregado de F7.8 (Contact Verification and Ranking) en el
+  // reporte final de la misión.
+  contactsHighConfidence: z.number(),
+  contactsMediumConfidence: z.number(),
+  contactsLowConfidence: z.number(),
+  contactsRejected: z.number(),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

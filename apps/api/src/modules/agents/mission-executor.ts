@@ -223,6 +223,16 @@ export interface DiscoveryExecutionReport {
   contactDuplicatesSkipped: number;
   contactRoleMismatchSkipped: number;
   companiesWithContactsFound: number;
+  // F7.9: agregado de F7.8 (Contact Verification and Ranking) para que
+  // el reporte final de la misión integre las 10 piezas pedidas por el
+  // PO (intent -> plan -> discovery -> business validation -> email
+  // trust -> hiring signals -> role planning -> contact intelligence ->
+  // ranking -> reporte final) en un solo lugar, sin tener que ir a
+  // consultar Contact por separado.
+  contactsHighConfidence: number;
+  contactsMediumConfidence: number;
+  contactsLowConfidence: number;
+  contactsRejected: number;
 }
 
 interface FinalQuery {
@@ -438,6 +448,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     contactDuplicatesSkipped: 0,
     contactRoleMismatchSkipped: 0,
     companiesWithContactsFound: 0,
+    contactsHighConfidence: 0,
+    contactsMediumConfidence: 0,
+    contactsLowConfidence: 0,
+    contactsRejected: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -517,6 +531,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let contactDuplicatesSkippedTotal = 0;
   let contactRoleMismatchSkippedTotal = 0;
   let companiesWithContactsFoundTotal = 0;
+  let contactsHighConfidenceTotal = 0;
+  let contactsMediumConfidenceTotal = 0;
+  let contactsLowConfidenceTotal = 0;
+  let contactsRejectedTotal = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -713,6 +731,18 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         const hasValidEmail = enrichment.emailsVerified > 0 || enrichment.emailsRisky > 0;
         if (!hasValidEmail) companiesWithoutValidEmailTotal += 1;
         for (const failure of enrichment.patternsFailed) validationWarnings.add(failure);
+        // F7.9: propagar cancelación de Website Intelligence -- sin esto,
+        // una cancelación a mitad de la corrida seguía disparando pasos
+        // pagos (F7.7) para el resto de candidatos/queries, violando la
+        // condición de parada pedida por el usuario. Los pasos
+        // siguientes (F7.5-F7.7) se saltan para ESTE candidato y para
+        // cualquier otro que quede en el batch -- el registro parcial ya
+        // reunido igual se reporta abajo (nunca se descarta un Company
+        // ya persistido).
+        if (enrichment.cancelled) {
+          cancelled = true;
+          stopReason = "cancelled";
+        }
 
         // F7.5: Hiring Signal Intelligence — paso opcional del plan
         // (find_hiring_signals), nunca corre si el plan no lo declaró.
@@ -720,7 +750,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         // enriquecimiento de emails (enrichment.websiteSignals) — jamás
         // un segundo request al mismo sitio.
         let hiringSignal: HiringSignalResult | null = null;
-        if (params.plan.steps.includes("find_hiring_signals")) {
+        if (!cancelled && params.plan.steps.includes("find_hiring_signals")) {
           const taxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
           hiringSignal = evaluateHiringSignals({
             companyId: company.id,
@@ -749,7 +779,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         // implementado). Corre solo cuando el plan declara find_contacts
         // (preparación para esa fase futura) — nunca "por si acaso".
         let rolePlan: DecisionRolePlan | null = null;
-        if (params.plan.steps.includes("find_contacts")) {
+        if (!cancelled && params.plan.steps.includes("find_contacts")) {
           const taxonomyEntryForRoles = getTaxonomyEntry(candidate.query.taxonomyKey);
           rolePlan = buildDecisionRolePlan({
             companyId: company.id,
@@ -773,7 +803,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         // siquiera llama al proveedor (costo real $0 en ese caso).
         let contactsFoundForCompany = 0;
         let rolesWithoutContactForCompany: string[] = [];
-        if (rolePlan && rolePlan.targetRoles.length > 0) {
+        if (!cancelled && rolePlan && rolePlan.targetRoles.length > 0) {
           const contactEnrichment = await enrichCompanyWithDecisionContacts({
             taskId: childTask.id,
             companyId: company.id,
@@ -796,7 +826,21 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           contactsFoundForCompany = contactEnrichment.contactsCreated.length;
           rolesWithoutContactForCompany = contactEnrichment.rolesWithoutContact;
           if (contactsFoundForCompany > 0) companiesWithContactsFoundTotal += 1;
+          for (const created of contactEnrichment.contactsCreated) {
+            if (created.rankingTier === "HIGH_CONFIDENCE") contactsHighConfidenceTotal += 1;
+            else if (created.rankingTier === "MEDIUM_CONFIDENCE") contactsMediumConfidenceTotal += 1;
+            else if (created.rankingTier === "LOW_CONFIDENCE") contactsLowConfidenceTotal += 1;
+            else if (created.rankingTier === "REJECTED") contactsRejectedTotal += 1;
+          }
           for (const failure of contactEnrichment.patternsFailed) validationWarnings.add(failure);
+          // F7.9: misma razón que enrichment.cancelled arriba -- People
+          // Data Labs es un proveedor PAGO, así que ignorar esta
+          // cancelación sería el caso con mayor impacto real de
+          // presupuesto de los tres.
+          if (contactEnrichment.cancelled) {
+            cancelled = true;
+            stopReason = "cancelled";
+          }
         }
 
         companyValidations.push({
@@ -821,6 +865,12 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           contactsFound: contactsFoundForCompany,
           rolesWithoutContact: rolesWithoutContactForCompany,
         });
+        // F7.9: cortar el loop de candidatos de ESTA query inmediatamente
+        // al detectar cancelación -- sin este break, el resto de
+        // candidatos de la misma query seguían corriendo pasos pagos
+        // (F7.7) hasta el chequeo original de más abajo, que solo
+        // rompía el loop de queries, no el de candidatos.
+        if (cancelled) break;
       }
     }
 
@@ -898,6 +948,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     contactDuplicatesSkipped: contactDuplicatesSkippedTotal,
     contactRoleMismatchSkipped: contactRoleMismatchSkippedTotal,
     companiesWithContactsFound: companiesWithContactsFoundTotal,
+    contactsHighConfidence: contactsHighConfidenceTotal,
+    contactsMediumConfidence: contactsMediumConfidenceTotal,
+    contactsLowConfidence: contactsLowConfidenceTotal,
+    contactsRejected: contactsRejectedTotal,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,

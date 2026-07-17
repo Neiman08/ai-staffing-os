@@ -730,3 +730,44 @@ No aplica — `contact-ranking.ts` es puro (sin Prisma/fetch/proveedor externo, 
 `feat: F7.8 — contact verification and ranking`.
 
 **F7.8 completo.**
+
+---
+
+## 21. Resultado de F7.9 — Autonomous Acquisition Mission (integración)
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+### 21.1 Hallazgo de auditoría
+
+Las 10 piezas pedidas por el PO (intent -> mission plan -> discovery -> business validation -> email trust -> hiring signals -> decision-role planning -> contact intelligence -> ranking -> reporte final) YA estaban integradas por construcción: cada subfase F7.1-F7.8 se fue conectando secuencialmente dentro de la MISMA función (`mission-orchestrator.ts` interpreta el intent y arma el plan -> `executeDiscoveryPlan()` en `mission-executor.ts` ejecuta discovery -> business validation/email trust -> hiring signals -> role planning -> contact intelligence -> ranking, todo por Company, en un solo pipeline). No hizo falta una integración nueva — F7.9 fue, en la práctica, una auditoría de coherencia + hardening de lo ya integrado, tal como exige la regla "no declarar completado si solo se generó un plan sin backend funcional": se verificó el pipeline real (test de integración de las 10 piezas, §21.4) en vez de asumir que la integración ya existía.
+
+### 21.2 Bug real encontrado y corregido: cancelación no se propagaba desde los pasos pagos
+
+La auditoría de "límites globales/presupuesto/condiciones de parada" encontró que `enrichment.cancelled` (F7.4, Website Intelligence) y `contactEnrichment.cancelled` (F7.7, People Data Labs) nunca se revisaban en `mission-executor.ts` — existía desde F7.4 (impacto bajo entonces: Website Intelligence es gratis) pero se volvió un problema de presupuesto real con F7.7 (People Data Labs es pago): si un usuario cancelaba una misión mientras corría Contact Intelligence, la ejecución seguía completando el resto de candidatos de la misma query completa (incluyendo más llamadas pagas a PDL) antes de detenerse, porque el único chequeo de cancelación existente estaba DESPUÉS del loop completo de candidatos, no dentro de él. Corregido: ambos flags ahora se propagan a la variable `cancelled` del ejecutor, los pasos F7.5/F7.6/F7.7 se saltan para el resto del batch en cuanto se detecta, y un nuevo `break` dentro del loop de candidatos corta la iteración de inmediato (antes solo cortaba el loop de queries). El registro parcial de la Company ya procesada se sigue reportando honestamente (nunca se descarta un dato ya reunido).
+
+### 21.3 Reporte final — agregados de ranking (F7.8) integrados
+
+`DiscoveryExecutionReport` ganó `contactsHighConfidence`/`contactsMediumConfidence`/`contactsLowConfidence`/`contactsRejected` (agregados de los tiers de F7.8 sobre los contactos creados en la misión) — cierra el último eslabón pedido ("(9) ranking -> (10) reporte final") sin tener que consultar `Contact` por separado. Espejo Zod agregado a `packages/shared`. UI: nueva línea "Ranking" en la sección Validación de Mission Detail.
+
+### 21.4 Tests — 2 nuevos (todos passing)
+
+`mission-executor.test.ts` (+2): cancelación durante Contact Intelligence detiene la misión de inmediato (`missionState: PARTIAL`, `stopReason: cancelled`), nunca llama al proveedor pago para el resto de candidatos de la misma query, y el registro parcial de la primera Company se reporta honestamente; prueba de integración completa de las 10 piezas (intent -> plan -> discovery -> business validation -> email trust -> hiring signals -> role planning -> contact intelligence -> ranking -> reporte), verificando cada una presente y coherente en un solo reporte.
+
+### 21.5 Suite completa
+
+759 tests, 753 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`), 5 skip (4 gateados por el fix de real-provider-tests + 1 preexistente sin relación).
+
+### 21.6 Prueba real controlada
+
+No aplica — el fix es de control de flujo puro (comparación de un booleano ya devuelto por los módulos existentes), sin proveedor nuevo ni costo nuevo.
+
+### 21.7 Limitaciones conocidas
+
+- El "reporte final" integrado es el `DiscoveryExecutionReport` de una sola ejecución de `executeDiscoveryPlan()` — no agrega histórico entre misiones distintas (cada misión tiene su propio reporte, consistente con el resto del sistema).
+- Los límites globales de costo de la sesión ($1 USD, regla del PO) siguen siendo responsabilidad de quien opera la sesión (yo, en esta ejecución autónoma) — el sistema en sí solo enforce el presupuesto POR TENANT vía `data-provider-budget.ts`, no un cap de sesión de agente.
+
+### 21.8 Commit
+
+`feat: F7.9 — propagate cancellation across paid steps and complete mission report`.
+
+**F7.9 completo.**

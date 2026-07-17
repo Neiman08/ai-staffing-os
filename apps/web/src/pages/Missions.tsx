@@ -572,6 +572,14 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
           <span>Empresas con contacto: {report.companiesWithContactsFound}</span>
         </div>
       )}
+      {report.contactsCreatedTotal > 0 && (
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <span>Ranking — Alta confianza: {report.contactsHighConfidence}</span>
+          <span>Media: {report.contactsMediumConfidence}</span>
+          <span>Baja: {report.contactsLowConfidence}</span>
+          <span>Rechazados: {report.contactsRejected}</span>
+        </div>
+      )}
     </div>
   );
 }

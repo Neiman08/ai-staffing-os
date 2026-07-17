@@ -650,3 +650,77 @@ test("contact intelligence: un contacto ya existente (mismo nombre+empresa) se d
   assert.equal(contactEnrichment.duplicatesSkipped, 1);
   assert.equal(contactEnrichment.contactsCreated.length, 0);
 });
+
+// ---------- F7.9: propagación de cancelación entre pasos pagos ----------
+
+test("cancelación durante Contact Intelligence (F7.7) detiene la misión de inmediato, nunca sigue gastando en el resto de candidatos", async () => {
+  const tenantId = await setupTenant("cancel-during-contacts");
+  const providers = fakeProviders({
+    searchGooglePlaces: async () =>
+      googleResult([
+        candidateFixture({ name: "Acme Manufacturing", sourceUrl: "https://www.google.com/maps/place/?q=place_id:PLACE-1" }),
+        candidateFixture({ name: "Zenith Manufacturing", sourceUrl: "https://www.google.com/maps/place/?q=place_id:PLACE-2" }),
+      ]),
+  });
+  let contactProviderCalls = 0;
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => {
+      contactProviderCalls += 1;
+      return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: ["cancelled by user"], cancelled: true, providerStatus: "AVAILABLE" };
+    },
+  };
+  const report = await runWithHiring(tenantId, contactPlan(), providers, NO_OP_WEBSITE_INTELLIGENCE, [], ["HR Manager"], contactProvider);
+
+  assert.equal(contactProviderCalls, 1, "nunca debe llamar al proveedor pago para el segundo candidato tras la cancelación del primero");
+  assert.equal(report.missionState, "PARTIAL");
+  assert.equal(report.stopReason, "cancelled");
+  // La primera Company sí se persistió (evidencia real ya reunida antes
+  // de la cancelación) y su registro parcial se reporta honestamente;
+  // la segunda Company de la misma query nunca se procesa.
+  assert.equal(report.createdCompanyIds.length, 1);
+  assert.equal(report.companyValidations.length, 1);
+});
+
+test("reporte final integra las 10 piezas: intent -> plan -> discovery -> business validation -> email trust -> hiring signals -> role planning -> contact intelligence -> ranking -> reporte", async () => {
+  const tenantId = await setupTenant("full-pipeline-report");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => ({
+      candidates: [contactCandidateFixture()],
+      costUsd: 0.05,
+      sourcesUsed: ["People Data Labs (test)"],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+    }),
+  };
+  const plan = manufacturingPlan({
+    steps: ["discover_companies", "find_hiring_signals", "find_contacts"],
+    requiredSteps: ["discover_companies"],
+    optionalSteps: ["find_hiring_signals", "find_contacts"],
+  });
+  const port: WebsiteIntelligencePort = {
+    runWebsiteIntelligence: async () => ({
+      ...emptyWebsiteIntelligenceResult(),
+      hasCareersPage: true,
+      careersPageUrl: "https://acme-mfg.com/careers",
+      pageTexts: [{ url: "https://acme-mfg.com/careers", text: "We are now hiring a Forklift Operator." }],
+    }),
+  };
+  const report = await runWithHiring(tenantId, plan, providers, port, ["Forklift Operator"], ["HR Manager"], contactProvider);
+
+  // (1)-(3) intent/plan/discovery: una Company real creada.
+  assert.equal(report.companiesCreated, 1);
+  // (4)-(5) business validation + email trust: siempre presentes.
+  assert.ok(report.companyValidations[0]!.businessConfidence);
+  // (6) hiring signals.
+  assert.equal(report.companyValidations[0]!.hiringStatus, "CONFIRMED_HIRING");
+  // (7) role planning.
+  assert.ok(report.companyValidations[0]!.rolePlan);
+  // (8) contact intelligence.
+  assert.equal(report.companyValidations[0]!.contactsFound, 1);
+  // (9) ranking: el contacto real creado tiene un tier -- verificado vía
+  // el agregado del reporte final (10), nunca 0 cuando sí se creó un contacto.
+  const totalRanked = report.contactsHighConfidence + report.contactsMediumConfidence + report.contactsLowConfidence + report.contactsRejected;
+  assert.equal(totalRanked, 1);
+});
