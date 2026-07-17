@@ -459,6 +459,12 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
         </div>
       )}
 
+      {/* F7.11: validationWarnings ya se calculaba (advertencias no
+          fatales de Business Validation/Hiring Signals/Contact
+          Intelligence -- ej. robots.txt bloqueó el crawl, presupuesto
+          de proveedor excedido) pero nunca se mostraba -- hallazgo real
+          de la auditoría de "Mission Review and Approval". */}
+      <TagList label="Advertencias" items={report.validationWarnings} variant="warning" />
       <TagList label="Restricciones aplicadas" items={report.restrictionsApplied} variant="warning" />
       <TagList label="Limitaciones" items={report.limitations} />
       <p className="text-xs text-muted-foreground">Motivo de detención: {formatStatusLabel(report.stopReason)}</p>
@@ -544,7 +550,7 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
             {v.missingEvidence.length > 0 && (
               <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Falta confirmar: {v.missingEvidence.join(", ")}</p>
             )}
-            {v.targetTitlesMatched.length > 0 && (
+            {(v.targetTitlesMatched?.length ?? 0) > 0 && (
               <p className="mt-1 text-[11px] text-muted-foreground">Puestos detectados: {v.targetTitlesMatched.join(", ")}</p>
             )}
             {v.rolePlan && v.rolePlan.targetRoles.length > 0 && (
@@ -555,20 +561,49 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
             {v.contactsFound > 0 && (
               <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">Contactos personales encontrados: {v.contactsFound}</p>
             )}
-            {v.rolesWithoutContact.length > 0 && (
+            {(v.rolesWithoutContact?.length ?? 0) > 0 && (
               <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Sin contacto identificado: {v.rolesWithoutContact.join(", ")}</p>
             )}
-            <div className="mt-1.5 flex items-center gap-2">
-              <Badge variant={OPPORTUNITY_RECOMMENDATION_VARIANTS[v.opportunityRecommendation.recommendation] ?? "neutral"}>
-                {formatStatusLabel(v.opportunityRecommendation.recommendation)}
-              </Badge>
-              <span className="text-[11px] text-muted-foreground">
-                {v.opportunityRecommendation.nextBestAction}
-              </span>
-            </div>
-            {v.opportunityRecommendation.risks.length > 0 && (
-              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Riesgos: {v.opportunityRecommendation.risks.join(" ")}</p>
+            {/* F7.11 hallazgo de compatibilidad histórica: discoveryExecution
+                se lee del JSON congelado en AgentTask.output al momento en
+                que corrió la misión -- una misión anterior a F7.10 nunca
+                tendrá opportunityRecommendation. Guardia explícita, nunca
+                un crash ni un dato inventado para rellenar. */}
+            {v.opportunityRecommendation && (
+              <>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <Badge variant={OPPORTUNITY_RECOMMENDATION_VARIANTS[v.opportunityRecommendation.recommendation] ?? "neutral"}>
+                    {formatStatusLabel(v.opportunityRecommendation.recommendation)}
+                  </Badge>
+                  <span className="text-[11px] text-muted-foreground">
+                    {v.opportunityRecommendation.nextBestAction}
+                  </span>
+                </div>
+                {v.opportunityRecommendation.risks.length > 0 && (
+                  <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Riesgos: {v.opportunityRecommendation.risks.join(" ")}</p>
+                )}
+              </>
             )}
+            {/* F7.11: Mission Review and Approval -- acciones futuras
+                deshabilitadas a propósito. Ninguna de estas ejecuta
+                nada todavía: solo anticipan el flujo de aprobación
+                explícita del CEO, nunca una creación/archivo real. */}
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled
+                title="Requiere aprobación explícita del CEO — creación real de Opportunity todavía no implementada"
+              >
+                Crear Opportunity
+              </Button>
+              <Button size="sm" variant="outline" disabled title="Requiere aprobación explícita del CEO">
+                Archivar
+              </Button>
+              <Button size="sm" variant="outline" disabled title="Requiere aprobación explícita del CEO">
+                Marcar para revisión manual
+              </Button>
+            </div>
           </div>
         ))}
       </div>
@@ -601,7 +636,10 @@ function BusinessValidationSection({ report }: { report: NonNullable<MissionDeta
           <span>Rechazados: {report.contactsRejected}</span>
         </div>
       )}
-      {report.companyValidations.length > 0 && (
+      {/* Compatibilidad histórica: report.companiesRecommendedForOpportunity
+          (F7.10) no existe en el JSON congelado de una misión anterior --
+          se comprueba explícitamente en vez de solo companyValidations.length. */}
+      {report.companyValidations.length > 0 && report.companiesRecommendedForOpportunity != null && (
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
           <span>Recomendación — Crear Opportunity: {report.companiesRecommendedForOpportunity}</span>
           <span>Investigar más: {report.companiesRecommendedToInvestigate}</span>

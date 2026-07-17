@@ -817,3 +817,48 @@ No aplica — módulo puro, sin proveedor externo, sin costo.
 `feat: F7.10 — opportunity recommendation`.
 
 **F7.10 completo.**
+
+---
+
+## 23. Resultado de F7.11 — Mission Review and Approval (UI)
+
+**Autorización**: continuación autónoma sin pausa entre subfases (mismo mensaje del PO citado en §17).
+
+### 23.1 Alcance
+
+Fase puramente de UI/revisión -- sin cambios de backend. El checklist pedido por el PO (empresas, hiring signals, contactos, evidencia, costos, recomendaciones, restricciones, errores, limitaciones) ya estaba casi completo en Mission Detail (construido incrementalmente desde F7.2), con dos gaps reales encontrados en la auditoría:
+
+### 23.2 Hallazgo 1: `validationWarnings` nunca se mostraba
+
+El campo `DiscoveryExecutionReport.validationWarnings` (advertencias no fatales acumuladas por Business Validation/Hiring Signals/Contact Intelligence -- ej. "robots.txt bloqueó el crawl", "presupuesto de proveedor excedido") se calculaba desde F7.4 pero nunca se renderizaba en la UI. Corregido: nueva sección "Advertencias" en la vista de "Validación", junto a Restricciones/Limitaciones.
+
+### 23.3 Hallazgo 2 (crítico): crash de compatibilidad histórica
+
+`discoveryExecution` se lee del JSON **congelado** en `AgentTask.output` al momento en que corrió cada misión (`missions/service.ts`, `output.discoveryExecution ?? null`) -- nunca se recalcula. Cualquier misión real ejecutada ANTES del commit de F7.10 (`opportunityRecommendation` no nullable en el tipo, pero ausente en datos viejos) habría hecho crashear la UI al leer `v.opportunityRecommendation.recommendation` sobre `undefined`. Mismo riesgo, menor severidad, ya existía para `rolesWithoutContact`/`targetTitlesMatched` (F7.6/F7.7) sin guardia explícita. Corregido con guardias defensivas (`v.opportunityRecommendation &&`, `?? 0` en los `.length`) en vez de asumir que todo dato histórico tiene la forma más reciente -- nunca un dato inventado para rellenar el hueco, solo se oculta la sección que no aplica.
+
+### 23.4 Acciones futuras (deshabilitadas a propósito)
+
+Por Company: tres botones (`Crear Opportunity`, `Archivar`, `Marcar para revisión manual`) siempre `disabled`, con `title` explicando que requieren aprobación explícita del CEO -- anticipan el flujo de aprobación sin ejecutar nada real (ninguna Opportunity se crea, ningún estado cambia). Consistente con la regla de seguridad "toda comunicación/acción comercial debe ser DRAFT/PREVIEW hasta aprobación futura".
+
+### 23.5 Verificación visual real (Playwright, navegador real)
+
+Dado que las pruebas reales controladas anteriores ya se habían limpiado (cero dato de prueba persistido, por diseño), se sembraron dos `AgentTask` sintéticos en `tenant-titan` (nunca datos inventados de personas/empresas reales -- solo la FORMA del reporte, con nombres de empresa obviamente ficticios "Preview Manufacturing Co."/"Legacy Manufacturing Co.") para ejercitar: (a) una misión con TODOS los campos F7.4-F7.10 presentes, (b) una misión histórica SIN los campos F7.6+ (simulando datos pre-existentes). Verificado en Chromium real: cero errores de consola en ambos casos; caso (a) muestra correctamente badges de hiring signal, roles a buscar, contactos encontrados, badge de recomendación con `nextBestAction`, riesgos, los 3 botones deshabilitados, y todos los agregados de misión (ranking, recomendaciones); caso (b) degrada con gracia -- ninguna sección de F7.6+ se muestra, sin crash. Ambos `AgentTask` sintéticos eliminados después (verificado con conteo 0 posterior).
+
+### 23.6 Tests
+
+Ninguno nuevo (fase de UI pura, sin lógica de backend) -- verificación fue visual (Playwright) + regresión de la suite completa existente.
+
+### 23.7 Suite completa
+
+773 tests (sin cambio), 767 pass, 1 fail preexistente sin relación (mismo `prospecting.test.ts`), 5 skip (4 gateados por el fix de real-provider-tests + 1 preexistente sin relación). `pnpm --filter web typecheck`/`lint` limpios (mismos 2 warnings preexistentes).
+
+### 23.8 Limitaciones conocidas
+
+- Los botones de acción son deliberadamente inertes -- no hay endpoint de aprobación real todavía (eso sería trabajo de una fase posterior no solicitada en el alcance actual de F7).
+- No hay una vista consolidada "todas las misiones pendientes de revisión" -- cada misión se revisa individualmente desde su propio detalle.
+
+### 23.9 Commit
+
+`feat: F7.11 — mission review and approval UI`.
+
+**F7.11 completo.**
