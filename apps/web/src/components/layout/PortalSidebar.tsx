@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Briefcase, FileText, Users2, CalendarClock, Clock, ShieldAlert, User, FolderCheck } from "lucide-react";
+import { LayoutDashboard, Briefcase, FileText, Users2, CalendarClock, Clock, ShieldAlert, User, FolderCheck, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface NavItem {
@@ -22,6 +22,7 @@ export const CLIENT_NAV: NavItem[] = [
   { to: "/portal/client/assignments", label: "Assignments", icon: CalendarClock },
   { to: "/portal/client/time-entries", label: "Time Entries", icon: Clock },
   { to: "/portal/client/incidents", label: "Incidents", icon: ShieldAlert },
+  { to: "/portal/client/audit-log", label: "Audit Trail", icon: History },
 ];
 
 // F10.4: Worker Portal.
@@ -32,6 +33,7 @@ export const WORKER_NAV: NavItem[] = [
   { to: "/portal/worker/assignments", label: "Assignments", icon: CalendarClock },
   { to: "/portal/worker/time-entries", label: "Time Entries", icon: Clock },
   { to: "/portal/worker/incidents", label: "Incidents", icon: ShieldAlert },
+  { to: "/portal/worker/audit-log", label: "Audit Trail", icon: History },
 ];
 
 // F10.4: Candidate Portal -- sin Assignments/Time Entries (un
@@ -41,6 +43,7 @@ export const CANDIDATE_NAV: NavItem[] = [
   { to: "/portal/candidate/applications", label: "Applications", icon: Briefcase },
   { to: "/portal/candidate/onboarding", label: "Onboarding", icon: FolderCheck },
   { to: "/portal/candidate/documents", label: "Documents", icon: FileText },
+  { to: "/portal/candidate/audit-log", label: "Audit Trail", icon: History },
 ];
 
 export function PortalSidebar({ brandName, items, portalLabel }: { brandName?: string; items: NavItem[]; portalLabel: string }) {

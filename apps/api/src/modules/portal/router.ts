@@ -6,6 +6,7 @@ import * as clientJobRequestService from "./client-job-request-service";
 import * as internalJobRequestService from "./internal-job-request-service";
 import * as workerService from "./worker-service";
 import * as candidateService from "./candidate-service";
+import * as auditService from "../audit/service";
 
 /**
  * F10.2: Client Portal -- todas las rutas viven bajo /portal/client/*,
@@ -524,6 +525,48 @@ portalRouter.get("/portal/candidate/documents", requirePermission("portalDocumen
 portalRouter.post("/portal/candidate/documents/:id/submit", requirePermission("portalDocuments.update"), async (req, res, next) => {
   try {
     res.json(await candidateService.submitCandidateDocument(req.params.id!, parseDocumentSubmitBody(req.body as Record<string, unknown>)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================= F10.9: Portal Audit Trail =================
+
+function parseAuditLogQuery(req: import("express").Request) {
+  return {
+    cursor: req.query.cursor as string | undefined,
+    limit: req.query.limit ? Number(req.query.limit) : undefined,
+    dateFrom: req.query.dateFrom as string | undefined,
+    dateTo: req.query.dateTo as string | undefined,
+    entityType: req.query.entityType as string | undefined,
+    action: req.query.action as string | undefined,
+  };
+}
+
+// F10.9: solo CLIENT_ADMIN tiene auditLogs.view (CLIENT_MANAGER no --
+// mismo criterio "menos permisos" ya establecido en F10.1). Nunca
+// tenant-wide -- acotado a los recursos de SU Company en el service.
+portalRouter.get("/portal/client/audit-log", requirePermission("auditLogs.view"), async (req, res, next) => {
+  try {
+    res.json(await auditService.listClientAuditLog(parseAuditLogQuery(req)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F10.9: Worker/Candidate ven solo su propio historial
+// (actorId === ctx.userId, ver audit/service.ts).
+portalRouter.get("/portal/worker/audit-log", requirePermission("auditLogs.view"), async (req, res, next) => {
+  try {
+    res.json(await auditService.listOwnActionsAuditLog(parseAuditLogQuery(req)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/candidate/audit-log", requirePermission("auditLogs.view"), async (req, res, next) => {
+  try {
+    res.json(await auditService.listOwnActionsAuditLog(parseAuditLogQuery(req)));
   } catch (err) {
     next(err);
   }

@@ -33,6 +33,7 @@ import Approvals from "./pages/Approvals";
 import AIDashboard from "./pages/AIDashboard";
 import Settings from "./pages/Settings";
 import NotificationsCenter from "./pages/NotificationsCenter";
+import AuditTrail from "./pages/AuditTrail";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
@@ -122,6 +123,7 @@ export const router = createBrowserRouter([
       { path: "production-readiness", element: <ProductionReadiness /> },
       { path: "settings", element: <Settings /> },
       { path: "notifications", element: <NotificationsCenter /> },
+      { path: "audit-log", element: <AuditTrail endpoint="/audit-log" description="Historial de auditoría del tenant." /> },
     ],
   },
   // F10.2: rama de rutas SEPARADA para el Client Portal -- nunca
@@ -146,6 +148,7 @@ export const router = createBrowserRouter([
       { path: "time-entries", element: <ClientTimeEntries /> },
       { path: "incidents", element: <ClientIncidents /> },
       { path: "notifications", element: <NotificationsCenter /> },
+      { path: "audit-log", element: <AuditTrail endpoint="/portal/client/audit-log" description="Historial de acciones relacionadas con tu empresa." /> },
     ],
   },
   // F10.4: Worker Portal -- rama separada, mismo criterio que el Client Portal.
@@ -164,6 +167,7 @@ export const router = createBrowserRouter([
       { path: "time-entries", element: <WorkerTimeEntriesPage /> },
       { path: "incidents", element: <WorkerIncidentsPage /> },
       { path: "notifications", element: <NotificationsCenter /> },
+      { path: "audit-log", element: <AuditTrail endpoint="/portal/worker/audit-log" description="Tu propio historial de acciones." /> },
     ],
   },
   // F10.4: Candidate Portal -- rama separada, mismo criterio.
@@ -180,6 +184,7 @@ export const router = createBrowserRouter([
       { path: "onboarding", element: <CandidateOnboardingPage /> },
       { path: "documents", element: <CandidateDocumentsPage /> },
       { path: "notifications", element: <NotificationsCenter /> },
+      { path: "audit-log", element: <AuditTrail endpoint="/portal/candidate/audit-log" description="Tu propio historial de acciones." /> },
     ],
   },
 ]);

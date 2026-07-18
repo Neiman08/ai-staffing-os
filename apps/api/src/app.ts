@@ -17,6 +17,7 @@ import { incidentsRouter } from "./modules/incidents/router";
 import { reportsRouter } from "./modules/reports/router";
 import { portalRouter } from "./modules/portal/router";
 import { notificationsRouter } from "./modules/notifications/router";
+import { auditRouter } from "./modules/audit/router";
 import { matchingRouter } from "./modules/matching/router";
 import { complianceRouter } from "./modules/compliance/router";
 import { payrollRouter } from "./modules/payroll/router";
@@ -118,6 +119,7 @@ export function createApp() {
   app.use("/api/v1", reportsRouter);
   app.use("/api/v1", portalRouter);
   app.use("/api/v1", notificationsRouter);
+  app.use("/api/v1", auditRouter);
   app.use("/api/v1", matchingRouter);
   app.use("/api/v1", complianceRouter);
   app.use("/api/v1", payrollRouter);

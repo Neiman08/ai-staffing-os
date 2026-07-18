@@ -402,3 +402,43 @@ Playwright ad-hoc: trigger real (cliente crea+envía un Client Job Request) gene
 `feat: F10.8 — portal notifications center`.
 
 **F10.8 completo.**
+
+## 11. Resultado de F10.9 — Portal Audit Trail
+
+### 11.1 Auditoría previa: hallazgo real de deuda (sin gate de permisos)
+
+`AuditLog` existe desde F1, usado consistentemente por TODO F5-F10 en cada escritura sensible. El único consumidor existente, `GET /dashboard/audit-log` (F1, widget de "actividad de agentes" del Dashboard), **no tenía ningún `requirePermission`** -- cualquier usuario autenticado, incluyendo WORKER/CANDIDATE/CLIENT_MANAGER, podía ver el audit trail COMPLETO del tenant vía ese endpoint. Decisión: NO tocar ese endpoint (sigue siendo consumido activamente por `Dashboard.tsx`/`AIDashboard.tsx` para el widget de actividad de IA; gatearlo retroactivamente rompería ese widget para la mayoría de roles operativos internos, que no tienen `auditLogs.view`). En su lugar, F10.9 construye una superficie NUEVA, completa y correctamente permisionada (`/audit-log`, `/portal/{client,worker,candidate}/audit-log`) -- el hueco de permisos del widget viejo queda documentado como deuda preexistente de F1, fuera del alcance conservador de esta subfase (no es una regresión introducida por F10, y tocarlo abriría una reescritura no pedida).
+
+### 11.2 Diseño: tres niveles de visibilidad sobre la MISMA tabla
+
+Sin modelo nuevo -- `AuditLog` ya tiene todo lo necesario (`actorType`/`actorId`/`action`/`entityType`/`entityId`/`createdAt`; `before`/`after`/`ip` deliberadamente NUNCA expuestos en ningún nivel, mismo criterio que el widget de F1).
+
+- **Interno** (`listInternalAuditLog`): tenant completo, gateado por `auditLogs.view` -- deny by default real (solo CEO/Admin/Manager lo tienen; Recruiter/Compliance/Payroll/Sales/Operations/Marketing/HR/Accounting NO, decisión ya tomada en F10.1 y verificada acá con test). Filtros: rango de fechas, `actorId`, `entityType`, `action` (substring).
+- **Cliente** (`listClientAuditLog`): acotado a los recursos de SU Company -- **nunca tenant-wide**, aunque el caller sea CLIENT_ADMIN. Resuelve ownership real por tipo de entidad (`clientJobRequest.companyId`, `timeEntry`/`schedule_change_request` vía `assignment.jobOrder.companyId`) en vez de confiar en que el `entityId` "parece" pertenecer -- siempre valida contra la tabla real antes de incluir una fila. Solo CLIENT_ADMIN tiene `auditLogs.view` (CLIENT_MANAGER no, mismo criterio "menos permisos" de F10.1).
+- **Worker/Candidate** (`listOwnActionsAuditLog`): `actorId === ctx.userId` -- correcto por construcción, cero superficie de IDOR (nunca filtra por un id externo). Decisión conservadora documentada: no incluye acciones que un revisor interno tomó SOBRE sus registros (ej. `timeEntry.approved` hecho por un Admin) -- solo lo que el propio Worker/Candidate hizo desde su portal. Verificado visualmente: la misma `TimeEntry` muestra 2 actores distintos en la vista interna (Marcus Reyes + Diego Fernández) pero solo Marcus Reyes en la vista del Worker.
+
+### 11.3 Backend
+
+`modules/audit/service.ts` (3 funciones) + `modules/audit/router.ts` (`GET /audit-log`, interno) + 3 rutas nuevas en `modules/portal/router.ts` (`GET /portal/{client,worker,candidate}/audit-log`, reusando el mismo service).
+
+### 11.4 Frontend
+
+`AuditTrail.tsx` (compartida, `pages/`) -- tabla con filtros (fecha desde/hasta, recurso, acción) + paginación, montada en 4 rutas (`/audit-log` interno, `/portal/{client,worker,candidate}/audit-log`). Item "Audit Trail" agregado al Sidebar interno y a los 3 `NAV` arrays de portal (mismo criterio ya establecido: el Sidebar interno tampoco filtra items por permiso hoy, el backend es la barrera real -- consistente con el patrón preexistente, no una regresión).
+
+### 11.5 Tests nuevos
+
+`audit-trail.test.ts` (7, integración): 403 interno sin `auditLogs.view` (Sales); entradas internas nunca exponen `before`/`after`/`ip`, `actorLabel` siempre resuelto; filtros `entityType`/`action` funcionan; 403 de cliente para CLIENT_MANAGER; **el caso crítico** -- un cliente de company-01 nunca ve una acción de company-02 aunque comparta tenant (fixture creada directamente para simular una acción real de otra company); Worker ve una acción propia real (`portal.worker_profile_updated`) y CADA entrada devuelta tiene `actorId` igual al suyo, nunca otro; mismo patrón para Candidate, con verificación cruzada explícita de que nunca aparece el `actorId` del Worker.
+
+### 11.6 Suite completa
+
+1283 tests, 1278 pass, 0 fail, 5 skip -- cero regresiones. Typecheck/lint/build limpios en `apps/api` y `apps/web`.
+
+### 11.7 Verificación visual
+
+Playwright ad-hoc: vista interna muestra el tenant completo con nombres de actor resueltos, filtro por `entityType=timeEntry` funcionando (muestra el ciclo completo submit→update→reopen→reject→resubmit del TimeEntry de F10.7, con 2 actores distintos); vista de Cliente (company-01) correctamente vacía (ninguna de las acciones de prueba pertenece a company-01 -- confirmación de scoping correcto, no un bug); vista de Worker muestra únicamente las acciones de Marcus Reyes sobre su propio TimeEntry, sin la entrada de aprobación/rechazo hecha por el Admin interno. Cero errores de consola.
+
+### 11.8 Commit
+
+`feat: F10.9 — portal audit trail`.
+
+**F10.9 completo.**

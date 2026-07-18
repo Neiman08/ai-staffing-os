@@ -26,6 +26,7 @@ import {
   ShieldAlert,
   FileText,
   Repeat2,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -83,6 +84,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: "/approvals", label: "Approvals", icon: CheckSquare },
       { to: "/ai-dashboard", label: "AI Dashboard", icon: Sparkles },
       { to: "/production-readiness", label: "Production Readiness", icon: ShieldAlert },
+      { to: "/audit-log", label: "Audit Trail", icon: History },
       { to: "/settings", label: "Settings", icon: Settings },
     ],
   },
