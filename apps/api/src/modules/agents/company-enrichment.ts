@@ -185,8 +185,14 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
       // Se comprueba existencia primero (en vez de upsert con update:{})
       // para que companyContactPointsCreated cuente creaciones reales,
       // nunca un no-op sobre una fila ya presente.
-      const existing = await scopedDb.companyContactPoint.findUnique({
-        where: { companyId_email: { companyId: company.id, email: trust.normalizedEmail! } },
+      // Pre-F11 audit: CompanyContactPoint was just added to STRICT_TENANT_MODELS
+      // (see prisma-extension.ts) — per the F8 composite-unique-key limitation
+      // (findUnique/upsert redirect to findFirst, which doesn't accept a
+      // compound-key field-group name), this must use the plain-field form,
+      // same pattern already established by placements/service.ts and
+      // payroll/service.ts for their own compound-unique lookups.
+      const existing = await scopedDb.companyContactPoint.findFirst({
+        where: { companyId: company.id, email: trust.normalizedEmail! },
       });
       if (!existing) {
         await scopedDb.companyContactPoint.create({

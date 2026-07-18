@@ -447,8 +447,12 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       // registró explícitamente por qué no se creó la Campaign.
       if (!campaignId || !restrictions.allowOutreach) continue;
 
-      const cc = await scopedDb.campaignCompany.findUnique({
-        where: { campaignId_companyId: { campaignId, companyId } },
+      // Pre-F11 audit: CampaignCompany was just added to STRICT_TENANT_MODELS
+      // — per the F8 composite-unique-key limitation, findUnique's redirect to
+      // findFirst doesn't accept a compound-key field-group name, so this
+      // uses the plain-field form (same fix as agents/company-enrichment.ts).
+      const cc = await scopedDb.campaignCompany.findFirst({
+        where: { campaignId, companyId },
       });
       if (!cc) continue;
 

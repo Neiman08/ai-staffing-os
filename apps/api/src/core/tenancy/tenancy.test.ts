@@ -90,3 +90,33 @@ test("delete on a strict model from an unrelated tenant is refused", async () =>
     },
   );
 });
+
+// Pre-F11 audit (F-05, P0): FollowUp/Campaign/CampaignCompany/
+// CompanyContactPoint all have a required tenantId column and are queried
+// via scopedDb.* in 60+ call sites across the codebase (followups,
+// campaigns, crm, agents/scheduler, agents/tools/*), but were never added
+// to STRICT_TENANT_MODELS — every scopedDb call for these four models
+// silently fell through the `if (!isStrict && !isHybrid) return query(args)`
+// branch and ran completely unscoped, a full cross-tenant read/write
+// bypass. Confirmed only latent (not yet exploited) because tenant-acme had
+// never created rows in these tables; fixed by adding all four to the set.
+// tenant-titan genuinely owns FollowUp rows (13, per the audit baseline),
+// so this proves real cross-tenant isolation, not just "empty because the
+// tenant doesn't exist".
+test("FollowUp (pre-F11 audit fix): an unrelated real tenant (tenant-acme) sees zero of tenant-titan's rows", async () => {
+  await runWithTenancyContext({ tenantId: "tenant-titan", userId: "irrelevant", permissions: [] }, async () => {
+    const titanCount = await scopedDb.followUp.count();
+    assert.ok(titanCount > 0, "expected tenant-titan to have real seeded/created FollowUp rows");
+  });
+
+  await runWithTenancyContext({ tenantId: "tenant-acme", userId: "irrelevant", permissions: [] }, async () => {
+    const acmeVisible = await scopedDb.followUp.findMany();
+    assert.equal(acmeVisible.length, 0);
+  });
+});
+
+test("Campaign/CampaignCompany/CompanyContactPoint (pre-F11 audit fix): unscoped queries throw without a tenancy context", async () => {
+  await assert.rejects(() => scopedDb.campaign.findMany(), /Tenancy context missing/);
+  await assert.rejects(() => scopedDb.campaignCompany.findMany(), /Tenancy context missing/);
+  await assert.rejects(() => scopedDb.companyContactPoint.findMany(), /Tenancy context missing/);
+});

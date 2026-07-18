@@ -51,6 +51,24 @@ const STRICT_TENANT_MODELS = new Set([
   "AuditLog",
   "DomainEvent",
   "Notification",
+  // Pre-F11 audit finding (P0): these four models all have a required,
+  // non-nullable tenantId column in schema.prisma and are queried via
+  // scopedDb.* in 60+ call sites (followups/service.ts, campaigns/service.ts,
+  // crm/service.ts, agents/scheduler.ts, agents/tools/outreach-tools.impl.ts,
+  // etc.) that never pass an explicit tenantId filter — every one of those
+  // call sites was relying on the extension to inject/enforce it, exactly
+  // like every other STRICT model, but they were never added to this set.
+  // Confirmed via code read of $allOperations: with neither STRICT nor
+  // HYBRID membership, `if (!isStrict && !isHybrid) return query(args)`
+  // (line below) skips tenant filtering entirely — a full cross-tenant
+  // read/write bypass for FollowUp/Campaign/CampaignCompany/
+  // CompanyContactPoint, latent rather than yet exploited only because
+  // tenant-acme (the sole second tenant) has never created rows in these
+  // tables. See docs/PRE_F11_FULL_AUDIT_FINDINGS.md (F-05).
+  "FollowUp",
+  "Campaign",
+  "CampaignCompany",
+  "CompanyContactPoint",
 ]);
 
 /**
