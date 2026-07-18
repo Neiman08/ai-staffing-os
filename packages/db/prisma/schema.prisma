@@ -1512,36 +1512,36 @@ model Project {
 }
 
 model Assignment {
-  id           String                @id @default(cuid())
-  tenantId     String
-  workerId     String
-  worker       Worker                @relation(fields: [workerId], references: [id])
-  jobOrderId   String
-  jobOrder     JobOrder              @relation(fields: [jobOrderId], references: [id])
-  projectId    String?
-  project      Project?              @relation(fields: [projectId], references: [id])
+  id                     String                  @id @default(cuid())
+  tenantId               String
+  workerId               String
+  worker                 Worker                  @relation(fields: [workerId], references: [id])
+  jobOrderId             String
+  jobOrder               JobOrder                @relation(fields: [jobOrderId], references: [id])
+  projectId              String?
+  project                Project?                @relation(fields: [projectId], references: [id])
   // F9.5: enlace opcional al Placement de origen (F9.4) -- nullable
   // para no romper Assignments existentes creadas antes de F9.4/sin
   // pasar por el flujo de Placement (el POST directo a /assignments
   // sigue funcionando igual que F5.4).
-  placementId  String?
-  placement    Placement?            @relation(fields: [placementId], references: [id])
-  payRate      Decimal               @db.Decimal(10, 2) // snapshot al asignar
-  billRate     Decimal               @db.Decimal(10, 2) // snapshot al asignar
-  startDate    DateTime
-  endDate      DateTime?
-  status       AssignmentStatus      @default(SCHEDULED)
-  shifts       Shift[]
-  timeEntries  TimeEntry[]
-  payrollItems PayrollItem[]
-  incidents    OperationalIncident[]
+  placementId            String?
+  placement              Placement?              @relation(fields: [placementId], references: [id])
+  payRate                Decimal                 @db.Decimal(10, 2) // snapshot al asignar
+  billRate               Decimal                 @db.Decimal(10, 2) // snapshot al asignar
+  startDate              DateTime
+  endDate                DateTime?
+  status                 AssignmentStatus        @default(SCHEDULED)
+  shifts                 Shift[]
+  timeEntries            TimeEntry[]
+  payrollItems           PayrollItem[]
+  incidents              OperationalIncident[]
   // F10.6: solicitudes de cambio de horario del propio Worker -- nunca
   // mutan el Assignment directamente (spec explícita: el Worker no
   // puede activar/pausar/completar/cancelar), quedan como
   // request/acción pendiente de aprobación interna.
   scheduleChangeRequests ScheduleChangeRequest[]
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
   @@index([tenantId, workerId, status])
   @@index([tenantId, jobOrderId])
@@ -1558,10 +1558,10 @@ enum ScheduleChangeRequestStatus {
 // directamente desde el portal, solo crea este registro; la revisión
 // (aprobar/rechazar) es una acción interna (ver modules/assignments).
 model ScheduleChangeRequest {
-  id           String                       @id @default(cuid())
-  tenantId     String
-  assignmentId String
-  assignment   Assignment                   @relation(fields: [assignmentId], references: [id])
+  id              String                      @id @default(cuid())
+  tenantId        String
+  assignmentId    String
+  assignment      Assignment                  @relation(fields: [assignmentId], references: [id])
   // F10.6: quién pidió el cambio -- del contexto de tenancy, nunca del
   // body (mismo patrón que Candidate.createdById, F5.2).
   requestedById   String?
