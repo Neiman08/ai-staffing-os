@@ -24,3 +24,4 @@ export * from "./schemas/branding";
 export * from "./schemas/production-readiness";
 export * from "./schemas/public";
 export * from "./schemas/matching";
+export * from "./schemas/analytics";
