@@ -96,8 +96,23 @@ test.describe("Portal end-to-end flows", () => {
     // F10.11: fecha única por corrida -- TimeEntry tiene constraint
     // única (assignmentId, date, F5.6); una fecha fija colisionaría en
     // reruns (409) sin dejar rastro visible del "Borrador creado".
-    const uniqueDay = String(1 + (Date.now() % 27)).padStart(2, "0");
-    const uniqueDate = `2027-01-${uniqueDay}`;
+    //
+    // Pre-F11 audit fix (F-01): la versión original solo variaba el día
+    // dentro de "2027-01-DD" (27 valores posibles) mientras que los runs
+    // exitosos nunca se limpian a propósito (son rastro de auditoría
+    // legítimo, mismo criterio que ClientJobRequest en F10.11) -- tras
+    // suficientes corridas en la misma sesión, los 27 valores se agotaron
+    // y una corrida real colisionó (409), confirmado con datos reales:
+    // SELECT date FROM "TimeEntry" WHERE "assignmentId"='assignment-01'
+    // AND date >= '2027-01-01' ya devolvía 4 fechas ocupadas de 27. Se
+    // reemplaza por una ventana de ~27 años (9862 días) a partir de una
+    // fecha base lejos de cualquier fixture del seed, calculada desde
+    // Date.now() en milisegundos -- practicamente elimina la colisión
+    // sin cambiar el comportamiento observable de la prueba.
+    const baseDate = new Date("2030-01-01T00:00:00.000Z");
+    const dayOffset = Date.now() % 9862;
+    const uniqueDateObj = new Date(baseDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+    const uniqueDate = uniqueDateObj.toISOString().slice(0, 10);
 
     const newDraftButton = page.getByRole("button", { name: "Nuevo borrador" });
     if (await newDraftButton.count()) {
