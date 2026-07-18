@@ -10,11 +10,15 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import type {
+  ChecklistItemStatus,
+  DocumentChecklistItemRecord,
   InterviewPreviewRecord,
   InterviewPreviewStatus,
+  OnboardingStatus,
   PlacementReadinessRecord,
   QualificationEvaluationResult,
   ScreeningPlanRecord,
+  WorkerOnboardingRecord,
 } from "./types";
 
 /**
@@ -323,6 +327,243 @@ function PlacementReadinessSection({ candidateId, jobOrderId, canUpdate }: { can
   );
 }
 
+const ONBOARDING_STATUS_OPTIONS: OnboardingStatus[] = [
+  "INVITED",
+  "IN_PROGRESS",
+  "DOCUMENTS_PENDING",
+  "COMPLIANCE_REVIEW",
+  "READY",
+  "ACTIVE",
+  "BLOCKED",
+  "OFFBOARDED",
+];
+
+/**
+ * F9.9: Worker Onboarding (F9.1) -- misma clave (candidateId, jobOrderId)
+ * que Placement Readiness (F8.10), reutilizada acá sin recalcularla.
+ * INVITED es un estado interno/preview -- nunca envía una invitación
+ * real (sin integración de email/SMS). ACTIVE se rechaza en el backend
+ * sin un Worker ya existente (conversión real vía F5.2), nunca lo crea
+ * ni lo activa esta pantalla.
+ */
+function OnboardingSection({ candidateId, jobOrderId, canManage }: { candidateId: string; jobOrderId: string; canManage: boolean }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const queryKey = ["candidate-onboarding", candidateId, jobOrderId];
+  const [nextStatus, setNextStatus] = useState<OnboardingStatus>("IN_PROGRESS");
+
+  const query = useQuery({
+    queryKey,
+    queryFn: () => apiFetch<WorkerOnboardingRecord>(`/candidates/${candidateId}/onboarding/${jobOrderId}`),
+    retry: false,
+  });
+
+  const startMutation = useMutation({
+    mutationFn: () => apiFetch<WorkerOnboardingRecord>(`/candidates/${candidateId}/onboarding/${jobOrderId}`, { method: "POST" }),
+    onSuccess: (record) => {
+      queryClient.setQueryData(queryKey, record);
+      toast({ title: `Onboarding iniciado: ${formatStatusLabel(record.status)}`, variant: "success" });
+    },
+    onError: (err) =>
+      toast({
+        title: "No se pudo iniciar el onboarding",
+        description: isNotFoundError(err) ? "El Job Order no existe." : String(err),
+        variant: "error",
+      }),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: (status: OnboardingStatus) =>
+      apiFetch<WorkerOnboardingRecord>(`/candidates/${candidateId}/onboarding/${jobOrderId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      }),
+    onSuccess: (record) => {
+      queryClient.setQueryData(queryKey, record);
+      toast({ title: `Estado actualizado a ${formatStatusLabel(record.status)}`, variant: "success" });
+    },
+    onError: (err) => toast({ title: "Transición de estado inválida", description: String(err), variant: "error" }),
+  });
+
+  const neverStarted = query.isError && isNotFoundError(query.error);
+
+  return (
+    <div className="space-y-3 text-sm">
+      {canManage && (
+        <Button size="sm" onClick={() => startMutation.mutate()} disabled={startMutation.isPending || !!query.data}>
+          {startMutation.isPending ? "Iniciando…" : query.data ? "Onboarding ya iniciado" : "Iniciar onboarding"}
+        </Button>
+      )}
+
+      {query.isLoading && <p className="text-muted-foreground">Cargando…</p>}
+      {neverStarted && !query.data && <p className="text-muted-foreground">Todavía no se inició el onboarding para este candidato/Job Order.</p>}
+
+      {query.data && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Badge variant={statusVariant(query.data.status)}>{formatStatusLabel(query.data.status)}</Badge>
+            <span className="text-xs text-muted-foreground">Progreso {query.data.progress}%</span>
+          </div>
+          <p className="rounded border border-border bg-muted/40 p-2 text-xs">
+            <span className="font-medium">Próxima acción sugerida: </span>
+            {query.data.nextBestAction}
+          </p>
+          {query.data.blockers.length > 0 && (
+            <p className="text-destructive">
+              <span className="font-medium">Bloqueadores: </span>
+              {query.data.blockers.join(" · ")}
+            </p>
+          )}
+          {query.data.warnings.length > 0 && (
+            <p className="text-amber-600 dark:text-amber-400">
+              <span className="font-medium">Advertencias: </span>
+              {query.data.warnings.join(" · ")}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Worker vinculado: {query.data.workerId ?? "todavía ninguno (se enlaza automáticamente si ya existe)"}
+          </p>
+
+          {canManage && (
+            <div className="flex items-end gap-2 border-t border-border pt-2">
+              <Select value={nextStatus} onChange={(e) => setNextStatus(e.target.value as OnboardingStatus)}>
+                {ONBOARDING_STATUS_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {formatStatusLabel(s)}
+                  </option>
+                ))}
+              </Select>
+              <Button size="sm" variant="outline" onClick={() => statusMutation.mutate(nextStatus)} disabled={statusMutation.isPending}>
+                Cambiar estado
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const CHECKLIST_STATUS_OPTIONS: ChecklistItemStatus[] = [
+  "NOT_REQUESTED",
+  "PENDING",
+  "SUBMITTED",
+  "UNDER_REVIEW",
+  "VERIFIED",
+  "REJECTED",
+  "EXPIRED",
+  "WAIVED",
+];
+
+function ChecklistItemRow({
+  item,
+  canManage,
+  queryKey,
+}: {
+  item: DocumentChecklistItemRecord;
+  canManage: boolean;
+  queryKey: readonly unknown[];
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const statusMutation = useMutation({
+    mutationFn: (status: ChecklistItemStatus) =>
+      apiFetch(`/checklist-items/${item.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      toast({ title: "Estado del documento actualizado", variant: "success" });
+    },
+    onError: (err) => toast({ title: "Transición inválida", description: String(err), variant: "error" }),
+  });
+
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/70 p-2 text-sm">
+      <div>
+        <span className="font-medium">{item.label}</span>
+        {item.required && <span className="ml-1 text-xs text-destructive">*</span>}
+        {item.manualReviewRequired && <Badge variant="warning" className="ml-2">Requiere revisión manual</Badge>}
+      </div>
+      <div className="flex items-center gap-2">
+        <Badge variant={statusVariant(item.status)}>{formatStatusLabel(item.status)}</Badge>
+        {canManage && (
+          <Select
+            className="h-7 w-auto py-0 text-xs"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) statusMutation.mutate(e.target.value as ChecklistItemStatus);
+              e.target.value = "";
+            }}
+            disabled={statusMutation.isPending}
+            aria-label={`Cambiar estado del documento ${item.label}`}
+          >
+            <option value="">Cambiar a…</option>
+            {CHECKLIST_STATUS_OPTIONS.filter((s) => s !== item.status).map((s) => (
+              <option key={s} value={s}>
+                {formatStatusLabel(s)}
+              </option>
+            ))}
+          </Select>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * F9.9: Document Checklist (F9.2) -- generado desde `JobOrder.requirements`
+ * ya existente, nunca una lista inventada en el frontend. Regenerar es
+ * no-destructivo: solo agrega items faltantes, nunca revierte el
+ * progreso de uno ya existente (mismo criterio que la Shortlist, F8.7).
+ */
+function ChecklistSection({ candidateId, jobOrderId, canManage }: { candidateId: string; jobOrderId: string; canManage: boolean }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const queryKey = ["candidate-checklist", candidateId, jobOrderId];
+
+  const query = useQuery({
+    queryKey,
+    queryFn: () => apiFetch<DocumentChecklistItemRecord[]>(`/candidates/${candidateId}/onboarding/${jobOrderId}/checklist`),
+  });
+
+  const generateMutation = useMutation({
+    mutationFn: () => apiFetch<DocumentChecklistItemRecord[]>(`/candidates/${candidateId}/onboarding/${jobOrderId}/checklist`, { method: "POST" }),
+    onSuccess: (items) => {
+      queryClient.setQueryData(queryKey, items);
+      toast({ title: `Checklist generado: ${items.length} documento(s)`, variant: "success" });
+    },
+    onError: (err) =>
+      toast({
+        title: "No se pudo generar el checklist",
+        description: isNotFoundError(err) ? "Inicia el onboarding primero." : String(err),
+        variant: "error",
+      }),
+  });
+
+  const items = query.data ?? [];
+
+  return (
+    <div className="space-y-3 text-sm">
+      {canManage && (
+        <Button size="sm" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
+          {generateMutation.isPending ? "Generando…" : items.length > 0 ? "Refrescar checklist" : "Generar checklist"}
+        </Button>
+      )}
+
+      {query.isLoading && <p className="text-muted-foreground">Cargando…</p>}
+      {!query.isLoading && items.length === 0 && <p className="text-muted-foreground">Sin checklist todavía para este candidato/Job Order.</p>}
+
+      {items.length > 0 && (
+        <ul className="space-y-2">
+          {items.map((item) => (
+            <ChecklistItemRow key={item.id} item={item} canManage={canManage} queryKey={queryKey} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function CandidatePipelineDrawer({
   candidateId,
   jobOrderId,
@@ -334,6 +575,10 @@ export function CandidatePipelineDrawer({
 }) {
   const { data: currentUser } = useCurrentUser();
   const canUpdate = currentUser?.permissions.includes("candidates.update") ?? false;
+  // F9.9: onboarding/checklist (F9.1/F9.2) exigen workers.update en el
+  // backend, distinto de candidates.update -- un Recruiter puede editar
+  // candidatos sin poder gestionar onboarding.
+  const canManageOnboarding = currentUser?.permissions.includes("workers.update") ?? false;
 
   return (
     <Drawer open={!!candidateId} onClose={onClose} title="Pipeline del candidato">
@@ -361,6 +606,16 @@ export function CandidatePipelineDrawer({
           <section>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Placement Readiness</h3>
             <PlacementReadinessSection candidateId={candidateId} jobOrderId={jobOrderId} canUpdate={canUpdate} />
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Onboarding</h3>
+            <OnboardingSection candidateId={candidateId} jobOrderId={jobOrderId} canManage={canManageOnboarding} />
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Document Checklist</h3>
+            <ChecklistSection candidateId={candidateId} jobOrderId={jobOrderId} canManage={canManageOnboarding} />
           </section>
         </div>
       )}

@@ -364,3 +364,48 @@ Ninguna -- F9.8 no agrega columnas ni modelos, solo lee datos ya persistidos por
 `feat: F9.8 — billing readiness evaluator`.
 
 **F9.8 completo.**
+
+## 14. Resultado de F9.9 — Worker Operations UI
+
+### 14.1 Decisión de arquitectura (documentada antes de implementar)
+
+Mismo criterio que F8.11: "sin app separada, embebido en páginas reales". Auditoría previa confirmó dónde vive cada pieza:
+
+- **Onboarding (F9.1) + Document Checklist (F9.2)** están keyed por `(candidateId, jobOrderId)` -- EXACTAMENTE el mismo par que `PlacementReadiness` (F8.10), que ya vive en `CandidatePipelineDrawer.tsx` (F8.11). Se agregan como dos secciones nuevas al MISMO drawer en vez de crear una página nueva -- reutiliza infraestructura ya existente (RBAC, react-query, Drawer) sin inventar una ubicación nueva. `WorkerDetail.tsx` NO es el lugar correcto: un Worker puede no existir todavía cuando el onboarding empieza (F9.1 explícitamente permite `workerId: null`).
+- **Shifts + Payroll Readiness (F9.6/F9.7)** extienden la página `Payroll.tsx` ya existente (F5.6/F5.7) -- se le agregan dos pestañas nuevas (`Shifts`, `Readiness`) al selector de pestañas ya establecido (`Timesheets`/`Payroll Runs`), en vez de una página nueva.
+- **Billing Readiness (F9.8)** se agrega como panel fijo arriba de la tabla en `Invoices.tsx` (F5.8) -- consulta puntual antes de generar un Invoice real, mismo criterio que el flujo ya existente de "Generate Invoice".
+- **TimeEntry lifecycle extendido (F9.6)**: el `TimesheetsTab` ya existente se extiende con botones de acción por fila (submit/approve/reject/reopen) y banderas overtime/discrepancy, en vez de una tabla nueva.
+
+Ningún Worker se activa automáticamente, ninguna Assignment se crea, ningún pago/factura real se emite desde esta UI -- todas las acciones exigen un clic humano explícito contra un endpoint ya auditado en F9.1-F9.8.
+
+### 14.2 Arquitectura
+
+- **`apps/web/src/components/recruiting/types.ts`**: tipos locales nuevos `OnboardingStatus`, `WorkerOnboardingRecord`, `ChecklistItemStatus`, `DocumentChecklistItemRecord` (mismo criterio que los tipos F8.6-F8.10 ya declarados ahí -- esos endpoints no exportan DTOs a `@ai-staffing-os/shared`).
+- **`apps/web/src/components/recruiting/CandidatePipelineDrawer.tsx`**: `OnboardingSection` (estado + progreso + bloqueadores/advertencias + próxima acción sugerida + selector de transición de estado) y `ChecklistSection`/`ChecklistItemRow` (lista de documentos requeridos con selector de estado por item). Gateadas por `workers.update` (`canManageOnboarding`), distinto de `candidates.update` (`canUpdate`) que gatea las secciones F8.11 -- un Recruiter puede editar candidatos sin poder gestionar onboarding, y viceversa.
+- **`apps/web/src/pages/Payroll.tsx`**: `TimeEntryRowActions` (submit/approve/reject-con-motivo/reopen, reutiliza `timeEntries.update`), banderas `overtimeFlag`/`discrepancyFlag` visibles como badges por fila, `STATUS_FILTERS` extendido a 7 valores, `BULK_SELECTABLE_STATUSES` (PENDING+SUBMITTED) reemplaza el chequeo `=== "PENDING"` hardcodeado. Nuevas pestañas: `ShiftsTab` (listado + `CreateShiftForm`, gateada por `shifts.create`) y `PayrollReadinessTab` (lookup por Worker ID + período, sin selector de Worker por nombre a propósito -- evita construir un segundo picker grande solo para una consulta ocasional).
+- **`apps/web/src/pages/Invoices.tsx`**: `BillingReadinessPanel` (lookup por Company + período, muestra ingreso/costo/utilidad/margen estimados y bloqueadores/notas reales).
+- **`apps/web/src/lib/status.ts`**: mapeo de badges extendido para los estados nuevos de F9 (`READY`/`EXPORTED` → success; `IN_PROGRESS`/`DOCUMENTS_PENDING`/`COMPLIANCE_REVIEW`/`UNDER_REVIEW`/`READY_FOR_EXPORT`/`READY_FOR_INVOICE`/`SUBMITTED` → warning; `OFFBOARDED` → danger; `INVITED`/`NOT_REQUESTED`/`WAIVED` → info).
+- Sin cambios en `apps/api` -- F9.9 es 100% frontend, consume endpoints ya construidos y probados en F9.1-F9.8.
+
+### 14.3 Verificación
+
+- `apps/web/e2e/worker-operations.spec.ts` (nuevo, 6 tests, Playwright contra dev-bypass real y datos reales del seed): iniciar onboarding + generar checklist reales sin errores de consola; cambiar el estado de un item del checklist vía su selector; Payroll no ve el panel de onboarding (sin `workers.update` en ese drawer -- en la práctica nunca llega a abrirse porque Payroll tampoco ve matching/shortlist, mismo comportamiento ya probado por F8.11); Operations programa un Shift real desde la pestaña Shifts; Payroll consulta Payroll Readiness de un Worker inexistente y ve el error 404 real renderizado; Accounting consulta Billing Readiness real desde Invoices sin errores de consola.
+- Bug real encontrado y corregido DURANTE la propia verificación (no en producción): la aria-label del selector de estado de un item del checklist (`Cambiar estado de ${item.label}`) colisionaba por substring con la del selector de estado de un Shortlist entry ya existente de F8.11 (`Cambiar estado de shortlist para ${candidateId}`) -- ambos widgets pueden coexistir en la misma página (`JobOrderDetail`). Corregido a `Cambiar estado del documento ${item.label}`, un prefijo no ambiguo.
+- Bug de test (no de producción) encontrado y corregido: dos condiciones de carrera clásicas de Playwright -- un locator por texto exacto ("Iniciar onboarding" / "Evaluar placement readiness") pierde el elemento a mitad de un `.click()` si el texto cambia (por ejemplo, a "Onboarding ya iniciado") entre el chequeo `.count()` y la acción, porque la query de React Query resuelve en el medio. Corregido usando un único locator con regex que cubre ambos estados posibles, más `page.waitForResponse()` para esperar la respuesta inicial antes de leer el estado `disabled` del botón de onboarding (que si ya existe un registro previo en la misma base de dev reusada entre corridas, queda deshabilitado).
+- `e2e/recruiting-mission.spec.ts` (F8.11, 7 tests) re-ejecutado íntegro tras el fix de aria-label -- 7/7 sigue pasando, cero regresión.
+- Suite completa de e2e (32 tests, 5 specs + el nuevo): 31/32 pass, 1 fail preexistente sin relación (`job-order-matching.spec.ts`, F6.7 -- re-ejecutado en aislamiento total, falla idéntico, confirmado no relacionado a F9.9, mismo comportamiento ya documentado en el informe final de F8).
+- `npm run typecheck`, `npm run lint` y `npm run build` (producción) limpios en `apps/web`.
+- Suite completa de backend (1141 tests) re-ejecutada como control -- 1135 pass, 1 fail preexistente (`prospecting.test.ts`), 5 skip, sin cambios respecto a F9.8 (F9.9 no tocó `apps/api`).
+- Verificación visual manual con capturas reales contra los dev servers corriendo (`:4000`/`:5173`): drawer de Onboarding+Checklist con datos reales (candidate-023, estado INVITED, progreso 10%, checklist con Forklift Certification/Drug Test PENDING), pestaña Shifts vacía renderizando correctamente, pestaña Readiness con el formulario de lookup, y el panel de Billing Readiness mostrando NOT_READY real con blocker "No billable payroll items found" y nota "No contract on file" para Chicago Precision Manufacturing.
+
+### 14.4 Limitaciones conocidas
+
+- El lookup de Payroll/Billing Readiness pide el ID directo (Worker ID / selector de Company) en vez de un buscador por nombre para Workers -- decisión deliberada de minimizar alcance (evitar construir un segundo picker grande de Workers solo para una consulta ocasional de solo lectura); Company sí tiene selector por nombre porque ya existía la query de `/companies` reutilizable desde `CreateInvoiceForm`.
+- Sin acción de "lock" manual de una TimeEntry individual expuesta en la UI -- LOCKED sigue ocurriendo únicamente vía la inclusión automática en un Payroll Run (comportamiento F5.7 sin cambios), consistente con que no hay ningún caso de uso real pedido para bloquear una entrada fuera de ese flujo.
+- El indicador de discrepancia en la tabla de Timesheets muestra el `title` HTML nativo (tooltip del navegador) con el detalle -- no un tooltip custom -- decisión deliberada de no agregar una dependencia de UI nueva para un caso de uso menor.
+
+### 14.5 Commit
+
+`feat: F9.9 — worker operations UI`.
+
+**F9.9 completo.**

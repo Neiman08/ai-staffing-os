@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CompanyListItem, CreateInvoiceInput, InvoiceListItem, Paginated } from "@ai-staffing-os/shared";
-import { apiFetch } from "@/lib/api";
+import type { BillingReadinessResultDto, CompanyListItem, CreateInvoiceInput, InvoiceListItem, Paginated } from "@ai-staffing-os/shared";
+import { apiFetch, ApiError } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -20,6 +20,106 @@ import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { Plus } from "lucide-react";
 
 const STATUS_FILTERS = ["DRAFT", "SENT", "PAID", "OVERDUE", "VOID"];
+
+/**
+ * F9.8: consulta puntual de Billing Readiness antes de generar un
+ * Invoice real -- muestra ingreso/costo/margen estimados y bloqueadores
+ * reales (ej. Contract EXPIRED), siempre contra el backend (nunca
+ * calculado en el frontend). Solo lectura -- nunca emite una factura.
+ */
+function BillingReadinessPanel() {
+  const { toast } = useToast();
+  const { data: companies } = useQuery({
+    queryKey: ["companies", "for-billing-readiness"],
+    queryFn: () => apiFetch<Paginated<CompanyListItem>>("/companies?limit=100"),
+  });
+  const [companyId, setCompanyId] = useState("");
+  const [periodStart, setPeriodStart] = useState(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [periodEnd, setPeriodEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [submitted, setSubmitted] = useState<{ companyId: string; periodStart: string; periodEnd: string } | null>(null);
+
+  const query = useQuery({
+    queryKey: ["billing-readiness", submitted],
+    queryFn: () =>
+      apiFetch<BillingReadinessResultDto>(
+        `/billing/readiness?companyId=${submitted!.companyId}&periodStart=${submitted!.periodStart}&periodEnd=${submitted!.periodEnd}`,
+      ),
+    enabled: !!submitted,
+    retry: false,
+  });
+
+  return (
+    <Card className="mb-4 space-y-3 p-4">
+      <p className="text-sm font-medium">Billing Readiness</p>
+      <form
+        className="grid grid-cols-1 gap-3 sm:grid-cols-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!companyId) {
+            toast({ title: "Selecciona una empresa", variant: "error" });
+            return;
+          }
+          setSubmitted({ companyId, periodStart, periodEnd });
+        }}
+      >
+        <div>
+          <Label htmlFor="readinessCompanyId">Empresa</Label>
+          <Select id="readinessCompanyId" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+            <option value="">Selecciona…</option>
+            {companies?.items.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label htmlFor="readinessPeriodStart">Desde</Label>
+          <Input id="readinessPeriodStart" type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="readinessPeriodEnd">Hasta</Label>
+          <Input id="readinessPeriodEnd" type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" size="sm" className="w-full" disabled={query.isFetching}>
+            {query.isFetching ? "Evaluando…" : "Evaluar"}
+          </Button>
+        </div>
+      </form>
+
+      {query.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {query.error instanceof ApiError ? query.error.message : "No se pudo evaluar readiness."}
+        </p>
+      )}
+
+      {query.data && (
+        <div className="space-y-2 border-t border-border pt-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant={statusVariant(query.data.status)}>{formatStatusLabel(query.data.status)}</Badge>
+            <span>Ingreso estimado: <strong>${query.data.estimatedRevenue}</strong></span>
+            <span>Costo estimado: <strong>${query.data.estimatedLaborCost}</strong></span>
+            <span>Utilidad bruta: <strong>${query.data.estimatedGrossProfit}</strong></span>
+            <span>Margen: <strong>{query.data.estimatedMarginPercent}%</strong></span>
+          </div>
+          {query.data.blockers.length > 0 && (
+            <p className="text-destructive">
+              <span className="font-medium">Bloqueadores: </span>
+              {query.data.blockers.join(" · ")}
+            </p>
+          )}
+          {query.data.reviewNotes.length > 0 && (
+            <p className="text-amber-600 dark:text-amber-400">
+              <span className="font-medium">Notas: </span>
+              {query.data.reviewNotes.join(" · ")}
+            </p>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function CreateInvoiceForm({ onCreated }: { onCreated: (id: string) => void }) {
   const { toast } = useToast();
@@ -127,6 +227,8 @@ export default function Invoices() {
   return (
     <div>
       <PageHeader title="Invoices" description="Facturación a clientes generada desde nómina ya aprobada" />
+
+      <BillingReadinessPanel />
 
       <Card className="mb-4 flex flex-wrap items-end gap-3 p-3">
         <div className="w-44">

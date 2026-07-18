@@ -132,3 +132,63 @@ export interface PlacementReadinessRecord {
   evaluatedAt: string;
   rulesVersion: number;
 }
+
+// F9.9: tipos locales para los DTOs de F9.1/F9.2 -- mismo criterio que
+// arriba, esos endpoints tampoco agregaron nada a @ai-staffing-os/shared.
+
+export type OnboardingStatus =
+  | "INVITED"
+  | "IN_PROGRESS"
+  | "DOCUMENTS_PENDING"
+  | "COMPLIANCE_REVIEW"
+  | "READY"
+  | "ACTIVE"
+  | "BLOCKED"
+  | "OFFBOARDED";
+
+export interface WorkerOnboardingRecord {
+  id: string;
+  candidateId: string;
+  jobOrderId: string;
+  workerId: string | null;
+  status: OnboardingStatus;
+  progress: number;
+  blockers: string[];
+  warnings: string[];
+  nextBestAction: string;
+  requiresApproval: true;
+  rulesVersion: number;
+  startedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ChecklistItemStatus =
+  | "NOT_REQUESTED"
+  | "PENDING"
+  | "SUBMITTED"
+  | "UNDER_REVIEW"
+  | "VERIFIED"
+  | "REJECTED"
+  | "EXPIRED"
+  | "WAIVED";
+
+export interface DocumentChecklistItemRecord {
+  id: string;
+  workerOnboardingId: string;
+  documentTypeId: string;
+  documentTypeKey: string;
+  documentId: string | null;
+  label: string;
+  required: boolean;
+  status: ChecklistItemStatus;
+  source: string | null;
+  expiresAt: string | null;
+  verifiedAt: string | null;
+  verifiedById: string | null;
+  rejectionReason: string | null;
+  notes: string | null;
+  manualReviewRequired: boolean;
+  createdAt: string;
+  updatedAt: string;
+}

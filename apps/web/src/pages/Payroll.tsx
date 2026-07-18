@@ -4,12 +4,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AssignmentListItem,
   CreatePayrollRunInput,
+  CreateShiftInput,
   CreateTimeEntryInput,
   Paginated,
+  PayrollReadinessResultDto,
   PayrollRunListItem,
+  ShiftListItem,
   TimeEntryListItem,
 } from "@ai-staffing-os/shared";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -27,8 +30,13 @@ import { cn } from "@/lib/utils";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
 import { Plus } from "lucide-react";
 
-const STATUS_FILTERS = ["PENDING", "APPROVED", "LOCKED"];
-type Tab = "timesheets" | "runs";
+// F9.6: DRAFT/SUBMITTED/NEEDS_REVIEW/REJECTED extienden aditivamente el
+// lifecycle original PENDING/APPROVED/LOCKED de F5.6.
+const STATUS_FILTERS = ["DRAFT", "PENDING", "SUBMITTED", "NEEDS_REVIEW", "APPROVED", "REJECTED", "LOCKED"];
+// F9.6: bulk-approve acepta PENDING y SUBMITTED (NEEDS_REVIEW se excluye
+// a propósito -- exige revisión manual explícita, ver payroll/service.ts).
+const BULK_SELECTABLE_STATUSES = new Set(["PENDING", "SUBMITTED"]);
+type Tab = "timesheets" | "shifts" | "runs" | "readiness";
 
 function LogHoursForm({ onDone }: { onDone: () => void }) {
   const { toast } = useToast();
@@ -156,6 +164,255 @@ function LogHoursForm({ onDone }: { onDone: () => void }) {
   );
 }
 
+function CreateShiftForm({ onDone }: { onDone: () => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: assignments } = useQuery({
+    queryKey: ["assignments", "for-shift-form"],
+    queryFn: () => apiFetch<Paginated<AssignmentListItem>>("/assignments?limit=100"),
+  });
+
+  const [form, setForm] = useState<CreateShiftInput>({
+    assignmentId: "",
+    date: new Date().toISOString().slice(0, 10),
+    startTime: "09:00",
+    endTime: "17:00",
+    breakMinutes: 0,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (input: CreateShiftInput) => apiFetch("/shifts", { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: () => {
+      toast({ title: "Shift programado", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["shifts"] });
+      onDone();
+    },
+    onError: (err) => toast({ title: "No se pudo programar el shift", description: String(err), variant: "error" }),
+  });
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        createMutation.mutate(form);
+      }}
+    >
+      <div>
+        <Label htmlFor="shiftAssignmentId">Assignment *</Label>
+        <Select id="shiftAssignmentId" required value={form.assignmentId} onChange={(e) => setForm({ ...form, assignmentId: e.target.value })}>
+          <option value="">Selecciona…</option>
+          {assignments?.items.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.workerName} → {a.jobOrderTitle}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="shiftDate">Fecha *</Label>
+        <Input id="shiftDate" type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label htmlFor="startTime">Inicio *</Label>
+          <Input id="startTime" type="time" required value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />
+        </div>
+        <div>
+          <Label htmlFor="endTime">Fin *</Label>
+          <Input id="endTime" type="time" required value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">Un turno que termina antes de la hora de inicio se interpreta como nocturno (cruza medianoche).</p>
+      <div>
+        <Label htmlFor="breakMinutes">Descanso (min)</Label>
+        <Input
+          id="breakMinutes"
+          type="number"
+          min={0}
+          max={720}
+          value={form.breakMinutes ?? 0}
+          onChange={(e) => setForm({ ...form, breakMinutes: Number(e.target.value) })}
+        />
+      </div>
+      <Button type="submit" className="w-full" disabled={createMutation.isPending || !form.assignmentId}>
+        {createMutation.isPending ? "Guardando…" : "Programar Shift"}
+      </Button>
+    </form>
+  );
+}
+
+function ShiftsTab() {
+  const { data: currentUser } = useCurrentUser();
+  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const cursor = cursorStack[cursorStack.length - 1];
+
+  const canCreate = currentUser?.permissions.includes("shifts.create") ?? false;
+
+  const params = new URLSearchParams({ limit: "20" });
+  if (cursor) params.set("cursor", cursor);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["shifts", cursor],
+    queryFn: () => apiFetch<Paginated<ShiftListItem>>(`/shifts?${params.toString()}`),
+  });
+
+  return (
+    <div>
+      <Card className="mb-4 flex items-center justify-between p-3">
+        <p className="text-sm text-muted-foreground">Turnos programados por Assignment -- base para detectar discrepancias de horas.</p>
+        {canCreate && (
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Programar Shift
+          </Button>
+        )}
+      </Card>
+
+      <Card>
+        {isLoading ? (
+          <LoadingTable />
+        ) : data?.items.length ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Trabajador</TableHead>
+                <TableHead>Job Order</TableHead>
+                <TableHead>Fecha</TableHead>
+                <TableHead>Horario</TableHead>
+                <TableHead>Descanso</TableHead>
+                <TableHead>Horas programadas</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.items.map((shift) => (
+                <TableRow key={shift.id}>
+                  <TableCell className="font-medium">{shift.workerName}</TableCell>
+                  <TableCell className="text-muted-foreground">{shift.jobOrderTitle}</TableCell>
+                  <TableCell className="text-muted-foreground">{new Date(shift.date).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {shift.startTime}–{shift.endTime}
+                    {shift.timezone && <span className="ml-1 text-xs">({shift.timezone})</span>}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{shift.breakMinutes} min</TableCell>
+                  <TableCell className="font-medium">{shift.scheduledHours}h</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <p className="p-6 text-center text-sm text-muted-foreground">Sin Shifts programados todavía.</p>
+        )}
+        <Pagination
+          hasPrevious={cursorStack.length > 1}
+          hasNext={!!data?.nextCursor}
+          onPrevious={() => setCursorStack((stack) => stack.slice(0, -1))}
+          onNext={() => data?.nextCursor && setCursorStack((stack) => [...stack, data.nextCursor!])}
+        />
+      </Card>
+
+      <Drawer open={createOpen} onClose={() => setCreateOpen(false)} title="Programar Shift">
+        <CreateShiftForm onDone={() => setCreateOpen(false)} />
+      </Drawer>
+    </div>
+  );
+}
+
+/**
+ * F9.7: consulta puntual de Payroll Readiness -- entra un workerId +
+ * período, muestra el resultado real del backend (nunca calculado en el
+ * frontend). Sin selector de Worker por nombre a propósito (se pega el
+ * id directo, mismo criterio minimalista que otras herramientas de
+ * lookup de esta fase) -- evita construir un segundo selector grande de
+ * Workers solo para esta consulta ocasional.
+ */
+function PayrollReadinessTab() {
+  const { toast } = useToast();
+  const [workerId, setWorkerId] = useState("");
+  const [periodStart, setPeriodStart] = useState(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [periodEnd, setPeriodEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [submitted, setSubmitted] = useState<{ workerId: string; periodStart: string; periodEnd: string } | null>(null);
+
+  const query = useQuery({
+    queryKey: ["payroll-readiness", submitted],
+    queryFn: () =>
+      apiFetch<PayrollReadinessResultDto>(
+        `/payroll/readiness?workerId=${submitted!.workerId}&periodStart=${submitted!.periodStart}&periodEnd=${submitted!.periodEnd}`,
+      ),
+    enabled: !!submitted,
+    retry: false,
+  });
+
+  return (
+    <div className="max-w-xl space-y-4">
+      <Card className="space-y-3 p-4">
+        <p className="text-sm text-muted-foreground">
+          Evalúa si un Worker está listo para incluirse en un Payroll Run para el período dado -- solo lectura, nunca
+          procesa un pago real.
+        </p>
+        <form
+          className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!workerId) {
+              toast({ title: "Ingresa un Worker ID", variant: "error" });
+              return;
+            }
+            setSubmitted({ workerId, periodStart, periodEnd });
+          }}
+        >
+          <div className="sm:col-span-3">
+            <Label htmlFor="readinessWorkerId">Worker ID</Label>
+            <Input id="readinessWorkerId" value={workerId} onChange={(e) => setWorkerId(e.target.value)} placeholder="worker-…" />
+          </div>
+          <div>
+            <Label htmlFor="readinessPeriodStart">Desde</Label>
+            <Input id="readinessPeriodStart" type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="readinessPeriodEnd">Hasta</Label>
+            <Input id="readinessPeriodEnd" type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
+          </div>
+          <div className="flex items-end sm:col-span-3">
+            <Button type="submit" size="sm" disabled={query.isFetching}>
+              {query.isFetching ? "Evaluando…" : "Evaluar Readiness"}
+            </Button>
+          </div>
+        </form>
+      </Card>
+
+      {query.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {query.error instanceof ApiError ? query.error.message : "No se pudo evaluar readiness."}
+        </p>
+      )}
+
+      {query.data && (
+        <Card className="space-y-2 p-4 text-sm">
+          <div className="flex items-center justify-between">
+            <Badge variant={statusVariant(query.data.status)}>{formatStatusLabel(query.data.status)}</Badge>
+            <span className="text-xs text-muted-foreground">{query.data.timeEntryCount} time entr{query.data.timeEntryCount === 1 ? "y" : "ies"}</span>
+          </div>
+          {query.data.blockers.length > 0 && (
+            <p className="text-destructive">
+              <span className="font-medium">Bloqueadores: </span>
+              {query.data.blockers.join(" · ")}
+            </p>
+          )}
+          {query.data.reviewNotes.length > 0 && (
+            <p className="text-amber-600 dark:text-amber-400">
+              <span className="font-medium">Notas: </span>
+              {query.data.reviewNotes.join(" · ")}
+            </p>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function CreatePayrollRunForm({ onCreated }: { onCreated: (id: string) => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -214,6 +471,109 @@ function CreatePayrollRunForm({ onCreated }: { onCreated: (id: string) => void }
         {createMutation.isPending ? "Creando…" : "Crear Payroll Run"}
       </Button>
     </form>
+  );
+}
+
+/**
+ * F9.6: acciones de una sola TimeEntry -- submit (DRAFT -> SUBMITTED/
+ * NEEDS_REVIEW, decidido por el backend, nunca a discreción del
+ * frontend), approve, reject (exige motivo) y reopen (REJECTED ->
+ * DRAFT, nunca un rechazo permanente). Todas reutilizan timeEntries.update
+ * (mismo criterio que bulk-approve en F5.6).
+ */
+function TimeEntryRowActions({ entry, canManage }: { entry: TimeEntryListItem; canManage: boolean }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["time-entries"] });
+
+  const submitMutation = useMutation({
+    mutationFn: () => apiFetch(`/time-entries/${entry.id}/submit`, { method: "POST" }),
+    onSuccess: (updated) => {
+      const t = updated as { status: string };
+      toast({ title: `Enviado: ${formatStatusLabel(t.status)}`, variant: "success" });
+      invalidate();
+    },
+    onError: (err) => toast({ title: "No se pudo enviar", description: String(err), variant: "error" }),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: () => apiFetch(`/time-entries/${entry.id}/approve`, { method: "POST" }),
+    onSuccess: () => {
+      toast({ title: "Entrada aprobada", variant: "success" });
+      invalidate();
+    },
+    onError: (err) => toast({ title: "No se pudo aprobar", description: String(err), variant: "error" }),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: () => apiFetch(`/time-entries/${entry.id}/reject`, { method: "POST", body: JSON.stringify({ rejectionReason: reason }) }),
+    onSuccess: () => {
+      toast({ title: "Entrada rechazada", variant: "success" });
+      setRejecting(false);
+      setReason("");
+      invalidate();
+    },
+    onError: (err) => toast({ title: "No se pudo rechazar", description: String(err), variant: "error" }),
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: () => apiFetch(`/time-entries/${entry.id}/reopen`, { method: "POST" }),
+    onSuccess: () => {
+      toast({ title: "Reabierta como DRAFT", variant: "success" });
+      invalidate();
+    },
+    onError: (err) => toast({ title: "No se pudo reabrir", description: String(err), variant: "error" }),
+  });
+
+  if (!canManage) return null;
+
+  if (rejecting) {
+    return (
+      <div className="flex items-center gap-1">
+        <Input
+          className="h-7 w-36 text-xs"
+          placeholder="Motivo del rechazo…"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={!reason || rejectMutation.isPending} onClick={() => rejectMutation.mutate()}>
+          Confirmar
+        </Button>
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => { setRejecting(false); setReason(""); }}>
+          Cancelar
+        </Button>
+      </div>
+    );
+  }
+
+  const pending = submitMutation.isPending || approveMutation.isPending || reopenMutation.isPending;
+
+  return (
+    <div className="flex items-center gap-1">
+      {entry.status === "DRAFT" && (
+        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={pending} onClick={() => submitMutation.mutate()}>
+          Enviar
+        </Button>
+      )}
+      {(entry.status === "PENDING" || entry.status === "SUBMITTED" || entry.status === "NEEDS_REVIEW") && (
+        <>
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={pending} onClick={() => approveMutation.mutate()}>
+            Aprobar
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive" onClick={() => setRejecting(true)}>
+            Rechazar
+          </Button>
+        </>
+      )}
+      {entry.status === "REJECTED" && (
+        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={pending} onClick={() => reopenMutation.mutate()}>
+          Reabrir
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -312,6 +672,7 @@ function TimesheetsTab() {
                 <TableHead>Pay</TableHead>
                 <TableHead>Margen</TableHead>
                 <TableHead>Estado</TableHead>
+                {canApprove && <TableHead>Acciones</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -319,7 +680,7 @@ function TimesheetsTab() {
                 <TableRow key={entry.id}>
                   {canApprove && (
                     <TableCell>
-                      {entry.status === "PENDING" && (
+                      {BULK_SELECTABLE_STATUSES.has(entry.status) && (
                         <input
                           type="checkbox"
                           className="h-4 w-4 rounded border-border"
@@ -343,8 +704,17 @@ function TimesheetsTab() {
                     ${entry.margin}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(entry.status)}>{formatStatusLabel(entry.status)}</Badge>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge variant={statusVariant(entry.status)}>{formatStatusLabel(entry.status)}</Badge>
+                      {entry.overtimeFlag && <Badge variant="warning">OT</Badge>}
+                      {entry.discrepancyFlag && <Badge variant="warning" title={entry.discrepancyNotes ?? undefined}>Discrepancia</Badge>}
+                    </div>
                   </TableCell>
+                  {canApprove && (
+                    <TableCell>
+                      <TimeEntryRowActions entry={entry} canManage={canApprove} />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -453,6 +823,13 @@ function PayrollRunsTab() {
   );
 }
 
+const TAB_LABELS: Record<Tab, string> = {
+  timesheets: "Timesheets",
+  shifts: "Shifts",
+  runs: "Payroll Runs",
+  readiness: "Readiness",
+};
+
 export default function Payroll() {
   const [tab, setTab] = useState<Tab>("timesheets");
 
@@ -461,7 +838,7 @@ export default function Payroll() {
       <PageHeader title="Payroll" description="Horas registradas, márgenes, aprobación y runs de nómina" />
 
       <div className="mb-4 flex gap-1 rounded-md border border-border bg-secondary/40 p-1 w-fit">
-        {(["timesheets", "runs"] as const).map((t) => (
+        {(["timesheets", "shifts", "runs", "readiness"] as const).map((t) => (
           <Button
             key={t}
             variant={tab === t ? "default" : "ghost"}
@@ -469,12 +846,15 @@ export default function Payroll() {
             onClick={() => setTab(t)}
             className={cn(tab !== t && "text-muted-foreground")}
           >
-            {t === "timesheets" ? "Timesheets" : "Payroll Runs"}
+            {TAB_LABELS[t]}
           </Button>
         ))}
       </div>
 
-      {tab === "timesheets" ? <TimesheetsTab /> : <PayrollRunsTab />}
+      {tab === "timesheets" && <TimesheetsTab />}
+      {tab === "shifts" && <ShiftsTab />}
+      {tab === "runs" && <PayrollRunsTab />}
+      {tab === "readiness" && <PayrollReadinessTab />}
     </div>
   );
 }

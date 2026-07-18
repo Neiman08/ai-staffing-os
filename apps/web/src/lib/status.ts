@@ -18,6 +18,10 @@ const SUCCESS = new Set([
   // F8.11: qualification/interview (F8.5/F8.9) -- estado ya aprobado/listo
   "HIGH",
   "APPROVED_FOR_SEND",
+  // F9.9: onboarding (F9.1) listo para activar; readiness (F9.7/F9.8) ya
+  // resuelta contra un run/invoice real -- hecho histórico, no se reescribe.
+  "READY",
+  "EXPORTED",
 ]);
 
 const WARNING = new Set([
@@ -43,6 +47,17 @@ const WARNING = new Set([
   "READY_FOR_APPROVAL",
   "CONDITIONALLY_READY",
   "MEDIUM",
+  // F9.9: onboarding/checklist (F9.1/F9.2) en curso, todavía requieren
+  // acción humana; readiness (F9.7/F9.8) lista para el siguiente paso
+  // manual (sweep de nómina / generar invoice); TimeEntry ya enviado
+  // (F9.6), esperando revisión.
+  "IN_PROGRESS",
+  "DOCUMENTS_PENDING",
+  "COMPLIANCE_REVIEW",
+  "UNDER_REVIEW",
+  "READY_FOR_EXPORT",
+  "READY_FOR_INVOICE",
+  "SUBMITTED",
 ]);
 
 const DANGER = new Set([
@@ -65,9 +80,25 @@ const DANGER = new Set([
   "REMOVED",
   "NOT_READY",
   "LOW",
+  // F9.9: onboarding terminado (F9.1) -- mismo criterio que TERMINATED.
+  "OFFBOARDED",
 ]);
 
-const INFO = new Set(["LEAD", "NEW", "OPEN", "DRAFT", "SCHEDULED", "MANUAL", "FULL_AUTO", "SENT"]);
+const INFO = new Set([
+  "LEAD",
+  "NEW",
+  "OPEN",
+  "DRAFT",
+  "SCHEDULED",
+  "MANUAL",
+  "FULL_AUTO",
+  "SENT",
+  // F9.9: onboarding/checklist (F9.1/F9.2) -- etapa temprana/no aplicable,
+  // ni positiva ni negativa.
+  "INVITED",
+  "NOT_REQUESTED",
+  "WAIVED",
+]);
 
 export function statusVariant(status: string): NonNullable<BadgeProps["variant"]> {
   const s = status.toUpperCase();
