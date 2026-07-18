@@ -456,3 +456,44 @@ Además: `npm run seed` re-ejecutado (idempotente, solo upserts) para propagar e
 `feat: F9.10 — exceptions and incidents`.
 
 **F9.10 completo.**
+
+## 16. Resultado de F9.11 — Operational Reports
+
+### 16.1 Decisión de arquitectura (documentada antes de implementar)
+
+Mismo patrón exacto que `dashboard/service.ts` (F6.8, ya existente): RBAC campo-por-campo en vez de endpoint-por-endpoint -- el endpoint `GET /reports/operational` nunca devuelve 403 para ningún rol autenticado, pero cada bloque de métricas solo se calcula y se incluye en la respuesta si el caller trae el permiso real que YA gatea ese recurso en su propio módulo (`workers.view`, `documents.view`, `assignments.view`, `timeEntries.view`, `shifts.view`, `incidents.view`) -- nunca un permiso `reports.*` inventado. Nuevo módulo standalone `apps/api/src/modules/reports/` en vez de extender `dashboard/` (dominio distinto: Dashboard es un resumen ejecutivo cross-fase ya establecido desde F1/F6.8; Operational Reports es específicamente la agregación de los dominios operativos nuevos de F9).
+
+Cada número es un `groupBy`/`count` real de Prisma sobre datos ya persistidos -- CERO predicción, CERO métrica derivada de un modelo/heurística inventada. La única "agregación derivada" (`openIncidentCount` = suma de OPEN+UNDER_REVIEW+ACTION_REQUIRED) es una suma aritmética de conteos reales ya calculados, mismo criterio que `fillRate` en el Dashboard (F6.8) -- no una predicción.
+
+### 16.2 Arquitectura
+
+- **`apps/api/src/modules/reports/service.ts`** (nuevo): `getOperationalReport()` -- 7 bloques de métricas en paralelo (`Promise.all`), cada uno condicionado a su permiso real: `onboardingByStatus`/`checklistItemsByStatus` (`workers.view`), `complianceEvaluationsByStatus` (`documents.view`, mismo criterio que Dashboard para exponer compliance), `placementsByStatus`/`assignmentsByStatus` (`assignments.view`), `timeEntriesByStatus`/`timeEntryFlagCounts` (`timeEntries.view`), `shiftCount` (`shifts.view`), `incidentsByStatus`/`incidentsByType`/`openIncidentCount` (`incidents.view`). `generatedAt` siempre presente, independientemente de permisos.
+- **`apps/api/src/modules/reports/router.ts`** (nuevo): `GET /reports/operational`, sin `requirePermission` a nivel de ruta -- idéntico a `dashboard/router.ts`.
+- **`apps/api/src/app.ts`**: registrado `reportsRouter`.
+- Sin cambios en `schema.prisma` -- lee exclusivamente datos ya persistidos por F9.1-F9.10, cero modelo/migración nueva.
+
+### 16.3 Tests nuevos
+
+`reports.test.ts` (12 tests de integración, mismo patrón matriz-por-rol que `dashboard/router.test.ts`, F6.8): 8 roles con su combinación exacta de campos presentes/ausentes derivada directamente de `ROLE_PERMISSIONS` en el seed (CEO todo, Recruiter sin timeEntries/shifts/incidents, Compliance sin timeEntries/shifts, Payroll sin compliance/incidents, Operations sin compliance, HR sin assignments/timeEntries/shifts, Accounting solo timeEntries, Manager todo, Sales nada) + el endpoint nunca devuelve 403 + `generatedAt` siempre presente y es un timestamp ISO real + los conteos son enteros no negativos reales.
+
+Bug de test (no de producción) encontrado y corregido durante la propia verificación: la expectativa inicial de Manager asumía que no tenía `incidents.view`, pero SÍ lo tiene (agregado en F9.10 §15, confirmado por grep del seed) -- corregido para reflejar el estado real de `ROLE_PERMISSIONS`, no una suposición.
+
+### 16.4 Suite completa
+
+1176 tests, 1170 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones nuevas. Typecheck y lint limpios en `apps/api`.
+
+### 16.5 Migraciones
+
+Ninguna -- F9.11 es de solo lectura sobre datos ya persistidos por F9.1-F9.10.
+
+### 16.6 Limitaciones conocidas
+
+- Sin serie temporal/tendencia -- cada número es un snapshot del momento de la consulta (`generatedAt`), igual que el Dashboard existente. Una vista histórica (ej. "incidentes por semana") quedaría para una fase futura si se pide explícitamente.
+- Sin desglose por Worker/Company individual -- son agregados tenant-wide. Un reporte por entidad individual ya existe en las páginas de detalle respectivas (`WorkerDetail`, `AssignmentDetail`, etc.).
+- Sin UI todavía -- mismo criterio que F9.10: F9.9 fue la subfase de UI designada y ya cerró; una UI para este reporte quedaría para una extensión futura explícita.
+
+### 16.7 Commit
+
+`feat: F9.11 — operational reports`.
+
+**F9.11 completo.**
