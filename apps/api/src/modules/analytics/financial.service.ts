@@ -12,6 +12,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
 import { comparePeriods, daysBetween, previousPeriod, resolvePeriod, toResolvedPeriod, type DateRange } from "../../core/analytics/period";
+import { toCsvDocument } from "../../core/analytics/csv";
 
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -161,4 +162,47 @@ export async function getFinancialMetrics(query: AnalyticsPeriodQuery): Promise<
   }
 
   return { generatedAt: new Date().toISOString(), financial };
+}
+
+/**
+ * F11.8: mismo patrón que los otros dos exports -- CSV formateado sobre
+ * el mismo cálculo real de getFinancialMetrics, ninguna query nueva.
+ * marginTrend se exporta fila por fila (es la única de las tres métricas
+ * que ya es una serie, no un escalar).
+ */
+export async function exportFinancialMetricsCsv(query: AnalyticsPeriodQuery): Promise<{ csv: string; filename: string }> {
+  const metrics = await getFinancialMetrics(query);
+  const { period, marginTrend, invoiceAging, payrollCost } = metrics.financial;
+
+  const rows: string[][] = [["Metric", "Value"]];
+  if (period) rows.push(["Period From", period.from], ["Period To", period.to]);
+
+  if (invoiceAging) {
+    rows.push(
+      ["Invoice Aging: Current (0-30d)", invoiceAging.current],
+      ["Invoice Aging: 31-60d", invoiceAging.days31to60],
+      ["Invoice Aging: 61-90d", invoiceAging.days61to90],
+      ["Invoice Aging: 90+d", invoiceAging.over90],
+      ["Invoice Aging: Total Outstanding", invoiceAging.totalOutstanding],
+    );
+  }
+  if (payrollCost) {
+    rows.push(
+      ["Payroll: Total Gross", payrollCost.totalGross],
+      ["Payroll: Total Bill", payrollCost.totalBill],
+      ["Payroll: Total Margin", payrollCost.totalMargin],
+      ["Payroll: Runs Included", String(payrollCost.runsIncluded)],
+    );
+  }
+
+  if (marginTrend?.length) {
+    rows.push([], ["Date", "Hours", "Margin"]);
+    for (const point of marginTrend) {
+      rows.push([point.date, String(point.hours), String(point.margin)]);
+    }
+  }
+
+  const from = period?.from.slice(0, 10) ?? "all";
+  const to = period?.to.slice(0, 10) ?? "time";
+  return { csv: toCsvDocument(rows), filename: `financial-metrics-${from}-to-${to}.csv` };
 }

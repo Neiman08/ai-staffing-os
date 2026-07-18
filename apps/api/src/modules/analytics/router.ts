@@ -48,3 +48,38 @@ analyticsRouter.get("/analytics/financial", requireInternalIdentity(), async (re
     next(err);
   }
 });
+
+// F11.8: mismo patrón de descarga que payroll/router.ts (F5.7) --
+// Content-Disposition: attachment, text/csv, CSV devuelto directo en la
+// respuesta, sin storage. Mismos filtros from/to que la versión JSON, y
+// mismo criterio de RBAC de campo (nunca 403 -- un caller sin permiso
+// descarga un CSV con solo el header).
+analyticsRouter.get("/analytics/recruiting/export", requireInternalIdentity(), async (req, res, next) => {
+  try {
+    const query = analyticsPeriodQuerySchema.parse(req.query);
+    const { csv, filename } = await recruitingService.exportRecruitingMetricsCsv(query);
+    res.status(200).header("Content-Disposition", `attachment; filename="${filename}"`).type("text/csv").send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+analyticsRouter.get("/analytics/commercial/export", requireInternalIdentity(), async (req, res, next) => {
+  try {
+    const query = analyticsPeriodQuerySchema.parse(req.query);
+    const { csv, filename } = await commercialService.exportCommercialMetricsCsv(query);
+    res.status(200).header("Content-Disposition", `attachment; filename="${filename}"`).type("text/csv").send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+analyticsRouter.get("/analytics/financial/export", requireInternalIdentity(), async (req, res, next) => {
+  try {
+    const query = analyticsPeriodQuerySchema.parse(req.query);
+    const { csv, filename } = await financialService.exportFinancialMetricsCsv(query);
+    res.status(200).header("Content-Disposition", `attachment; filename="${filename}"`).type("text/csv").send(csv);
+  } catch (err) {
+    next(err);
+  }
+});

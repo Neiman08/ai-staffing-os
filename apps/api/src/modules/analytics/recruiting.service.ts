@@ -14,6 +14,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
 import { comparePeriods, daysBetween, previousPeriod, resolvePeriod, toResolvedPeriod, type DateRange } from "../../core/analytics/period";
+import { toCsvDocument } from "../../core/analytics/csv";
 
 const DEFAULT_WINDOW_DAYS = 90;
 
@@ -165,4 +166,47 @@ export async function getRecruitingMetrics(query: AnalyticsPeriodQuery): Promise
       sourceEffectiveness,
     },
   };
+}
+
+/**
+ * F11.8: mismo patrón que payroll/service.ts:exportPayrollRun (F5.7) --
+ * CSV generado en memoria a partir del mismo cálculo real ya usado por
+ * el endpoint JSON (getRecruitingMetrics), nunca una query nueva
+ * duplicada solo para el export. Sin permiso -> CSV vacío con solo el
+ * header (mismo criterio "nunca 403, RBAC por campo" del resto del
+ * módulo), consistente con lo que el endpoint JSON ya haría.
+ */
+export async function exportRecruitingMetricsCsv(query: AnalyticsPeriodQuery): Promise<{ csv: string; filename: string }> {
+  const metrics = await getRecruitingMetrics(query);
+  const { period, funnel, timeToFill, sourceEffectiveness } = metrics.recruiting;
+
+  const rows: string[][] = [["Metric", "Value"]];
+  if (period) {
+    rows.push(["Period From", period.from], ["Period To", period.to]);
+  }
+  if (funnel) {
+    rows.push(
+      ["Sourced", String(funnel.sourced)],
+      ["Qualified", String(funnel.qualified)],
+      ["Shortlisted", String(funnel.shortlisted)],
+      ["Placed", String(funnel.placed)],
+    );
+  }
+  if (timeToFill) {
+    rows.push(
+      ["Avg Time to Fill (days)", timeToFill.averageDays === null ? "" : String(timeToFill.averageDays)],
+      ["Job Orders Filled", String(timeToFill.jobOrdersFilled)],
+    );
+  }
+
+  if (sourceEffectiveness?.length) {
+    rows.push([], ["Source", "Candidates", "Placed", "Placement Rate %"]);
+    for (const entry of sourceEffectiveness) {
+      rows.push([entry.source, String(entry.candidateCount), String(entry.placedCount), String(entry.placementRate)]);
+    }
+  }
+
+  const from = period?.from.slice(0, 10) ?? "all";
+  const to = period?.to.slice(0, 10) ?? "time";
+  return { csv: toCsvDocument(rows), filename: `recruiting-metrics-${from}-to-${to}.csv` };
 }

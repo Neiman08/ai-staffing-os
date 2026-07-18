@@ -10,6 +10,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
 import { comparePeriods, daysBetween, previousPeriod, resolvePeriod, toResolvedPeriod, type DateRange } from "../../core/analytics/period";
+import { toCsvDocument } from "../../core/analytics/csv";
 
 const DEFAULT_WINDOW_DAYS = 90;
 
@@ -129,4 +130,37 @@ export async function getCommercialMetrics(query: AnalyticsPeriodQuery): Promise
   commercial.comparison = comparison;
 
   return { generatedAt: new Date().toISOString(), commercial };
+}
+
+/**
+ * F11.8: mismo patrón que recruiting.service.ts:exportRecruitingMetricsCsv
+ * -- CSV formateado sobre el mismo cálculo real de getCommercialMetrics,
+ * ninguna query nueva.
+ */
+export async function exportCommercialMetricsCsv(query: AnalyticsPeriodQuery): Promise<{ csv: string; filename: string }> {
+  const metrics = await getCommercialMetrics(query);
+  const { period, winRate, salesCycle, conversion } = metrics.commercial;
+
+  const rows: string[][] = [["Metric", "Value"]];
+  if (period) rows.push(["Period From", period.from], ["Period To", period.to]);
+  if (winRate) {
+    rows.push(
+      ["Opportunities Won", String(winRate.won)],
+      ["Opportunities Lost", String(winRate.lost)],
+      ["Win Rate %", winRate.winRatePercent === null ? "" : String(winRate.winRatePercent)],
+    );
+  }
+  if (salesCycle) {
+    rows.push(["Avg Sales Cycle (days)", salesCycle.averageDays === null ? "" : String(salesCycle.averageDays)]);
+  }
+  if (conversion) {
+    rows.push(["Lead Conversion Rate %", conversion.leadConversionRate === null ? "" : String(conversion.leadConversionRate)]);
+    if (conversion.leadToOpportunityRate !== undefined) {
+      rows.push(["Lead to Opportunity Rate %", conversion.leadToOpportunityRate === null ? "" : String(conversion.leadToOpportunityRate)]);
+    }
+  }
+
+  const from = period?.from.slice(0, 10) ?? "all";
+  const to = period?.to.slice(0, 10) ?? "time";
+  return { csv: toCsvDocument(rows), filename: `commercial-metrics-${from}-to-${to}.csv` };
 }
