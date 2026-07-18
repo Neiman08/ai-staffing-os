@@ -1,5 +1,6 @@
 import { Router } from "express";
 import * as reportsService from "./service";
+import { requireInternalIdentity } from "../../core/rbac/require-permission";
 
 /**
  * F9.11: sin `requirePermission` a nivel de ruta a propósito -- mismo
@@ -10,10 +11,16 @@ import * as reportsService from "./service";
  * Un usuario sin ninguno de esos permisos simplemente recibe un
  * resumen vacío (solo `generatedAt`), nunca un 403 -- igual que el
  * Dashboard.
+ *
+ * Pre-F11 audit: verificado en vivo que el field-level omission sí
+ * funciona (una identidad WORKER recibe solo `{generatedAt}`), pero esto
+ * predata F10 y nunca consideró portales -- requireInternalIdentity() es
+ * una segunda capa que no depende de que cada campo del service se filtre
+ * correctamente, mismo criterio que dashboard/router.ts y revenue/router.ts.
  */
 export const reportsRouter = Router();
 
-reportsRouter.get("/reports/operational", async (_req, res, next) => {
+reportsRouter.get("/reports/operational", requireInternalIdentity(), async (_req, res, next) => {
   try {
     res.json(await reportsService.getOperationalReport());
   } catch (err) {

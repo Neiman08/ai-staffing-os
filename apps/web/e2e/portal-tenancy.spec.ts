@@ -90,6 +90,30 @@ test.describe("Portal tenancy / IDOR", () => {
     expect(status).toBe(403);
   });
 
+  // Pre-F11 audit (F-06/F-07): revenue/summary, revenue/intelligence y
+  // dashboard/audit-log eran alcanzables por CUALQUIER identidad
+  // autenticada -- confirmado en vivo vía curl con worker-portal@titan.dev,
+  // candidate-portal@titan.dev y client-admin@titan.dev, cada uno recibiendo
+  // datos financieros/de auditoría internos reales (pipeline value, nombres
+  // de companies/opportunities, actores y acciones del AuditLog completo
+  // del tenant). requireInternalIdentity() (core/rbac/require-permission.ts)
+  // ahora rechaza cualquier identidad de portal (companyId/workerId/
+  // candidateId) antes de que el service corra, sin tocar el acceso de
+  // ningún rol interno.
+  test("revenue/summary, revenue/intelligence y dashboard/audit-log nunca son alcanzables desde una identidad de portal", async ({ page }) => {
+    await setDevUser(page, "worker-portal@titan.dev");
+    await page.goto("/portal/worker");
+
+    const statuses = await page.evaluate(async () => {
+      const paths = ["/api/v1/revenue/summary", "/api/v1/revenue/intelligence", "/api/v1/dashboard/audit-log"];
+      const results = await Promise.all(paths.map((p) => fetch(p, { headers: { "content-type": "application/json" } })));
+      return results.map((r) => r.status);
+    });
+    for (const status of statuses) {
+      expect(status).toBe(403);
+    }
+  });
+
   test("un CLIENT_MANAGER (sin auditLogs.view) recibe 403 real al pedir el audit trail directamente, la UI no es la única barrera", async ({ page }) => {
     await setDevUser(page, "client-manager@titan.dev");
     await page.goto("/portal/client");

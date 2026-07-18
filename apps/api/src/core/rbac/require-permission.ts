@@ -83,3 +83,35 @@ export function requireAllPermissions(permissions: PermissionKey[]) {
     next();
   };
 }
+
+/**
+ * Pre-F11 audit finding (revenue/summary + dashboard/audit-log, confirmed
+ * exploitable live via dev-bypass as a portal identity): several internal,
+ * tenant-wide endpoints (F0/F1-era "visible to every authenticated role"
+ * dashboards) were never designed with portals in mind, because portals
+ * didn't exist yet. They rely on a resource permission (or, per F6.8, on
+ * field-level omission inside the service) to keep INTERNAL roles scoped —
+ * but F10's portal roles (CLIENT_ADMIN/CLIENT_MANAGER/WORKER/CANDIDATE) can
+ * carry unrelated "portal*" permissions that happen to share a permission
+ * key with an internal one (e.g. auditLogs.view, used both by F10.9's
+ * self-scoped portal audit trail and by this endpoint's tenant-wide dump),
+ * so a permission check alone is not a safe gate here. A portal identity
+ * (ctx.companyId/workerId/candidateId set) must never reach an
+ * internal-only endpoint, regardless of which permissions it holds —
+ * mirrors the ownership-check pattern already used by every portal
+ * service (F10.1), just applied in the opposite direction.
+ */
+export function requireInternalIdentity() {
+  return (_req: Request, _res: Response, next: NextFunction) => {
+    const ctx = getTenancyContext();
+    if (!ctx) {
+      next(AppError.unauthorized("No authenticated context"));
+      return;
+    }
+    if (ctx.companyId || ctx.workerId || ctx.candidateId) {
+      next(AppError.forbidden("This endpoint is not available to portal identities"));
+      return;
+    }
+    next();
+  };
+}
