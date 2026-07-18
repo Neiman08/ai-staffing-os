@@ -11,12 +11,33 @@ import type { AnalyticsPeriodQuery, FinancialMetrics } from "@ai-staffing-os/sha
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { daysBetween, resolvePeriod, toResolvedPeriod } from "../../core/analytics/period";
+import { comparePeriods, daysBetween, previousPeriod, resolvePeriod, toResolvedPeriod, type DateRange } from "../../core/analytics/period";
 
 const DEFAULT_WINDOW_DAYS = 30;
 
 function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * F11.7: totales de horas/margen para un rango -- usado para comparar el
+ * período anterior contra el actual (cuyos totales ya salen de sumar
+ * financial.marginTrend, sin volver a consultar TimeEntry dos veces
+ * para el mismo rango).
+ */
+async function sumHoursAndMargin(range: DateRange): Promise<{ hours: number; margin: number }> {
+  const timeEntries = await scopedDb.timeEntry.findMany({
+    where: { date: { gte: range.from, lte: range.to } },
+    include: { assignment: true },
+  });
+  let hours = 0;
+  let margin = 0;
+  for (const entry of timeEntries) {
+    const totalHours = Number(entry.regularHours) + Number(entry.overtimeHours) + Number(entry.doubleHours);
+    hours += totalHours;
+    margin += totalHours * (Number(entry.assignment.billRate) - Number(entry.assignment.payRate));
+  }
+  return { hours, margin };
 }
 
 export async function getFinancialMetrics(query: AnalyticsPeriodQuery): Promise<FinancialMetrics> {
@@ -62,6 +83,23 @@ export async function getFinancialMetrics(query: AnalyticsPeriodQuery): Promise<
   financial.marginTrend = [...buckets.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, v]) => ({ date, hours: Number(v.hours.toFixed(2)), margin: Number(v.margin.toFixed(2)) }));
+
+  // F11.7: comparación real de horas/margen contra el período anterior
+  // equivalente -- los totales actuales salen de sumar los buckets ya
+  // calculados arriba, solo el período anterior requiere una consulta
+  // nueva. invoiceAging queda deliberadamente sin comparación (ver
+  // financialComparisonSchema en packages/shared).
+  const currentTotals = financial.marginTrend.reduce(
+    (acc, p) => ({ hours: acc.hours + p.hours, margin: acc.margin + p.margin }),
+    { hours: 0, margin: 0 },
+  );
+  const previousRange = previousPeriod(range);
+  financial.previousPeriod = toResolvedPeriod(previousRange);
+  const previousTotals = await sumHoursAndMargin(previousRange);
+  financial.comparison = {
+    totalHours: comparePeriods(Number(currentTotals.hours.toFixed(2)), Number(previousTotals.hours.toFixed(2))),
+    totalMargin: comparePeriods(Number(currentTotals.margin.toFixed(2)), Number(previousTotals.margin.toFixed(2))),
+  };
 
   if (canViewInvoices) {
     const unpaidInvoices = await scopedDb.invoice.findMany({

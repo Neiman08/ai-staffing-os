@@ -25,11 +25,19 @@ after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
+interface Comparison {
+  current: number;
+  previous: number;
+  deltaPercent: number | null;
+}
+
 interface RecruitingBody {
   generatedAt: string;
   recruiting: {
     period?: { from: string; to: string };
+    previousPeriod?: { from: string; to: string };
     funnel?: { sourced: number; qualified: number; shortlisted: number; placed: number };
+    funnelComparison?: { sourced: Comparison; qualified: Comparison; shortlisted: Comparison; placed: Comparison };
     timeToFill?: { averageDays: number | null; jobOrdersFilled: number };
     sourceEffectiveness?: Array<{ source: string; candidateCount: number; placedCount: number; placementRate: number }>;
   };
@@ -104,4 +112,21 @@ test("query inválida (from no-fecha) devuelve 400, no 500", async () => {
     headers: { "x-dev-user": "recruiter@titan.dev" },
   });
   assert.equal(res.status, 400);
+});
+
+test("F11.7: funnelComparison.current coincide exactamente con funnel, previousPeriod es la ventana inmediatamente anterior", async () => {
+  const { body } = await fetchRecruiting("recruiter@titan.dev", "?from=2026-01-01&to=2026-01-31");
+  assert.deepEqual(body.recruiting.previousPeriod, { from: "2025-12-02T00:00:00.000Z", to: "2026-01-01T00:00:00.000Z" });
+
+  const fc = body.recruiting.funnelComparison!;
+  const f = body.recruiting.funnel!;
+  assert.equal(fc.sourced.current, f.sourced);
+  assert.equal(fc.qualified.current, f.qualified);
+  assert.equal(fc.shortlisted.current, f.shortlisted);
+  assert.equal(fc.placed.current, f.placed);
+  for (const stage of [fc.sourced, fc.qualified, fc.shortlisted, fc.placed]) {
+    assert.ok(stage.previous >= 0);
+    if (stage.previous === 0 && stage.current === 0) assert.equal(stage.deltaPercent, 0);
+    if (stage.previous === 0 && stage.current > 0) assert.equal(stage.deltaPercent, null);
+  }
 });

@@ -9,11 +9,11 @@
  * candidatesByStatus, sin las etapas de calificación/shortlist/
  * colocación).
  */
-import type { AnalyticsPeriodQuery, RecruitingMetrics } from "@ai-staffing-os/shared";
+import type { AnalyticsPeriodQuery, RecruitingFunnel, RecruitingMetrics } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { daysBetween, resolvePeriod, toResolvedPeriod } from "../../core/analytics/period";
+import { comparePeriods, daysBetween, previousPeriod, resolvePeriod, toResolvedPeriod, type DateRange } from "../../core/analytics/period";
 
 const DEFAULT_WINDOW_DAYS = 90;
 
@@ -21,6 +21,34 @@ const DEFAULT_WINDOW_DAYS = 90;
 // borrador ni una cancelada) -- mismo vocabulario ya usado por
 // PlacementStatus en schema.prisma, ninguno inventado acá.
 const REAL_PLACEMENT_STATUSES = ["APPROVED", "READY_FOR_ONBOARDING", "ACTIVE", "COMPLETED"] as const;
+
+/**
+ * F11.7: mismas cuatro queries del funnel, aisladas para poder correrlas
+ * también contra el período anterior (comparación) sin duplicar la
+ * lógica de conteo -- devuelve solo los números, nunca las filas
+ * completas (esas solo se necesitan para el período actual, de donde
+ * también sale sourceEffectiveness/timeToFill).
+ */
+async function countFunnelStages(range: DateRange): Promise<RecruitingFunnel> {
+  const createdInPeriod = { gte: range.from, lte: range.to };
+  const [sourced, qualified, shortlisted, placed] = await Promise.all([
+    scopedDb.candidate.count({ where: { createdAt: createdInPeriod } }),
+    scopedDb.candidateQualification
+      .findMany({ where: { status: "QUALIFIED", createdAt: createdInPeriod }, select: { candidateId: true }, distinct: ["candidateId"] })
+      .then((rows) => rows.length),
+    scopedDb.candidateShortlistEntry
+      .findMany({ where: { addedAt: createdInPeriod }, select: { candidateId: true }, distinct: ["candidateId"] })
+      .then((rows) => rows.length),
+    scopedDb.placement
+      .findMany({
+        where: { status: { in: [...REAL_PLACEMENT_STATUSES] }, createdAt: createdInPeriod },
+        select: { candidateId: true },
+        distinct: ["candidateId"],
+      })
+      .then((rows) => rows.length),
+  ]);
+  return { sourced, qualified, shortlisted, placed };
+}
 
 export async function getRecruitingMetrics(query: AnalyticsPeriodQuery): Promise<RecruitingMetrics> {
   const ctx = getTenancyContext();
@@ -114,8 +142,27 @@ export async function getRecruitingMetrics(query: AnalyticsPeriodQuery): Promise
     }))
     .sort((a, b) => b.candidateCount - a.candidateCount);
 
+  // F11.7: mismo funnel, recalculado sobre el período inmediatamente
+  // anterior de igual duración -- comparación real, nunca una tendencia
+  // inferida de menos de dos puntos de datos reales.
+  const previousRange = previousPeriod(range);
+  const previousFunnel = await countFunnelStages(previousRange);
+  const funnelComparison = {
+    sourced: comparePeriods(funnel.sourced, previousFunnel.sourced),
+    qualified: comparePeriods(funnel.qualified, previousFunnel.qualified),
+    shortlisted: comparePeriods(funnel.shortlisted, previousFunnel.shortlisted),
+    placed: comparePeriods(funnel.placed, previousFunnel.placed),
+  };
+
   return {
     generatedAt: new Date().toISOString(),
-    recruiting: { period, funnel, timeToFill, sourceEffectiveness },
+    recruiting: {
+      period,
+      previousPeriod: toResolvedPeriod(previousRange),
+      funnel,
+      funnelComparison,
+      timeToFill,
+      sourceEffectiveness,
+    },
   };
 }

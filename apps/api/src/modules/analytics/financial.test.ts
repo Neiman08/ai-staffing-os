@@ -25,11 +25,19 @@ after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
+interface Comparison {
+  current: number;
+  previous: number;
+  deltaPercent: number | null;
+}
+
 interface FinancialBody {
   generatedAt: string;
   financial: {
     period?: { from: string; to: string };
+    previousPeriod?: { from: string; to: string };
     marginTrend?: Array<{ date: string; hours: number; margin: number }>;
+    comparison?: { totalHours: Comparison; totalMargin: Comparison };
     invoiceAging?: { current: string; days31to60: string; days61to90: string; over90: string; totalOutstanding: string };
     payrollCost?: { totalGross: string; totalBill: string; totalMargin: string; runsIncluded: number };
   };
@@ -100,4 +108,20 @@ test("query inválida devuelve 400, no 500", async () => {
     headers: { "x-dev-user": "accounting@titan.dev" },
   });
   assert.equal(res.status, 400);
+});
+
+test("F11.7: comparison.totalHours/totalMargin.current coinciden con la suma real de marginTrend, previousPeriod es la ventana anterior", async () => {
+  const { body } = await fetchFinancial("accounting@titan.dev", "?from=2026-01-01&to=2026-01-31");
+  assert.deepEqual(body.financial.previousPeriod, { from: "2025-12-02T00:00:00.000Z", to: "2026-01-01T00:00:00.000Z" });
+
+  const sumHours = body.financial.marginTrend!.reduce((sum, p) => sum + p.hours, 0);
+  const sumMargin = body.financial.marginTrend!.reduce((sum, p) => sum + p.margin, 0);
+  assert.equal(body.financial.comparison!.totalHours.current, Number(sumHours.toFixed(2)));
+  assert.equal(body.financial.comparison!.totalMargin.current, Number(sumMargin.toFixed(2)));
+});
+
+test("F11.7: recruiter@titan.dev (sin financial): comparison ausente por completo", async () => {
+  const { status, body } = await fetchFinancial("recruiter@titan.dev");
+  assert.equal(status, 200);
+  assert.equal(body.financial.comparison, undefined);
 });

@@ -109,9 +109,27 @@ export const sourceEffectivenessEntrySchema = z.object({
 });
 export type SourceEffectivenessEntry = z.infer<typeof sourceEffectivenessEntrySchema>;
 
+/**
+ * F11.7: comparación real contra el período inmediatamente anterior de
+ * la misma duración (ver previousPeriod() en
+ * apps/api/src/core/analytics/period.ts) -- cada etapa del funnel se
+ * recalcula sobre ese período anterior con la misma query, nunca una
+ * proyección. Solo presente cuando el bloque `funnel` también lo está
+ * (mismo permiso).
+ */
+export const recruitingFunnelComparisonSchema = z.object({
+  sourced: periodComparisonSchema,
+  qualified: periodComparisonSchema,
+  shortlisted: periodComparisonSchema,
+  placed: periodComparisonSchema,
+});
+export type RecruitingFunnelComparison = z.infer<typeof recruitingFunnelComparisonSchema>;
+
 const recruitingMetricsBlockSchema = z.object({
   period: resolvedPeriodSchema.optional(),
+  previousPeriod: resolvedPeriodSchema.optional(),
   funnel: recruitingFunnelSchema.optional(),
+  funnelComparison: recruitingFunnelComparisonSchema.optional(),
   timeToFill: timeToFillSchema.optional(),
   sourceEffectiveness: z.array(sourceEffectivenessEntrySchema).optional(),
 });
@@ -163,11 +181,32 @@ export const conversionMetricsSchema = z.object({
 });
 export type ConversionMetrics = z.infer<typeof conversionMetricsSchema>;
 
+/**
+ * F11.7: mismo criterio que recruitingFunnelComparisonSchema -- conteos
+ * reales de Opportunity/Lead sobre el período anterior equivalente,
+ * nunca una tasa o un promedio comparado directamente (comparar
+ * porcentajes contra porcentajes esconde el tamaño de la muestra;
+ * siempre se comparan los conteos crudos que los componen).
+ */
+export const commercialComparisonSchema = z.object({
+  // opportunitiesWon/Lost solo con opportunities.view, leadsCreated/
+  // Converted solo con leads.view -- independientemente opcionales,
+  // mismo criterio que el resto de los bloques (ausente = sin permiso,
+  // nunca un 0 falso).
+  opportunitiesWon: periodComparisonSchema.optional(),
+  opportunitiesLost: periodComparisonSchema.optional(),
+  leadsCreated: periodComparisonSchema.optional(),
+  leadsConverted: periodComparisonSchema.optional(),
+});
+export type CommercialComparison = z.infer<typeof commercialComparisonSchema>;
+
 const commercialMetricsBlockSchema = z.object({
   period: resolvedPeriodSchema.optional(),
+  previousPeriod: resolvedPeriodSchema.optional(),
   winRate: winRateSchema.optional(),
   salesCycle: salesCycleSchema.optional(),
   conversion: conversionMetricsSchema.optional(),
+  comparison: commercialComparisonSchema.optional(),
 });
 
 export const commercialMetricsSchema = z.object({
@@ -211,9 +250,24 @@ export const payrollCostSchema = z.object({
 });
 export type PayrollCost = z.infer<typeof payrollCostSchema>;
 
+/**
+ * F11.7: totales de horas/margen (suma de marginTrend) comparados contra
+ * el período anterior equivalente -- invoiceAging queda deliberadamente
+ * fuera (es un snapshot "a hoy" de facturas impagas, no una actividad
+ * del período, comparar su valor contra un "invoiceAging de hace 30
+ * días" no tendría el mismo significado).
+ */
+export const financialComparisonSchema = z.object({
+  totalHours: periodComparisonSchema,
+  totalMargin: periodComparisonSchema,
+});
+export type FinancialComparison = z.infer<typeof financialComparisonSchema>;
+
 const financialMetricsBlockSchema = z.object({
   period: resolvedPeriodSchema.optional(),
+  previousPeriod: resolvedPeriodSchema.optional(),
   marginTrend: z.array(marginTrendPointSchema).optional(),
+  comparison: financialComparisonSchema.optional(),
   invoiceAging: invoiceAgingSchema.optional(),
   payrollCost: payrollCostSchema.optional(),
 });

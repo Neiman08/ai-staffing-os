@@ -25,13 +25,26 @@ after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
+interface Comparison {
+  current: number;
+  previous: number;
+  deltaPercent: number | null;
+}
+
 interface CommercialBody {
   generatedAt: string;
   commercial: {
     period?: { from: string; to: string };
+    previousPeriod?: { from: string; to: string };
     winRate?: { won: number; lost: number; winRatePercent: number | null };
     salesCycle?: { averageDays: number | null; opportunitiesWon: number };
     conversion?: { leadConversionRate: number | null; leadToOpportunityRate?: number | null };
+    comparison?: {
+      opportunitiesWon?: Comparison;
+      opportunitiesLost?: Comparison;
+      leadsCreated?: Comparison;
+      leadsConverted?: Comparison;
+    };
   };
 }
 
@@ -92,4 +105,21 @@ test("query inválida (to no-fecha) devuelve 400, no 500", async () => {
     headers: { "x-dev-user": "sales@titan.dev" },
   });
   assert.equal(res.status, 400);
+});
+
+test("F11.7: comparison.opportunitiesWon/Lost coinciden con winRate, previousPeriod es la ventana anterior real", async () => {
+  const { body } = await fetchCommercial("sales@titan.dev", "?from=2026-01-01&to=2026-01-31");
+  assert.deepEqual(body.commercial.previousPeriod, { from: "2025-12-02T00:00:00.000Z", to: "2026-01-01T00:00:00.000Z" });
+
+  const cmp = body.commercial.comparison!;
+  assert.equal(cmp.opportunitiesWon!.current, body.commercial.winRate!.won);
+  assert.equal(cmp.opportunitiesLost!.current, body.commercial.winRate!.lost);
+  assert.ok(cmp.leadsCreated!.current >= 0);
+  assert.ok(cmp.leadsConverted!.current >= 0);
+});
+
+test("F11.7: recruiter@titan.dev (sin comercial): comparison ausente por completo, no un objeto vacío con 403", async () => {
+  const { status, body } = await fetchCommercial("recruiter@titan.dev");
+  assert.equal(status, 200);
+  assert.equal(body.commercial.comparison, undefined);
 });

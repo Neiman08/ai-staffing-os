@@ -9,9 +9,28 @@ import type { AnalyticsPeriodQuery, CommercialMetrics } from "@ai-staffing-os/sh
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { daysBetween, resolvePeriod, toResolvedPeriod } from "../../core/analytics/period";
+import { comparePeriods, daysBetween, previousPeriod, resolvePeriod, toResolvedPeriod, type DateRange } from "../../core/analytics/period";
 
 const DEFAULT_WINDOW_DAYS = 90;
+
+async function countClosedOpportunities(range: DateRange): Promise<{ won: number; lost: number }> {
+  const closed = await scopedDb.opportunity.findMany({
+    where: { stage: { in: ["WON", "LOST"] }, updatedAt: { gte: range.from, lte: range.to } },
+    select: { stage: true },
+  });
+  return {
+    won: closed.filter((o) => o.stage === "WON").length,
+    lost: closed.filter((o) => o.stage === "LOST").length,
+  };
+}
+
+async function countLeads(range: DateRange): Promise<{ created: number; converted: number }> {
+  const leads = await scopedDb.lead.findMany({
+    where: { createdAt: { gte: range.from, lte: range.to } },
+    select: { status: true },
+  });
+  return { created: leads.length, converted: leads.filter((l) => l.status === "CONVERTED").length };
+}
 
 export async function getCommercialMetrics(query: AnalyticsPeriodQuery): Promise<CommercialMetrics> {
   const ctx = getTenancyContext();
@@ -58,15 +77,19 @@ export async function getCommercialMetrics(query: AnalyticsPeriodQuery): Promise
     };
   }
 
+  let leadsCreatedCount = 0;
+  let leadsConvertedCount = 0;
+
   if (canViewLeads) {
     const leads = await scopedDb.lead.findMany({
       where: { createdAt: createdInPeriod },
       select: { id: true, status: true, companyId: true },
     });
-    const converted = leads.filter((l) => l.status === "CONVERTED").length;
+    leadsCreatedCount = leads.length;
+    leadsConvertedCount = leads.filter((l) => l.status === "CONVERTED").length;
 
     commercial.conversion = {
-      leadConversionRate: leads.length > 0 ? Number(((converted / leads.length) * 100).toFixed(1)) : null,
+      leadConversionRate: leads.length > 0 ? Number(((leadsConvertedCount / leads.length) * 100).toFixed(1)) : null,
     };
 
     if (canViewOpportunities) {
@@ -85,6 +108,25 @@ export async function getCommercialMetrics(query: AnalyticsPeriodQuery): Promise
       }
     }
   }
+
+  // F11.7: comparación real contra el período inmediatamente anterior de
+  // igual duración -- reutiliza los conteos ya calculados arriba para el
+  // período actual, solo se vuelve a consultar el período anterior.
+  const previousRange = previousPeriod(range);
+  commercial.previousPeriod = toResolvedPeriod(previousRange);
+  const comparison: NonNullable<CommercialMetrics["commercial"]["comparison"]> = {};
+
+  if (canViewOpportunities) {
+    const previous = await countClosedOpportunities(previousRange);
+    comparison.opportunitiesWon = comparePeriods(commercial.winRate!.won, previous.won);
+    comparison.opportunitiesLost = comparePeriods(commercial.winRate!.lost, previous.lost);
+  }
+  if (canViewLeads) {
+    const previous = await countLeads(previousRange);
+    comparison.leadsCreated = comparePeriods(leadsCreatedCount, previous.created);
+    comparison.leadsConverted = comparePeriods(leadsConvertedCount, previous.converted);
+  }
+  commercial.comparison = comparison;
 
   return { generatedAt: new Date().toISOString(), commercial };
 }
