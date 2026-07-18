@@ -11,6 +11,9 @@ import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
 import { documentStorageAdapter } from "../../core/document-storage/local-mock.provider";
 import { isValidChecklistItemTransition, type ChecklistItemStatus } from "../operations-intelligence/document-checklist";
+import { computeShiftScheduledHours } from "../operations-intelligence/time-entry-signals";
+import * as payrollService from "../payroll/service";
+import type { TimeEntryListItem } from "@ai-staffing-os/shared";
 
 function requireWorkerContext(): { tenantId: string; workerId: string } {
   const ctx = getTenancyContext();
@@ -424,7 +427,11 @@ export interface WorkerTimeEntryItem {
   overtimeHours: string;
   doubleHours: string;
   status: string;
+  overtimeFlag: boolean;
+  discrepancyFlag: boolean;
+  discrepancyNotes: string | null;
   rejectionReason: string | null;
+  notes: string | null;
 }
 
 export async function listWorkerTimeEntries(query: { cursor?: string; limit?: number }) {
@@ -446,9 +453,143 @@ export async function listWorkerTimeEntries(query: { cursor?: string; limit?: nu
     overtimeHours: t.overtimeHours.toString(),
     doubleHours: t.doubleHours.toString(),
     status: t.status,
+    overtimeFlag: t.overtimeFlag,
+    discrepancyFlag: t.discrepancyFlag,
+    discrepancyNotes: t.discrepancyNotes,
     rejectionReason: t.rejectionReason,
+    notes: t.notes,
   }));
   return { items: mapped, nextCursor };
+}
+
+/**
+ * F10.7: convierte hora inicio/fin/break (lo que el Worker realmente
+ * ingresa) en `regularHours` (lo único que `TimeEntry` almacena desde
+ * F5.6/F9.6) -- reutiliza `computeShiftScheduledHours` (F9.6, ya usado
+ * para calcular la duración PROGRAMADA de un Shift) porque la aritmética
+ * HH:MM/cruce-de-medianoche es exactamente la misma. Nunca inventa
+ * overtimeHours/doubleHours -- eso sigue siendo juicio interno vía
+ * `updateTimeEntry` (ver payroll/service.ts), el Worker solo reporta
+ * horas regulares trabajadas.
+ */
+function computeRegularHoursFromRange(startTime: string, endTime: string, breakMinutes: number): number {
+  if (startTime === endTime) {
+    throw AppError.badRequest("endTime must be different from startTime");
+  }
+  return computeShiftScheduledHours(startTime, endTime, breakMinutes);
+}
+
+export interface CreateWorkerTimeEntryInput {
+  assignmentId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  breakMinutes?: number;
+  notes?: string;
+}
+
+async function requireOwnAssignment(assignmentId: string, workerId: string): Promise<void> {
+  const assignment = await scopedDb.assignment.findUnique({ where: { id: assignmentId } });
+  if (!assignment || assignment.workerId !== workerId) throw AppError.notFound("Assignment not found");
+}
+
+export async function createWorkerTimeEntry(input: CreateWorkerTimeEntryInput): Promise<TimeEntryListItem> {
+  const { workerId } = requireWorkerContext();
+  await requireOwnAssignment(input.assignmentId, workerId);
+
+  const regularHours = computeRegularHoursFromRange(input.startTime, input.endTime, input.breakMinutes ?? 0);
+  const created = await payrollService.createTimeEntry({
+    assignmentId: input.assignmentId,
+    date: input.date,
+    regularHours,
+    startAsDraft: true,
+    notes: input.notes,
+  });
+
+  await logAuditEvent({
+    action: "portal.worker_time_entry_created",
+    entityType: "timeEntry",
+    entityId: created.id,
+    after: { assignmentId: input.assignmentId, date: input.date, regularHours, status: created.status },
+  });
+
+  return created;
+}
+
+export interface UpdateWorkerTimeEntryInput {
+  startTime?: string;
+  endTime?: string;
+  breakMinutes?: number;
+  notes?: string;
+}
+
+/** F10.7: solo editable mientras DRAFT -- el Worker nunca edita un TimeEntry ya PENDING/SUBMITTED/etc (mismo grafo de F9.6/F5.6). */
+export async function updateWorkerTimeEntryDraft(id: string, input: UpdateWorkerTimeEntryInput): Promise<TimeEntryListItem> {
+  const { workerId } = requireWorkerContext();
+  const existing = await scopedDb.timeEntry.findUnique({ where: { id }, include: { assignment: true } });
+  if (!existing || existing.assignment.workerId !== workerId) throw AppError.notFound("Time entry not found");
+  if (existing.status !== "DRAFT") {
+    throw AppError.badRequest(`Cannot edit a Time entry that is already ${existing.status}`, { status: existing.status });
+  }
+
+  let regularHours: number | undefined;
+  if (input.startTime !== undefined || input.endTime !== undefined) {
+    if (!input.startTime || !input.endTime) {
+      throw AppError.badRequest("Both startTime and endTime are required together");
+    }
+    regularHours = computeRegularHoursFromRange(input.startTime, input.endTime, input.breakMinutes ?? 0);
+  } else if (input.breakMinutes !== undefined) {
+    throw AppError.badRequest("breakMinutes requires startTime and endTime to also be provided");
+  }
+
+  const updated = await payrollService.updateTimeEntry(id, { regularHours, notes: input.notes });
+
+  await logAuditEvent({
+    action: "portal.worker_time_entry_updated",
+    entityType: "timeEntry",
+    entityId: id,
+    after: { regularHours: regularHours ?? existing.regularHours.toString() },
+  });
+
+  return updated;
+}
+
+export async function submitWorkerTimeEntry(id: string): Promise<TimeEntryListItem> {
+  const { workerId } = requireWorkerContext();
+  const existing = await scopedDb.timeEntry.findUnique({ where: { id }, include: { assignment: true } });
+  if (!existing || existing.assignment.workerId !== workerId) throw AppError.notFound("Time entry not found");
+
+  const submitted = await payrollService.submitTimeEntry(id);
+
+  await logAuditEvent({
+    action: "portal.worker_time_entry_submitted",
+    entityType: "timeEntry",
+    entityId: id,
+    after: { status: submitted.status },
+  });
+
+  return submitted;
+}
+
+/** F10.7: "corregir y reenviar" -- REJECTED siempre reabre a DRAFT (grafo ya existente de F9.6), el Worker edita y vuelve a enviar. */
+export async function reopenWorkerTimeEntry(id: string): Promise<TimeEntryListItem> {
+  const { workerId } = requireWorkerContext();
+  const existing = await scopedDb.timeEntry.findUnique({ where: { id }, include: { assignment: true } });
+  if (!existing || existing.assignment.workerId !== workerId) throw AppError.notFound("Time entry not found");
+  if (existing.status !== "REJECTED") {
+    throw AppError.badRequest(`Cannot reopen a Time entry that is ${existing.status} (must be REJECTED)`, { status: existing.status });
+  }
+
+  const reopened = await payrollService.reopenTimeEntry(id);
+
+  await logAuditEvent({
+    action: "portal.worker_time_entry_reopened",
+    entityType: "timeEntry",
+    entityId: id,
+    after: { status: reopened.status },
+  });
+
+  return reopened;
 }
 
 export interface WorkerIncidentItem {

@@ -85,7 +85,11 @@ export interface WorkerTimeEntryItem {
   overtimeHours: string;
   doubleHours: string;
   status: string;
+  overtimeFlag: boolean;
+  discrepancyFlag: boolean;
+  discrepancyNotes: string | null;
   rejectionReason: string | null;
+  notes: string | null;
 }
 
 export interface WorkerIncidentItem {

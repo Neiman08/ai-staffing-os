@@ -403,6 +403,74 @@ portalRouter.get("/portal/worker/time-entries", requirePermission("portalTimeEnt
   }
 });
 
+const TIME_RANGE_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+portalRouter.post("/portal/worker/time-entries", requirePermission("portalTimeEntries.create"), async (req, res, next) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.assignmentId !== "string" || body.assignmentId.trim().length === 0) throw AppError.badRequest("assignmentId is required");
+    if (typeof body.date !== "string" || body.date.trim().length === 0) throw AppError.badRequest("date is required");
+    if (typeof body.startTime !== "string" || !TIME_RANGE_REGEX.test(body.startTime)) throw AppError.badRequest("startTime must be HH:MM (24h)");
+    if (typeof body.endTime !== "string" || !TIME_RANGE_REGEX.test(body.endTime)) throw AppError.badRequest("endTime must be HH:MM (24h)");
+    const breakMinutes = body.breakMinutes !== undefined ? Number(body.breakMinutes) : undefined;
+    if (breakMinutes !== undefined && (!Number.isFinite(breakMinutes) || breakMinutes < 0)) throw AppError.badRequest("breakMinutes must be a non-negative number");
+    res.status(201).json(
+      await workerService.createWorkerTimeEntry({
+        assignmentId: body.assignmentId,
+        date: body.date,
+        startTime: body.startTime,
+        endTime: body.endTime,
+        breakMinutes,
+        notes: typeof body.notes === "string" ? body.notes : undefined,
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.patch("/portal/worker/time-entries/:id", requirePermission("portalTimeEntries.update"), async (req, res, next) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    if (body.startTime !== undefined && (typeof body.startTime !== "string" || !TIME_RANGE_REGEX.test(body.startTime))) {
+      throw AppError.badRequest("startTime must be HH:MM (24h)");
+    }
+    if (body.endTime !== undefined && (typeof body.endTime !== "string" || !TIME_RANGE_REGEX.test(body.endTime))) {
+      throw AppError.badRequest("endTime must be HH:MM (24h)");
+    }
+    const breakMinutes = body.breakMinutes !== undefined ? Number(body.breakMinutes) : undefined;
+    if (breakMinutes !== undefined && (!Number.isFinite(breakMinutes) || breakMinutes < 0)) throw AppError.badRequest("breakMinutes must be a non-negative number");
+    res.json(
+      await workerService.updateWorkerTimeEntryDraft(req.params.id!, {
+        startTime: body.startTime as string | undefined,
+        endTime: body.endTime as string | undefined,
+        breakMinutes,
+        notes: typeof body.notes === "string" ? body.notes : undefined,
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.post("/portal/worker/time-entries/:id/submit", requirePermission("portalTimeEntries.update"), async (req, res, next) => {
+  try {
+    res.json(await workerService.submitWorkerTimeEntry(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F10.7: "corregir y reenviar" -- REJECTED -> DRAFT explícito antes de
+// poder editar/enviar de nuevo (mismo grafo de transiciones de F9.6).
+portalRouter.post("/portal/worker/time-entries/:id/reopen", requirePermission("portalTimeEntries.update"), async (req, res, next) => {
+  try {
+    res.json(await workerService.reopenWorkerTimeEntry(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
 portalRouter.get("/portal/worker/incidents", requirePermission("portalIncidents.view"), async (_req, res, next) => {
   try {
     res.json(await workerService.listWorkerIncidents());

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
+import { AlertTriangle } from "lucide-react";
 import type { ClientTimeEntryListItem } from "./types";
 
 function TimeEntryRowActions({ entry, canApprove }: { entry: ClientTimeEntryListItem; canApprove: boolean }) {
@@ -110,9 +111,17 @@ export default function ClientTimeEntries() {
                   <TableCell className="text-muted-foreground">{new Date(t.date).toLocaleDateString()}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {t.regularHours} / {t.overtimeHours} / {t.doubleHours}
+                    {t.overtimeFlag && (
+                      <span className="ml-2 inline-flex items-center gap-1 text-xs text-amber-600" title="Overtime warning -- not a legal determination">
+                        <AlertTriangle className="h-3 w-3" />
+                        OT
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(t.status)}>{formatStatusLabel(t.status)}</Badge>
+                    {t.discrepancyFlag && t.discrepancyNotes && <p className="mt-1 text-xs text-amber-600">{t.discrepancyNotes}</p>}
+                    {t.notes && <p className="mt-1 text-xs text-muted-foreground">Nota: {t.notes}</p>}
                   </TableCell>
                   {canApprove && (
                     <TableCell>

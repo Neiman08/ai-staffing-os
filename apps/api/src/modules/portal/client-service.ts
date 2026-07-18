@@ -219,6 +219,13 @@ export interface ClientTimeEntryListItem {
   overtimeHours: string;
   doubleHours: string;
   status: string;
+  // F10.7: visibles al aprobar/rechazar -- el cliente necesita el
+  // contexto que el Worker agregó y las señales de F9.6 (nunca una
+  // decisión automática, solo advertencias).
+  overtimeFlag: boolean;
+  discrepancyFlag: boolean;
+  discrepancyNotes: string | null;
+  notes: string | null;
 }
 
 export async function listClientPendingTimeEntries(query: { cursor?: string; limit?: number }) {
@@ -240,6 +247,10 @@ export async function listClientPendingTimeEntries(query: { cursor?: string; lim
     overtimeHours: t.overtimeHours.toString(),
     doubleHours: t.doubleHours.toString(),
     status: t.status,
+    overtimeFlag: t.overtimeFlag,
+    discrepancyFlag: t.discrepancyFlag,
+    discrepancyNotes: t.discrepancyNotes,
+    notes: t.notes,
   }));
   return { items: mapped, nextCursor };
 }

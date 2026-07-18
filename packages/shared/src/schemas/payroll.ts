@@ -58,6 +58,10 @@ export const createTimeEntryInputSchema = z.object({
   perDiem: z.number().nonnegative().optional(),
   bonus: z.number().nonnegative().optional(),
   startAsDraft: z.boolean().optional(),
+  // F10.7: `notes` ya existía como columna desde F0/F9.6 pero ningún
+  // input schema la exponía todavía -- "agregar una nota" (Worker
+  // Portal) es el primer caller real.
+  notes: z.string().optional(),
 });
 export type CreateTimeEntryInput = z.infer<typeof createTimeEntryInputSchema>;
 
@@ -77,6 +81,7 @@ export const updateTimeEntryInputSchema = z.object({
   doubleHours: z.number().min(0).max(24).optional(),
   perDiem: z.number().nonnegative().optional(),
   bonus: z.number().nonnegative().optional(),
+  notes: z.string().optional(),
 });
 export type UpdateTimeEntryInput = z.infer<typeof updateTimeEntryInputSchema>;
 
@@ -110,6 +115,7 @@ export const timeEntryListItemSchema = z.object({
   discrepancyFlag: z.boolean(),
   discrepancyNotes: z.string().nullable(),
   rejectionReason: z.string().nullable(),
+  notes: z.string().nullable(),
 });
 export type TimeEntryListItem = z.infer<typeof timeEntryListItemSchema>;
 

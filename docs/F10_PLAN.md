@@ -294,3 +294,48 @@ Playwright ad-hoc: Worker Portal -- click en un Assignment abre el detalle con d
 `feat: F10.6 — assignment and schedule experience`.
 
 **F10.6 completo.**
+
+## 9. Resultado de F10.7 — Time Entry UX
+
+### 9.1 Decisión de arquitectura: reutiliza el lifecycle de F9.6/F5.6 completo, sin duplicarlo
+
+Auditoría previa confirmó que `TimeEntry` (F5.6, extendido F9.6) YA modela exactamente el ciclo de vida pedido por la spec (`DRAFT→SUBMITTED/NEEDS_REVIEW→APPROVED/REJECTED→LOCKED`, `REJECTED` siempre reabre a `DRAFT`) y ya tiene `createTimeEntry`/`updateTimeEntry`/`submitTimeEntry`/`rejectTimeEntry`/`reopenTimeEntry` completamente construidos y probados (payroll/service.ts) -- exactamente el mismo patrón de reuso ya usado por F10.2 (`approveClientTimeEntry`/`rejectClientTimeEntry` delegan a estas mismas funciones). F10.7 NO reescribe esa lógica: `worker-service.ts` agrega una capa fina de ownership (Assignment pertenece al Worker actual, 404 si no) + conversión de hora inicio/fin/break (lo que el Worker realmente ingresa) a `regularHours` (lo único que `TimeEntry` almacena) antes de delegar.
+
+`computeRegularHoursFromRange` reutiliza `computeShiftScheduledHours` (F9.6, misma aritmética HH:MM/cruce-de-medianoche ya usada para la duración programada de un Shift) -- decisión conservadora: nunca se duplica la fórmula, nunca se agregan columnas `startTime`/`endTime` nuevas a `TimeEntry` (el modelo ya decidió en F5.6/F9.6 almacenar horas totales, no marcas de tiempo). "Validar end>start" se interpreta como rechazar duración cero (`startTime === endTime`) -- un turno nocturno real que cruza medianoche (`endTime < startTime`) se sigue permitiendo, mismo criterio ya establecido para `Shift` (no se inventa una restricción que rompería turnos nocturnos reales, varios ya seedeados con `shiftType: NIGHT`). "Validar timezone" se satisface mostrando el timezone del Shift ya visible en el detalle de Assignment (F10.6) -- no se agrega una columna de timezone redundante a `TimeEntry`.
+
+### 9.2 Deuda corregida en el camino (F9.6/F5.6, no F10.7 en sí)
+
+`notes` existía como columna en `TimeEntry` desde F0 pero ningún input schema la exponía todavía (`createTimeEntryInputSchema`/`updateTimeEntryInputSchema` no la declaraban) -- "agregar una nota" (spec F10.7) es el primer caller real. Agregada de forma aditiva a ambos schemas + `timeEntryListItemSchema` (packages/shared) + `toListItem` (payroll/service.ts). Cambio mínimo, estrictamente necesario para F10.7, documentado acá en vez de abrir una reescritura general de F9.6.
+
+### 9.3 Backend
+
+- `createWorkerTimeEntry`/`updateWorkerTimeEntryDraft`/`submitWorkerTimeEntry`/`reopenWorkerTimeEntry` (worker-service.ts): ownership verificado (404, no 403) antes de delegar a `payrollService`; edición solo mientras `DRAFT` (mismo criterio F5.6); `startTime`/`endTime` deben venir SIEMPRE en par (nunca uno solo); `breakMinutes` sin par de horas es rechazado (no hay forma de recalcular sin ambos extremos, ya que no se persisten). AuditLog en cada acción (`portal.worker_time_entry_created/updated/submitted/reopened`).
+- `listClientPendingTimeEntries` (client-service.ts, F10.2) extendida con `overtimeFlag`/`discrepancyFlag`/`discrepancyNotes`/`notes` -- el cliente que aprueba/rechaza ahora ve el mismo contexto que el Worker generó, nunca una caja negra.
+- Endpoints nuevos: `POST/PATCH /portal/worker/time-entries[/:id]`, `POST /portal/worker/time-entries/:id/submit`, `POST /portal/worker/time-entries/:id/reopen` -- gateados por `portalTimeEntries.create`/`.update` (llaves ya existentes en `ROLE_PERMISSIONS.WORKER` desde F10.1, sin cambios de permisos necesarios).
+
+### 9.4 Frontend
+
+- `WorkerTimeEntriesPage` reescrita: tabla con badge de overtime (⚠ "OT", nunca una decisión legal, solo advertencia visual) y nota de discrepancia visible en línea; botón "Nuevo borrador" (Drawer con hora inicio/fin/break/nota); "Editar" solo visible en `DRAFT` (Drawer con guardar-borrador + enviar); "Corregir y reenviar" solo visible en `REJECTED` (reabre a `DRAFT` automáticamente y abre el editor).
+- `ClientTimeEntries.tsx` (F10.2) actualizada con el mismo badge de overtime + nota de discrepancia + nota del Worker, visible antes de aprobar/rechazar.
+
+### 9.5 Tests nuevos
+
+`time-entry-ux.test.ts` (12, integración vía HTTP real): 403 sin `portalTimeEntries.create`; 404 (no 403) sobre el Assignment de otro Worker; 400 en duración cero y en `startTime` malformado; creación real con `regularHours` calculado correctamente desde hora inicio/fin/break (verificado con aritmética exacta) y nota persistida; 409 en fecha duplicada (constraint ya existente de F5.6); 404 al editar el TimeEntry de otro Worker; edición válida solo en `DRAFT`; 400 al enviar `startTime` sin `endTime`; submit exitoso y confirmación de que un `SUBMITTED` deja de ser editable; **ciclo completo reject→reopen→edit→resubmit** (rechazo vía endpoint interno ya probado en F9.6, reopen exclusivo del Worker dueño, 403 para un rol interno intentando reabrir, 400 al reabrir algo que no es `REJECTED`); confirmación final de que el listado del Worker refleja la nota corregida.
+
+### 9.6 Suite completa
+
+1270 tests, 1265 pass, 0 fail, 5 skip -- cero regresiones. Typecheck/lint/build limpios en `apps/api` y `apps/web`.
+
+### 9.7 Verificación visual
+
+Playwright ad-hoc: creación de un borrador con hora 08:00-16:30/break 30min calculó correctamente 8h regulares, nota visible en la tabla; "Editar" abrió el Drawer con guardar/enviar; "Enviar" transicionó visualmente `Draft`→`Submitted` con toast de confirmación, sin discrepancia (coincide con el Shift programado). Cero errores de consola. Artefacto de verificación (`TimeEntry` de prueba, fecha 2026-09-01) eliminado de la base después de confirmar.
+
+### 9.8 Limitación conocida (pre-existente, no introducida por F10.7)
+
+Las fechas mostradas vía `new Date(isoDateString).toLocaleDateString()` pueden desplazarse un día según el timezone del navegador (parseo UTC de una fecha-only ISO, renderizado en hora local) -- mismo patrón ya presente en `JobRequests.tsx`/`ClientJobRequests.tsx` y otras páginas desde F10.2/F10.3, no un bug nuevo de esta subfase. Fuera de alcance corregirlo acá (tocaría múltiples páginas ya existentes fuera del límite de F10.7); queda como deuda técnica general, no atribuible a F10.
+
+### 9.9 Commit
+
+`feat: F10.7 — worker time entry experience`.
+
+**F10.7 completo.**

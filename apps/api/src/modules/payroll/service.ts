@@ -58,6 +58,7 @@ type TimeEntryRow = {
   discrepancyFlag: boolean;
   discrepancyNotes: string | null;
   rejectionReason: string | null;
+  notes: string | null;
 };
 
 function toListItem(entry: TimeEntryRow): TimeEntryListItem {
@@ -84,6 +85,7 @@ function toListItem(entry: TimeEntryRow): TimeEntryListItem {
     discrepancyFlag: entry.discrepancyFlag,
     discrepancyNotes: entry.discrepancyNotes,
     rejectionReason: entry.rejectionReason,
+    notes: entry.notes,
   };
 }
 
@@ -187,6 +189,7 @@ export async function createTimeEntry(input: CreateTimeEntryInput): Promise<Time
       overtimeFlag: signals.overtimeFlag,
       discrepancyFlag: signals.discrepancyFlag,
       discrepancyNotes: signals.discrepancyNotes,
+      notes: input.notes,
     },
     include: TIME_ENTRY_INCLUDE,
   });
@@ -241,6 +244,7 @@ export async function updateTimeEntry(id: string, input: UpdateTimeEntryInput): 
       overtimeFlag: signals.overtimeFlag,
       discrepancyFlag: signals.discrepancyFlag,
       discrepancyNotes: signals.discrepancyNotes,
+      notes: input.notes,
       // F5.6: assignmentId/date/status nunca aparecen acá —
       // updateTimeEntryInputSchema no los declara.
     },

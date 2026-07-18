@@ -64,6 +64,10 @@ export interface ClientTimeEntryListItem {
   overtimeHours: string;
   doubleHours: string;
   status: string;
+  overtimeFlag: boolean;
+  discrepancyFlag: boolean;
+  discrepancyNotes: string | null;
+  notes: string | null;
 }
 
 export interface ClientIncidentListItem {
