@@ -532,3 +532,9 @@ Backend: 1283 tests, 1278 pass, 0 fail, 5 skip (sin cambios respecto a F10.10, m
 `test: F10.11 — portal end-to-end coverage`.
 
 **F10.11 completo.**
+
+## 14. Resultado de F10.12 — Hardening and close F10
+
+Auditoría final completa contra el checklist de la spec (auth/dev-bypass/Clerk, RBAC, deny by default, tenancy, ownership, IDOR, audit logs, PII, notificaciones, transiciones de estado, CORS, validación de input, paginación, accesibilidad, responsive, migraciones/índices/constraints, observabilidad, tests, build) -- sin hallazgos nuevos más allá de los ya documentados y corregidos en F10.10/F10.11. Suite completa final: backend 1283 tests (1278 pass, 1 falla preexistente, 5 skip), e2e 47/47 (excluyendo la falla preexistente ya documentada de F6.7), typecheck/lint/build limpios en `apps/api` y `apps/web`. `docs/F10_FINAL_REPORT.md` creado con las 31 secciones pedidas. Git status limpio, 13 commits de F10 (`bbcaab9` a `d9ffe05`), ningún push realizado.
+
+**F10 completo.**
