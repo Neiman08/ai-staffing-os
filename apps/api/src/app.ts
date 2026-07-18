@@ -39,6 +39,7 @@ import { brandingRouter } from "./modules/branding/router";
 import { productionReadinessRouter } from "./modules/production-readiness/router";
 import { publicRouter } from "./modules/public/router";
 import { authWebhookRouter } from "./modules/auth/webhook.router";
+import { analyticsRouter } from "./modules/analytics/router";
 
 export function createApp() {
   const app = express();
@@ -139,6 +140,7 @@ export function createApp() {
   app.use("/api/v1", discoveryRouter);
   app.use("/api/v1", brandingRouter);
   app.use("/api/v1", productionReadinessRouter);
+  app.use("/api/v1", analyticsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
