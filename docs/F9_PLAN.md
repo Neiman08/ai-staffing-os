@@ -497,3 +497,11 @@ Ninguna -- F9.11 es de solo lectura sobre datos ya persistidos por F9.1-F9.10.
 `feat: F9.11 — operational reports`.
 
 **F9.11 completo.**
+
+## 17. Resultado de F9.12 — Hardening y cierre de F9
+
+Verificación final completa antes del cierre: `typecheck`/`lint`/`build` limpios en `apps/api`, `apps/web`, `packages/shared`, `packages/db`; suite completa de backend (1176 tests, 1170 pass, 1 fail preexistente sin relación, 5 skip); suite completa de e2e (32 tests, 25 pass directo + 6 skip en cascada de un archivo preexistente no relacionado, 1 fail preexistente re-confirmado en aislamiento total una vez más). Cero regresión nueva introducida por ninguna subfase de F9.
+
+Informe final completo con las 28 secciones requeridas: `docs/F9_FINAL_REPORT.md`.
+
+**F9 completo. F9.12 completo.**
