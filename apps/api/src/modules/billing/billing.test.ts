@@ -26,6 +26,7 @@ const createdAssignmentIds: string[] = [];
 const createdTimeEntryIds: string[] = [];
 const createdPayrollRunIds: string[] = [];
 const createdInvoiceIds: string[] = [];
+const createdContractIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -38,6 +39,9 @@ before(async () => {
 });
 
 after(async () => {
+  if (createdContractIds.length > 0) {
+    await prisma.contract.deleteMany({ where: { id: { in: createdContractIds } } });
+  }
   if (createdInvoiceIds.length > 0) {
     // onDelete: Cascade en InvoiceLine.invoiceId; Payment no tiene cascade
     // declarado (RESTRICT), se borra explícito primero.
@@ -477,4 +481,91 @@ test("flagOverdueInvoicesForTenant flags a SENT invoice past its dueDate, and ne
 
   const draftCheck = await prisma.invoice.findUniqueOrThrow({ where: { id: draftInvoice.id } });
   assert.equal(draftCheck.status, "DRAFT", "a DRAFT invoice must never be swept into OVERDUE");
+});
+
+// ================= Billing Readiness (F9.8) =================
+// F9.8: año 2033 para aislamiento total frente a los fixtures 2031/2032
+// de F5.8 que conviven en el mismo proceso de test hasta su propio after() global.
+
+test("GET /billing/readiness as sales@titan.dev returns 403 (no invoices.view)", async () => {
+  const res = await fetch(
+    `${baseUrl}/api/v1/billing/readiness?companyId=${REAL_COMPANY_ID}&periodStart=2033-01-01&periodEnd=2033-01-07`,
+    { headers: SALES_HEADERS },
+  );
+  assert.equal(res.status, 403);
+});
+
+test("GET /billing/readiness for an unknown companyId returns 404", async () => {
+  const res = await fetch(
+    `${baseUrl}/api/v1/billing/readiness?companyId=does-not-exist&periodStart=2033-01-01&periodEnd=2033-01-07`,
+    { headers: ACCOUNTING_HEADERS },
+  );
+  assert.equal(res.status, 404);
+});
+
+test("GET /billing/readiness with no payroll items is NOT_READY, and company-01 (no Contract seeded) surfaces a reviewNote", async () => {
+  const res = await fetch(
+    `${baseUrl}/api/v1/billing/readiness?companyId=${REAL_COMPANY_ID}&periodStart=2033-01-01&periodEnd=2033-01-07`,
+    { headers: ACCOUNTING_HEADERS },
+  );
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { status: string; reviewNotes: string[]; estimatedRevenue: string };
+  assert.equal(body.status, "NOT_READY");
+  assert.equal(body.estimatedRevenue, "0.00");
+  assert.ok(body.reviewNotes.some((n) => n.includes("No contract")));
+});
+
+test("GET /billing/readiness with an APPROVED PayrollRun is READY_FOR_INVOICE with correct Decimal-safe money", async () => {
+  await createApprovedPayrollRun("2033-02-01", "2033-02-07", 8);
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/billing/readiness?companyId=${REAL_COMPANY_ID}&periodStart=2033-02-01&periodEnd=2033-02-07`,
+    { headers: ACCOUNTING_HEADERS },
+  );
+  const body = (await res.json()) as {
+    status: string;
+    estimatedRevenue: string;
+    estimatedLaborCost: string;
+    estimatedGrossProfit: string;
+  };
+  assert.equal(body.status, "READY_FOR_INVOICE");
+  // 8h * billRate 30 = 240 revenue; 8h * payRate 20 = 160 labor cost.
+  assert.equal(body.estimatedRevenue, "240.00");
+  assert.equal(body.estimatedLaborCost, "160.00");
+  assert.equal(body.estimatedGrossProfit, "80.00");
+});
+
+test("GET /billing/readiness becomes EXPORTED once the real Invoice is generated for that period", async () => {
+  await createApprovedPayrollRun("2033-03-01", "2033-03-07", 8);
+
+  const invoiceRes = await fetch(`${baseUrl}/api/v1/invoices`, {
+    method: "POST",
+    headers: ACCOUNTING_HEADERS,
+    body: JSON.stringify({ companyId: REAL_COMPANY_ID, periodStart: "2033-03-01", periodEnd: "2033-03-07" }),
+  });
+  const invoice = (await invoiceRes.json()) as { id: string };
+  createdInvoiceIds.push(invoice.id);
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/billing/readiness?companyId=${REAL_COMPANY_ID}&periodStart=2033-03-01&periodEnd=2033-03-07`,
+    { headers: ACCOUNTING_HEADERS },
+  );
+  const body = (await res.json()) as { status: string };
+  assert.equal(body.status, "EXPORTED");
+});
+
+test("GET /billing/readiness reflects a real EXPIRED Contract as BLOCKED", async () => {
+  await createApprovedPayrollRun("2033-04-01", "2033-04-07", 8);
+  const contract = await prisma.contract.create({
+    data: { tenantId: "tenant-titan", companyId: REAL_COMPANY_ID, status: "EXPIRED" },
+  });
+  createdContractIds.push(contract.id);
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/billing/readiness?companyId=${REAL_COMPANY_ID}&periodStart=2033-04-01&periodEnd=2033-04-07`,
+    { headers: ACCOUNTING_HEADERS },
+  );
+  const body = (await res.json()) as { status: string; blockers: string[] };
+  assert.equal(body.status, "BLOCKED");
+  assert.ok(body.blockers[0]?.includes("EXPIRED"));
 });

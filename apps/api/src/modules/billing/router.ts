@@ -1,10 +1,22 @@
 import { Router } from "express";
-import { createInvoiceInputSchema, createPaymentInputSchema, invoiceQuerySchema, updateInvoiceStatusInputSchema } from "@ai-staffing-os/shared";
+import { billingReadinessQuerySchema, createInvoiceInputSchema, createPaymentInputSchema, invoiceQuerySchema, updateInvoiceStatusInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
 import { AppError } from "../../core/errors";
 import * as billingService from "./service";
 
 export const billingRouter = Router();
+
+// F9.8: reutiliza invoices.view -- es una vista de lectura sobre datos
+// que ya exigen ese mismo permiso (PayrollItem/Invoice), no se inventa
+// un permiso nuevo.
+billingRouter.get("/billing/readiness", requirePermission("invoices.view"), async (req, res, next) => {
+  try {
+    const query = billingReadinessQuerySchema.parse(req.query);
+    res.json(await billingService.getBillingReadiness(query));
+  } catch (err) {
+    next(err);
+  }
+});
 
 billingRouter.get("/invoices", requirePermission("invoices.view"), async (req, res, next) => {
   try {

@@ -116,3 +116,33 @@ export const invoiceDetailSchema = invoiceListItemSchema.extend({
   updatedAt: z.string(),
 });
 export type InvoiceDetail = z.infer<typeof invoiceDetailSchema>;
+
+// ================= Billing Readiness (F9.8) =================
+
+// F9.8: recalculado en cada consulta (nunca persistido) -- consume
+// PayrollItem/PayrollRun/Contract ya existentes, ver
+// apps/api/.../operations-intelligence/billing-readiness.ts.
+export const billingReadinessStatusSchema = z.enum(["NOT_READY", "NEEDS_REVIEW", "READY_FOR_INVOICE", "EXPORTED", "BLOCKED"]);
+export type BillingReadinessStatusValue = z.infer<typeof billingReadinessStatusSchema>;
+
+export const billingReadinessQuerySchema = z.object({
+  companyId: z.string().min(1),
+  periodStart: z.string().min(1),
+  periodEnd: z.string().min(1),
+});
+export type BillingReadinessQuery = z.infer<typeof billingReadinessQuerySchema>;
+
+export const billingReadinessResultSchema = z.object({
+  companyId: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  status: billingReadinessStatusSchema,
+  blockers: z.array(z.string()),
+  reviewNotes: z.array(z.string()),
+  estimatedRevenue: z.string(),
+  estimatedLaborCost: z.string(),
+  estimatedGrossProfit: z.string(),
+  estimatedMarginPercent: z.string(),
+  payrollItemCount: z.number(),
+});
+export type BillingReadinessResultDto = z.infer<typeof billingReadinessResultSchema>;

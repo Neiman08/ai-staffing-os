@@ -322,3 +322,45 @@ Ninguna -- F9.7 no agrega columnas ni modelos, solo lee datos ya persistidos por
 `feat: F9.7 — payroll readiness evaluator`.
 
 **F9.7 completo.**
+
+## 13. Resultado de F9.8 — Billing Readiness
+
+### 13.1 Decisión de arquitectura (documentada antes de implementar)
+
+Mismo criterio que F9.7: §3 de este plan ya anticipaba "nuevo módulo puro + wiring -- consume PayrollItem/Assignment/Contract ya existentes", sin modelo Prisma nuevo. `BillingReadiness` se recalcula en cada consulta, cero migración.
+
+Alcance elegido: por (Company, período) -- mismo nivel de agregación que `createInvoice` (F5.8) ya usa (`assignment.jobOrder.companyId`), para que la señal de "listo para facturar" sea coherente con lo que realmente se facturaría.
+
+Decisión sobre `Contract`: una Company puede tener 0 o más Contracts (`Company.contracts Contract[]`, confirmado por grep del schema). Se prefiere uno `ACTIVE` si existe; si ninguno lo está, el más reciente por `createdAt`. Una Company SIN Contract en archivo nunca bloquea -- el sistema no exige contrato para operar (dato real: `company-01` del seed no tiene ningún Contract) -- solo genera un `reviewNote` informativo. Sí bloquea (`BLOCKED`) un Contract real cuyo `status` es `EXPIRED` o `TERMINATED`.
+
+### 13.2 Arquitectura
+
+- **`apps/api/.../operations-intelligence/billing-readiness.ts`** (nuevo, puro, `BILLING_READINESS_VERSION = 1`): `evaluateBillingReadiness()`. Estados `NOT_READY | NEEDS_REVIEW | READY_FOR_INVOICE | EXPORTED | BLOCKED`, prioridad determinística: `BLOCKED` (Contract EXPIRED/TERMINADO) > si hay `PayrollItem` elegibles ahora (no facturados + su `PayrollRun` ya es facturable, mismo criterio `BILLABLE_PAYROLL_RUN_STATUSES` de F5.8): `NEEDS_REVIEW` si ADEMÁS existen otros items del mismo período todavía no facturables (facturación parcial, requiere juicio humano) o `READY_FOR_INVOICE` si no > si NO hay items elegibles ahora: `NOT_READY` si hay items pendientes de aprobación de nómina, `EXPORTED` si el período ya se facturó por completo (todos los items ya `invoiced`), o `NOT_READY` si nunca hubo nada que facturar. Dinero Decimal-safe: `estimatedRevenue`/`estimatedLaborCost`/`estimatedGrossProfit`/`estimatedMarginPercent` (strings de 2 decimales, `marginPercent` nunca `NaN`/`Infinity` con ingresos en cero) calculado SOLO sobre los items elegibles (nunca sobre los ya facturados ni sobre los todavía pendientes). 9 tests unitarios.
+- **`packages/shared/src/schemas/billing.ts`**: `billingReadinessStatusSchema` (5 valores), `billingReadinessQuerySchema` (companyId/periodStart/periodEnd), `billingReadinessResultSchema`.
+- **`billing/service.ts`** (extendido): `getBillingReadiness(query)` -- resuelve la Company real (404 si no existe), selecciona el Contract relevante, junta TODOS los `PayrollItem` de esa Company+período (mismo filtro relacional que `createInvoice`, pero sin restringir por `invoiced`/estado del run -- el evaluador puro necesita ver el cuadro completo para distinguir elegible/pendiente/ya facturado), y delega el cálculo.
+- **`billing/router.ts`**: `GET /billing/readiness`. Reutiliza `invoices.view` (mismo criterio ya establecido repetidamente: sin permiso nuevo para una vista de lectura).
+- Sin cambios en `schema.prisma` -- ninguna migración en esta subfase.
+
+### 13.3 Tests nuevos
+
+`billing-readiness.test.ts` (9, puro: Contract EXPIRED/TERMINATED bloquea; Contract ausente nunca bloquea, solo reviewNote; sin PayrollItems es NOT_READY con dinero en cero; items elegibles sin pendientes es READY_FOR_INVOICE con dinero verificado incluyendo margen 33.33%; mezcla elegible+pendiente es NEEDS_REVIEW y el dinero solo cuenta lo elegible; solo pendientes (sin elegibles) es NOT_READY, no EXPORTED; todo ya facturado es EXPORTED con dinero en cero; margen nunca produce NaN/Infinity con ingresos cero) + 6 tests de integración nuevos en `billing.test.ts` (RBAC 403; Company inexistente 404; sin PayrollItems + reviewNote real sobre `company-01` sin Contract seedeado; PayrollRun APPROVED real -> READY_FOR_INVOICE con dinero verificado contra billRate/payRate reales; Invoice real generado -> EXPORTED; Contract EXPIRED real creado directo por Prisma -- sin endpoint de Contract CRUD en el sistema, confirmado por grep -- -> BLOCKED). Total: 20/20 en `billing.test.ts`.
+
+### 13.4 Suite completa
+
+1141 tests, 1135 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones nuevas (una corrida intermedia mostró 5 fallas transitorias no reproducibles; una segunda corrida limpia confirmó que era flakiness de red/timing, no una regresión real -- documentado, no ignorado). Typecheck y lint limpios en `apps/api` y `packages/shared`.
+
+### 13.5 Migraciones
+
+Ninguna -- F9.8 no agrega columnas ni modelos, solo lee datos ya persistidos por F5.7/F5.8 más el `Contract` ya existente desde F0.
+
+### 13.6 Limitaciones conocidas
+
+- No existe ningún endpoint de Contract CRUD en el sistema (confirmado por grep) -- el test de Contract EXPIRED lo crea directo vía Prisma, igual que otros fixtures de compliance en subfases previas. Real gap documentado, fuera de alcance de F9.8 (no fue pedido).
+- El mismo criterio de solapamiento de rango que F9.7 aplica acá: un período consultado que se solapa solo PARCIALMENTE con Invoices/PayrollRuns ya facturados no se desglosa día-por-día.
+- Sin emisión real de factura, sin envío a cliente, sin conexión bancaria -- exactamente como exige la autorización. `getBillingReadiness` es una vista de solo lectura.
+
+### 13.7 Commit
+
+`feat: F9.8 — billing readiness evaluator`.
+
+**F9.8 completo.**

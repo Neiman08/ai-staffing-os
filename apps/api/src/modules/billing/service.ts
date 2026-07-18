@@ -1,4 +1,6 @@
 import type {
+  BillingReadinessQuery,
+  BillingReadinessResultDto,
   CreateInvoiceInput,
   CreatePaymentInput,
   InvoiceDetail,
@@ -14,6 +16,7 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
+import { evaluateBillingReadiness } from "../operations-intelligence/billing-readiness";
 
 // F5.8 (plan §10.2, aprobado como valor provisional — mismo criterio que
 // OT_MULTIPLIER en F5.7 §9.2): sin un campo de términos de pago por
@@ -130,6 +133,55 @@ export async function getInvoiceDetail(id: string): Promise<InvoiceDetail> {
 async function nextInvoiceNumber(year: number): Promise<string> {
   const count = await scopedDb.invoice.count();
   return `INV-${year}-${String(count + 1).padStart(5, "0")}`;
+}
+
+// ================= Billing Readiness (F9.8) =================
+
+/**
+ * F9.8: recalculado en cada llamada -- nunca persistido (mismo criterio
+ * que PayrollReadiness, F9.7). Sin emisión real de factura, sin envío a
+ * cliente -- solo agrega señales que ya existen (PayrollItem/PayrollRun.
+ * status/Contract.status) y determina si (Company, período) puede
+ * facturarse con confianza razonable. El Contract elegido, si hay más de
+ * uno, prefiere uno ACTIVE; si ninguno lo está, el más reciente por
+ * createdAt -- una Company sin Contract en archivo nunca bloquea (solo
+ * genera un reviewNote informativo, ver `evaluateBillingReadiness`).
+ */
+export async function getBillingReadiness(query: BillingReadinessQuery): Promise<BillingReadinessResultDto> {
+  const company = await scopedDb.company.findUnique({ where: { id: query.companyId } });
+  if (!company) throw AppError.notFound("Company not found");
+
+  const periodStart = new Date(query.periodStart);
+  const periodEnd = new Date(query.periodEnd);
+
+  const contracts = await scopedDb.contract.findMany({ where: { companyId: query.companyId }, orderBy: { createdAt: "desc" } });
+  const contract = contracts.find((c) => c.status === "ACTIVE") ?? contracts[0] ?? null;
+
+  const items = await scopedDb.payrollItem.findMany({
+    where: {
+      payrollRun: { periodStart: { gte: periodStart }, periodEnd: { lte: periodEnd } },
+      assignment: { jobOrder: { companyId: query.companyId } },
+    },
+    include: { payrollRun: { select: { status: true } } },
+  });
+
+  const result = evaluateBillingReadiness({
+    contractStatus: contract?.status ?? null,
+    payrollItems: items.map((i) => ({
+      billAmount: Number(i.billAmount),
+      grossPay: Number(i.grossPay),
+      invoiced: i.invoiced,
+      payrollRunBillable: (BILLABLE_PAYROLL_RUN_STATUSES as readonly string[]).includes(i.payrollRun.status),
+    })),
+  });
+
+  return {
+    companyId: query.companyId,
+    periodStart: query.periodStart,
+    periodEnd: query.periodEnd,
+    payrollItemCount: items.length,
+    ...result,
+  };
 }
 
 /**
