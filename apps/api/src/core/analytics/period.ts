@@ -49,3 +49,14 @@ export function comparePeriods(current: number, previous: number): PeriodCompari
 export function toResolvedPeriod(range: DateRange): ResolvedPeriod {
   return { from: range.from.toISOString(), to: range.to.toISOString() };
 }
+
+/**
+ * F11.4: días reales (con fracción) entre dos fechas reales -- usado por
+ * time-to-fill (JobOrder.createdAt -> Placement.createdAt) y por
+ * cualquier otra métrica de "duración de ciclo" (F11.5 sales-cycle
+ * length). Nunca redondea acá -- el caller decide la precisión que
+ * quiere mostrar.
+ */
+export function daysBetween(from: Date, to: Date): number {
+  return (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24);
+}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { comparePeriods, percentDelta, previousPeriod, resolvePeriod, toResolvedPeriod } from "./period";
+import { comparePeriods, daysBetween, percentDelta, previousPeriod, resolvePeriod, toResolvedPeriod } from "./period";
 
 test("resolvePeriod: sin from/to, aplica el default en días hacia atrás desde ahora", () => {
   const before = Date.now();
@@ -56,4 +56,15 @@ test("toResolvedPeriod: serializa a ISO strings", () => {
     from: "2026-01-01T00:00:00.000Z",
     to: "2026-01-08T00:00:00.000Z",
   });
+});
+
+test("daysBetween: días completos entre dos fechas reales", () => {
+  assert.equal(daysBetween(new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-08T00:00:00.000Z")), 7);
+  assert.equal(daysBetween(new Date("2026-01-08T00:00:00.000Z"), new Date("2026-01-01T00:00:00.000Z")), -7);
+});
+
+test("daysBetween: fracción real, nunca redondea", () => {
+  const from = new Date("2026-01-01T00:00:00.000Z");
+  const to = new Date("2026-01-01T12:00:00.000Z");
+  assert.equal(daysBetween(from, to), 0.5);
 });

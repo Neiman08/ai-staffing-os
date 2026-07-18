@@ -73,3 +73,51 @@ export const executiveDashboardSchema = z.object({
   financial: financialBlockSchema,
 });
 export type ExecutiveDashboard = z.infer<typeof executiveDashboardSchema>;
+
+/**
+ * F11.4: funnel real de reclutamiento -- cada etapa es un conteo de
+ * CANDIDATOS DISTINTOS (nunca de filas, ej. un candidato calificado para
+ * 3 Job Orders cuenta una sola vez en "qualified"), calculado sobre
+ * datos ya persistidos por F8 (CandidateQualification/
+ * CandidateShortlistEntry) y F9.4 (Placement) -- cero campo inventado,
+ * cero predicción. `period` es el rango real (from/to) sobre el que se
+ * filtró `Candidate.createdAt` para "sourced" y las fechas de cada etapa
+ * subsecuente.
+ */
+export const recruitingFunnelSchema = z.object({
+  sourced: z.number(),
+  qualified: z.number(),
+  shortlisted: z.number(),
+  placed: z.number(),
+});
+export type RecruitingFunnel = z.infer<typeof recruitingFunnelSchema>;
+
+export const timeToFillSchema = z.object({
+  // Promedio real en días entre JobOrder.createdAt y el Placement no-DRAFT/
+  // no-CANCELLED más antiguo de ese Job Order -- null cuando no hay ningún
+  // Job Order con un Placement real en el período (nunca se inventa un 0).
+  averageDays: z.number().nullable(),
+  jobOrdersFilled: z.number(),
+});
+export type TimeToFill = z.infer<typeof timeToFillSchema>;
+
+export const sourceEffectivenessEntrySchema = z.object({
+  source: z.string(),
+  candidateCount: z.number(),
+  placedCount: z.number(),
+  placementRate: z.number(),
+});
+export type SourceEffectivenessEntry = z.infer<typeof sourceEffectivenessEntrySchema>;
+
+const recruitingMetricsBlockSchema = z.object({
+  period: resolvedPeriodSchema.optional(),
+  funnel: recruitingFunnelSchema.optional(),
+  timeToFill: timeToFillSchema.optional(),
+  sourceEffectiveness: z.array(sourceEffectivenessEntrySchema).optional(),
+});
+
+export const recruitingMetricsSchema = z.object({
+  generatedAt: z.string(),
+  recruiting: recruitingMetricsBlockSchema,
+});
+export type RecruitingMetrics = z.infer<typeof recruitingMetricsSchema>;
