@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { NotFoundState } from "@/components/shared/NotFoundState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
@@ -11,7 +12,7 @@ import type { CandidateProfile } from "./types";
 export default function CandidateProfilePage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: profile, isLoading } = useQuery({
+  const { data: profile, isLoading, isError } = useQuery({
     queryKey: ["portal-candidate-profile"],
     queryFn: () => apiFetch<CandidateProfile>("/portal/candidate/profile"),
   });
@@ -25,6 +26,10 @@ export default function CandidateProfilePage() {
     },
     onError: (err) => toast({ title: "No se pudo actualizar el perfil", description: String(err), variant: "error" }),
   });
+
+  if (isError) {
+    return <NotFoundState backHref="/portal/candidate" backLabel="Volver al inicio" />;
+  }
 
   if (isLoading || !profile) {
     return <p className="text-sm text-muted-foreground">Cargando…</p>;

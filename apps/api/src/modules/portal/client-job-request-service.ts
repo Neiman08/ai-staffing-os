@@ -239,11 +239,15 @@ async function transitionOwnedRequest(id: string, to: ClientJobRequestStatus, ac
 
 export async function submitClientJobRequest(id: string): Promise<ClientJobRequestRecord> {
   const result = await transitionOwnedRequest(id, "SUBMITTED", "clientJobRequest.submitted");
-  // F10.8: broadcast a Recruiter (rol interno tenant-wide, seguro --
-  // ningún dato de la solicitud cruza tenants, y Recruiter ya ve todos
-  // los Job Orders del tenant sin distinción de cliente).
+  // F10.8/F10.11: broadcast a Sales -- corregido tras un hallazgo real
+  // del pase de e2e (F10.11): Recruiter NO tiene `clientJobs.view`
+  // (solo Sales/Operations la tienen, ver seed.ts ROLE_PERMISSIONS),
+  // así que notificarlo a Recruiter era una notificación que su
+  // destinatario nunca podía siquiera abrir. Sales participa
+  // explícitamente de la revisión (comentario ya existente en
+  // seed.ts); Operations se reserva para la conversión posterior.
   await emitNotification({
-    recipientRole: "Recruiter",
+    recipientRole: "Sales",
     type: "JOB_REQUEST_SUBMITTED",
     title: `New job request: ${result.requestedTitle}`,
     body: `A client submitted a request for ${result.headcount} worker(s).`,

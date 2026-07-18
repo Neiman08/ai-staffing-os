@@ -4,6 +4,7 @@ import { apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { NotFoundState } from "@/components/shared/NotFoundState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,10 +24,11 @@ export default function ClientJobRequestDetail() {
   const canSubmit = currentUser?.permissions.includes("clientJobs.create") ?? false;
   const canManage = currentUser?.permissions.includes("clientJobs.update") ?? false;
 
-  const { data: request, isLoading } = useQuery({
+  const { data: request, isLoading, isError } = useQuery({
     queryKey: ["portal-client-job-request", id],
     queryFn: () => apiFetch<ClientJobRequestRecord>(`/portal/client/job-requests/${id}`),
     enabled: !!id,
+    retry: false,
   });
 
   const submitMutation = useMutation({
@@ -46,6 +48,10 @@ export default function ClientJobRequestDetail() {
     },
     onError: (err) => toast({ title: "No se pudo cancelar", description: String(err), variant: "error" }),
   });
+
+  if (isError) {
+    return <NotFoundState backHref="/portal/client/job-requests" backLabel="Volver a Job Requests" />;
+  }
 
   if (isLoading || !request) {
     return <p className="text-sm text-muted-foreground">Cargando…</p>;

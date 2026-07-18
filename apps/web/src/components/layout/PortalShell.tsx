@@ -29,7 +29,7 @@ export function PortalShell({ items, portalLabel }: { items: NavItem[]; portalLa
         <PortalSidebar brandName={branding?.brandName} items={items} portalLabel={portalLabel} open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="flex min-w-0 flex-1 flex-col">
           <PortalTopbar onOpenNav={() => setMobileNavOpen(true)} />
-          <main className="flex-1 overflow-y-auto p-6">
+          <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-6">
             <Outlet />
           </main>
         </div>

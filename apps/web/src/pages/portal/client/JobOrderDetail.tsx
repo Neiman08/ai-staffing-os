@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { NotFoundState } from "@/components/shared/NotFoundState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
@@ -11,17 +12,22 @@ import type { ClientJobOrderListItem, ClientShortlistEntry } from "./types";
 export default function ClientJobOrderDetail() {
   const { id } = useParams<{ id: string }>();
 
-  const { data: jobOrder, isLoading } = useQuery({
+  const { data: jobOrder, isLoading, isError } = useQuery({
     queryKey: ["portal-client-job-order", id],
     queryFn: () => apiFetch<ClientJobOrderListItem>(`/portal/client/job-orders/${id}`),
     enabled: !!id,
+    retry: false,
   });
 
   const { data: shortlist } = useQuery({
     queryKey: ["portal-client-shortlist", id],
     queryFn: () => apiFetch<ClientShortlistEntry[]>(`/portal/client/job-orders/${id}/shortlist`),
-    enabled: !!id,
+    enabled: !!id && !isError,
   });
+
+  if (isError) {
+    return <NotFoundState backHref="/portal/client/job-orders" backLabel="Volver a Job Orders" />;
+  }
 
   if (isLoading || !jobOrder) {
     return <p className="text-sm text-muted-foreground">Cargando…</p>;

@@ -77,7 +77,7 @@ test("GET /notifications as recruiter@titan.dev returns 403 for sales@titan.dev 
   assert.equal(res.status, 200, "notifications.view exists on all 15 roles since F10.1 -- this is a smoke check, not a 403 case");
 });
 
-test("POST /portal/client/job-requests/:id/submit emits a JOB_REQUEST_SUBMITTED notification for Recruiter (role-broadcast)", async () => {
+test("POST /portal/client/job-requests/:id/submit emits a JOB_REQUEST_SUBMITTED notification for Sales (role-broadcast)", async () => {
   const createRes = await fetch(`${baseUrl}/api/v1/portal/client/job-requests`, {
     method: "POST",
     headers: CLIENT_ADMIN_HEADERS,
@@ -93,17 +93,20 @@ test("POST /portal/client/job-requests/:id/submit emits a JOB_REQUEST_SUBMITTED 
     where: { type: "JOB_REQUEST_SUBMITTED", entityType: "clientJobRequest", entityId: created.id },
   });
   assert.ok(notif, "submitting must emit a JOB_REQUEST_SUBMITTED notification");
-  assert.equal(notif!.recipientRole, "Recruiter");
+  // F10.11: corregido de "Recruiter" a "Sales" -- Recruiter no tiene
+  // clientJobs.view (solo Sales/Operations), un hallazgo real del pase
+  // de e2e (ver docs/F10_PLAN.md §13).
+  assert.equal(notif!.recipientRole, "Sales");
   assert.equal(notif!.userId, null);
   if (notif) createdIds.push(notif.id);
 
-  const listRes = await fetch(`${baseUrl}/api/v1/notifications`, { headers: RECRUITER_HEADERS });
+  const listRes = await fetch(`${baseUrl}/api/v1/notifications`, { headers: SALES_HEADERS });
   const list = (await listRes.json()) as { items: Array<{ id: string; type: string }> };
-  assert.ok(list.items.some((n) => n.id === notif!.id), "a Recruiter must see a notification addressed to their role");
+  assert.ok(list.items.some((n) => n.id === notif!.id), "Sales must see a notification addressed to their role");
 
   const workerCannotSee = await fetch(`${baseUrl}/api/v1/notifications`, { headers: WORKER_HEADERS });
   const workerList = (await workerCannotSee.json()) as { items: Array<{ id: string }> };
-  assert.ok(!workerList.items.some((n) => n.id === notif!.id), "a WORKER must never see a Recruiter-role notification");
+  assert.ok(!workerList.items.some((n) => n.id === notif!.id), "a WORKER must never see a Sales-role notification");
 
   await prisma.clientJobRequest.delete({ where: { id: created.id } });
 });

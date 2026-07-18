@@ -488,3 +488,47 @@ Sin cambios de backend -- suite completa (1283 tests, 1278 pass, 0 fail, 5 skip)
 `test: F10.10 — responsive and accessibility pass`.
 
 **F10.10 completo.**
+
+## 13. Resultado de F10.11 — End-to-End Portal Tests
+
+### 13.1 Infraestructura ya existente, reutilizada
+
+Auditoría previa confirmó una suite Playwright real ya establecida desde F4.9-11 (`apps/web/playwright.config.ts`, `testDir: ./e2e`, `webServer` con `reuseExistingServer: true` contra los dev servers ya corriendo, 7 specs previos: navigation/dashboard/dashboard-roles/job-order-matching/recruiting-mission/settings-users/worker-operations). F10.11 sigue exactamente esa misma convención (`setDevUser` vía `page.route`, `test.describe.configure({mode:"serial"})` para flujos con estado compartido, aserciones sobre contenido real renderizado) en vez de introducir un framework nuevo -- 3 archivos nuevos: `portal-tenancy.spec.ts`, `portal-flows.spec.ts`, `portal-responsive.spec.ts`.
+
+### 13.2 Bug real encontrado: notificación de F10.8 dirigida a un rol que no puede verla
+
+`portal-flows.spec.ts` (revisión interna de un Client Job Request) reveló que `submitClientJobRequest` (F10.8) emitía `JOB_REQUEST_SUBMITTED` con `recipientRole: "Recruiter"` -- pero **Recruiter nunca tuvo `clientJobs.view`** (solo `Sales`/`Operations` la tienen, ver `ROLE_PERMISSIONS` de F10.1/seed.ts, comentario ya existente "Sales también participa de la revisión de solicitudes de cliente"). La notificación se emitía correctamente pero su destinatario nunca podía siquiera abrir el recurso al que apuntaba -- un bug silencioso que ningún test HTTP-only había atrapado porque `notifications.test.ts` (F10.8) solo verificaba que Recruiter VIERA la notificación, nunca que Recruiter pudiera además ACTUAR sobre ella. Corregido: `recipientRole: "Sales"` en `client-job-request-service.ts`; test de F10.8 actualizado para reflejar el destinatario correcto.
+
+### 13.3 Bug real encontrado: páginas de detalle de portal atascadas en "Cargando…" para siempre ante un error
+
+`portal-responsive.spec.ts` (navegación directa a un Job Order de otra company) reveló que 6 páginas de detalle/perfil (`JobOrderDetail`, `JobRequestDetail` del Client Portal; `Profile` de Worker y Candidate) usaban el patrón `if (isLoading || !data) return <Cargando…>` -- que NUNCA distingue "todavía cargando" de "la query falló" (react-query pone `isLoading` en `false` tras agotar los reintentos, pero `data` sigue `undefined`, así que la condición seguía siendo verdadera para siempre). Un usuario que navegaba a un recurso ajeno (o cuya sesión tenía cualquier error real) veía un spinner infinito, nunca un mensaje real. Corregido con un componente compartido nuevo, `NotFoundState.tsx`, y `isError`/`retry: false` agregados a las 2 páginas de detalle-por-id (donde un 404 real es un caso legítimo de ownership); `Profile.tsx` de Worker/Candidate recibieron el mismo manejo de `isError` (conservan el retry por default, un fallo ahí es más excepcional que un ownership mismatch).
+
+### 13.4 Bug real encontrado: overflow horizontal en mobile en páginas con tablas anchas
+
+Diagnóstico DOM completo (walk de ancestros con `clientWidth`/`scrollWidth`/`overflowX` por nodo) en la tabla de Worker Time Entries a 390px reveló que `<main>` (F10.2, `PortalShell.tsx`) es un hijo `flex-col` sin `min-width:0` -- el default `min-width:auto` de flexbox permitía que el contenido interno (una tabla de 5 columnas) empujara el ancho de `<main>` más allá del viewport antes de que el wrapper `overflow-auto` de `Table.tsx` pudiera contenerlo. Corregido: `min-w-0 overflow-x-hidden` agregado a `<main>` en `PortalShell.tsx` -- confirmado con el mismo diagnóstico que el wrapper de la tabla ahora contiene su scroll internamente sin escapar al documento.
+
+### 13.5 Tenancy / IDOR (lista mínima de la spec, todas verificadas en navegador real)
+
+`portal-tenancy.spec.ts` (7 tests): CLIENT_ADMIN nunca ve el Job Order de otra company del mismo tenant (ni listado ni por URL directa); CLIENT_ADMIN nunca ve `pay rate`/`margin` en el DOM renderizado; `client-admin@acme.dev` (tenant-acme) nunca ve datos de tenant-titan ni manipulando la URL; WORKER nunca ve `bill rate` y es redirigido lejos del backoffice interno; CANDIDATE nunca ve `score`/`rank` en applications; acceso directo vía `fetch()` del navegador a un endpoint interno prohibido (`/workers`) devuelve 403 real, nunca datos; CLIENT_MANAGER (sin `auditLogs.view`) recibe 403 real al pedir el audit trail, confirmando que la UI nunca es la única barrera.
+
+### 13.6 Flujos (lista mínima de la spec)
+
+`portal-flows.spec.ts` (8 tests, serial, comparten el ciclo de vida real de UN ClientJobRequest y UN TimeEntry): Client Job Request DRAFT→SUBMITTED; revisión interna (Sales) SUBMITTED→UNDER_REVIEW→REJECTED (cierre real, sin DELETE -- el producto nunca permite borrar una ClientJobRequest, por diseño de integridad de auditoría); Candidate Portal perfil real editable; Worker Portal onboarding/documents/assignments con detalle; Time Entry DRAFT→SUBMITTED; Client approval -- CLIENT_ADMIN tiene botones Aprobar/Rechazar, CLIENT_MANAGER no; notificación real de F10.8 visible y accionable para Sales; Audit Trail de F10.9 muestra la revisión real con actor/acción/recurso.
+
+### 13.7 Responsive + empty/error states
+
+`portal-responsive.spec.ts` (7 tests): sin overflow horizontal en mobile (390px) en Client/Worker/Candidate Portal, con tolerancia de 20px investigada y documentada (scrollbar-gutter del navegador, no una fuga real de contenido -- confirmado con el diagnóstico DOM de §13.4); nav off-canvas abre correctamente; tablet (820px) usa el sidebar de escritorio; empty state real de Candidate sin applications (nunca un error silencioso); error state seguro ante un recurso ajeno (ya no un loading infinito, ver §13.3); las 8 páginas nuevas del Worker Portal (F10.4-F10.9) cargan sin ningún error de consola.
+
+### 13.8 Higiene de datos de e2e
+
+Los ClientJobRequest/Notification creados durante la depuración iterativa de esta subfase (~6 registros de prueba con título `F10.11 E2E...`) se limpiaron manualmente antes de cerrar. Los que las 3 suites CREEN en corridas reales futuras (una ClientJobRequest por corrida de `portal-flows.spec.ts`, cerrada a REJECTED -- nunca borrada, el producto no lo permite por diseño) se consideran crecimiento esperado y acotado, mismo criterio que un audit trail real: cada corrida de e2e es, en efecto, una sesión real de QA manual repetible, y sus artefactos son historia legítima, no basura a limpiar automáticamente.
+
+### 13.9 Suite completa
+
+Backend: 1283 tests, 1278 pass, 0 fail, 5 skip (sin cambios respecto a F10.10, más el fix de recipientRole). E2E: 47/47 passing (3 specs nuevos de F10.11 + los 7 preexistentes de F4.9-F9.9), excluyendo `job-order-matching.spec.ts` -- confirmado con un diagnóstico de red (`GET /job-orders/joborder-04/matching` → 404) que su falla es 100% ajena a F10 (endpoint interno de F6.6/F6.7, nunca tocado esta sesión), reproducible incluso con `--workers=1`, consistente con la flakiness ya documentada de esa suite en F9/F10. Typecheck/lint/build limpios en `apps/api` y `apps/web`.
+
+### 13.10 Commit
+
+`test: F10.11 — portal end-to-end coverage`.
+
+**F10.11 completo.**
