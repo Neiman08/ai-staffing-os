@@ -332,6 +332,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "portalDocuments.view",
     "portalDocuments.update", // F10.5: enviar (SUBMITTED) un item del checklist propio
     "portalAssignments.view",
+    "portalAssignments.create", // F10.6: crear una ScheduleChangeRequest -- nunca muta el Assignment en sí
     "portalTimeEntries.view",
     "portalTimeEntries.create",
     "portalTimeEntries.update", // solo mientras DRAFT -- validado en el service, no en RBAC

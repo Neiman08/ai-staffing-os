@@ -269,15 +269,36 @@ export interface WorkerAssignmentItem {
   status: string;
   startDate: string;
   endDate: string | null;
+  location: unknown;
+  shiftType: string;
+  scheduleNotes: string | null;
+  supervisorName: string | null;
 }
 
+/**
+ * F10.6: enriquece con location/shiftType/scheduleNotes (de JobOrder,
+ * F5.1) y supervisorName (de Project.supervisorContactId, F5.4 --
+ * ninguna relación Prisma directa, se resuelve con un segundo query
+ * batched). Nunca expone billRate/payRate/margen -- ese dato ya se
+ * excluía acá desde F10.4, sin cambios.
+ */
 export async function listWorkerAssignments(): Promise<WorkerAssignmentItem[]> {
   const { workerId } = requireWorkerContext();
   const rows = await scopedDb.assignment.findMany({
     where: { workerId },
-    include: { jobOrder: { select: { title: true, company: { select: { name: true } } } } },
+    include: {
+      jobOrder: { select: { title: true, location: true, shiftType: true, scheduleNotes: true, company: { select: { name: true } } } },
+      project: { select: { supervisorContactId: true } },
+    },
     orderBy: { startDate: "desc" },
   });
+
+  const supervisorIds = [...new Set(rows.map((a) => a.project?.supervisorContactId).filter((v): v is string => !!v))];
+  const contacts = supervisorIds.length
+    ? await scopedDb.contact.findMany({ where: { id: { in: supervisorIds } }, select: { id: true, firstName: true, lastName: true } })
+    : [];
+  const contactNameById = new Map(contacts.map((c) => [c.id, `${c.firstName} ${c.lastName}`]));
+
   return rows.map((a) => ({
     id: a.id,
     jobOrderTitle: a.jobOrder.title,
@@ -285,6 +306,10 @@ export async function listWorkerAssignments(): Promise<WorkerAssignmentItem[]> {
     status: a.status,
     startDate: a.startDate.toISOString(),
     endDate: a.endDate?.toISOString() ?? null,
+    location: a.jobOrder.location,
+    shiftType: a.jobOrder.shiftType,
+    scheduleNotes: a.jobOrder.scheduleNotes,
+    supervisorName: a.project?.supervisorContactId ? (contactNameById.get(a.project.supervisorContactId) ?? null) : null,
   }));
 }
 
@@ -295,6 +320,7 @@ export interface WorkerShiftItem {
   date: string;
   startTime: string;
   endTime: string;
+  breakMinutes: number;
   timezone: string | null;
 }
 
@@ -313,7 +339,79 @@ export async function listWorkerShifts(): Promise<WorkerShiftItem[]> {
     date: s.date.toISOString(),
     startTime: s.startTime,
     endTime: s.endTime,
+    breakMinutes: s.breakMinutes,
     timezone: s.timezone,
+  }));
+}
+
+export interface WorkerScheduleChangeRequestItem {
+  id: string;
+  assignmentId: string;
+  requestType: string;
+  requestedChange: string;
+  status: string;
+  reviewNotes: string | null;
+  createdAt: string;
+}
+
+/**
+ * F10.6: el Worker NUNCA muta Assignment/Shift directamente -- esto solo
+ * crea un registro pendiente de revisión interna (ver
+ * modules/assignments/service.ts::reviewScheduleChangeRequest). Ownership
+ * verificado antes de crear (404, no 403, si el Assignment no es del
+ * Worker actual -- mismo criterio IDOR del resto de F10).
+ */
+export async function requestScheduleChange(
+  assignmentId: string,
+  input: { requestType: string; requestedChange: string },
+): Promise<WorkerScheduleChangeRequestItem> {
+  const { tenantId, workerId } = requireWorkerContext();
+  const assignment = await scopedDb.assignment.findUnique({ where: { id: assignmentId } });
+  if (!assignment || assignment.workerId !== workerId) throw AppError.notFound("Assignment not found");
+
+  const created = await scopedDb.scheduleChangeRequest.create({
+    data: {
+      tenantId,
+      assignmentId,
+      requestedById: workerId,
+      requestType: input.requestType,
+      requestedChange: input.requestedChange,
+      status: "PENDING",
+    },
+  });
+
+  await logAuditEvent({
+    action: "portal.worker_schedule_change_requested",
+    entityType: "schedule_change_request",
+    entityId: created.id,
+    after: { assignmentId, requestType: created.requestType, status: created.status },
+  });
+
+  return {
+    id: created.id,
+    assignmentId: created.assignmentId,
+    requestType: created.requestType,
+    requestedChange: created.requestedChange,
+    status: created.status,
+    reviewNotes: created.reviewNotes,
+    createdAt: created.createdAt.toISOString(),
+  };
+}
+
+export async function listWorkerScheduleChangeRequests(assignmentId?: string): Promise<WorkerScheduleChangeRequestItem[]> {
+  const { workerId } = requireWorkerContext();
+  const rows = await scopedDb.scheduleChangeRequest.findMany({
+    where: { assignment: { workerId }, ...(assignmentId ? { assignmentId } : {}) },
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    assignmentId: r.assignmentId,
+    requestType: r.requestType,
+    requestedChange: r.requestedChange,
+    status: r.status,
+    reviewNotes: r.reviewNotes,
+    createdAt: r.createdAt.toISOString(),
   }));
 }
 
@@ -355,6 +453,7 @@ export async function listWorkerTimeEntries(query: { cursor?: string; limit?: nu
 
 export interface WorkerIncidentItem {
   id: string;
+  assignmentId: string | null;
   type: string;
   status: string;
   description: string;
@@ -370,6 +469,7 @@ export async function listWorkerIncidents(): Promise<WorkerIncidentItem[]> {
   });
   return rows.map((i) => ({
     id: i.id,
+    assignmentId: i.assignmentId,
     type: i.type,
     status: i.status,
     description: i.description,

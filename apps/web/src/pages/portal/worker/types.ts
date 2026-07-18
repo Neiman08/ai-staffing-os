@@ -36,6 +36,12 @@ export interface WorkerDocumentItem {
   rejectionReason: string | null;
 }
 
+export interface WorkerAssignmentLocation {
+  city?: string;
+  state?: string;
+  address?: string;
+}
+
 export interface WorkerAssignmentItem {
   id: string;
   jobOrderTitle: string;
@@ -43,6 +49,10 @@ export interface WorkerAssignmentItem {
   status: string;
   startDate: string;
   endDate: string | null;
+  location: WorkerAssignmentLocation | null;
+  shiftType: string;
+  scheduleNotes: string | null;
+  supervisorName: string | null;
 }
 
 export interface WorkerShiftItem {
@@ -52,7 +62,18 @@ export interface WorkerShiftItem {
   date: string;
   startTime: string;
   endTime: string;
+  breakMinutes: number;
   timezone: string | null;
+}
+
+export interface WorkerScheduleChangeRequestItem {
+  id: string;
+  assignmentId: string;
+  requestType: string;
+  requestedChange: string;
+  status: string;
+  reviewNotes: string | null;
+  createdAt: string;
 }
 
 export interface WorkerTimeEntryItem {
@@ -69,6 +90,7 @@ export interface WorkerTimeEntryItem {
 
 export interface WorkerIncidentItem {
   id: string;
+  assignmentId: string | null;
   type: string;
   status: string;
   description: string;

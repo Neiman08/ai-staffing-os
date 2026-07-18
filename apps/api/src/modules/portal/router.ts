@@ -369,6 +369,32 @@ portalRouter.get("/portal/worker/shifts", requirePermission("portalAssignments.v
   }
 });
 
+// F10.6: el Worker nunca activa/pausa/completa/cancela un Assignment --
+// esto SOLO crea una solicitud pendiente de revisión interna (ver
+// modules/assignments/router.ts, GET/PATCH /schedule-change-requests).
+portalRouter.get("/portal/worker/schedule-change-requests", requirePermission("portalAssignments.view"), async (req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerScheduleChangeRequests(req.query.assignmentId as string | undefined));
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.post(
+  "/portal/worker/assignments/:id/schedule-change-requests",
+  requirePermission("portalAssignments.create"),
+  async (req, res, next) => {
+    try {
+      const { requestType, requestedChange } = req.body as { requestType?: unknown; requestedChange?: unknown };
+      if (typeof requestType !== "string" || requestType.trim().length === 0) throw AppError.badRequest("requestType is required");
+      if (typeof requestedChange !== "string" || requestedChange.trim().length === 0) throw AppError.badRequest("requestedChange is required");
+      res.status(201).json(await workerService.requestScheduleChange(req.params.id!, { requestType, requestedChange }));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 portalRouter.get("/portal/worker/time-entries", requirePermission("portalTimeEntries.view"), async (req, res, next) => {
   try {
     res.json(await workerService.listWorkerTimeEntries({ cursor: req.query.cursor as string | undefined, limit: req.query.limit ? Number(req.query.limit) : undefined }));

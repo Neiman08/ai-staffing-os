@@ -49,6 +49,7 @@ import ClientIncidents from "./pages/portal/client/Incidents";
 import ClientPortalJobRequests from "./pages/portal/client/JobRequests";
 import ClientPortalJobRequestDetail from "./pages/portal/client/JobRequestDetail";
 import ClientJobRequests from "./pages/ClientJobRequests";
+import ScheduleChangeRequests from "./pages/ScheduleChangeRequests";
 import ClientJobRequestDetail from "./pages/ClientJobRequestDetail";
 import { WorkerPortalGate } from "@/components/layout/WorkerPortalGate";
 import { CandidatePortalGate } from "@/components/layout/CandidatePortalGate";
@@ -107,6 +108,7 @@ export const router = createBrowserRouter([
       { path: "workers/:id", element: <WorkerDetail /> },
       { path: "assignments", element: <Assignments /> },
       { path: "assignments/:id", element: <AssignmentDetail /> },
+      { path: "schedule-change-requests", element: <ScheduleChangeRequests /> },
       { path: "compliance", element: <Compliance /> },
       { path: "payroll", element: <Payroll /> },
       { path: "payroll-runs/:id", element: <PayrollRunDetail /> },

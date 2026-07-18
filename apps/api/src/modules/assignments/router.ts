@@ -6,7 +6,10 @@ import {
   updateAssignmentStatusInputSchema,
 } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { AppError } from "../../core/errors";
 import * as assignmentsService from "./service";
+
+const SCHEDULE_CHANGE_REQUEST_REVIEW_TARGETS = new Set(["APPROVED", "REJECTED"]);
 
 // F5.4: CRUD completo aprobado (docs/F5_STAFFING_OPERATIONS_PLAN.md §6).
 // Sin DELETE físico — COMPLETED/TERMINATED (AssignmentStatus) son los
@@ -64,3 +67,31 @@ assignmentsRouter.patch(
     }
   },
 );
+
+// ================= F10.6: revisión interna de Schedule Change Requests =================
+// (creadas desde el Worker Portal -- ver modules/portal/worker-service.ts::requestScheduleChange)
+
+assignmentsRouter.get("/schedule-change-requests", requirePermission("assignments.view"), async (req, res, next) => {
+  try {
+    res.json(
+      await assignmentsService.listScheduleChangeRequests({
+        status: req.query.status as string | undefined,
+        assignmentId: req.query.assignmentId as string | undefined,
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+assignmentsRouter.patch("/schedule-change-requests/:id/status", requirePermission("assignments.update"), async (req, res, next) => {
+  try {
+    const { status, reviewNotes } = req.body as { status?: unknown; reviewNotes?: unknown };
+    if (typeof status !== "string" || !SCHEDULE_CHANGE_REQUEST_REVIEW_TARGETS.has(status)) {
+      throw AppError.badRequest("Invalid status", { allowed: [...SCHEDULE_CHANGE_REQUEST_REVIEW_TARGETS] });
+    }
+    res.json(await assignmentsService.reviewScheduleChangeRequest(req.params.id!, status as never, typeof reviewNotes === "string" ? reviewNotes : undefined));
+  } catch (err) {
+    next(err);
+  }
+});

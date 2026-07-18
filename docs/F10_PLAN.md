@@ -252,3 +252,45 @@ Playwright ad-hoc contra los dev servers ya corriendo (no se relanzaron): Worker
 `feat: F10.5 — profile and document experience`.
 
 **F10.5 completo.**
+
+## 8. Resultado de F10.6 — Assignment and Schedule UX
+
+### 8.1 Incidente operativo durante esta subfase (reportado y resuelto)
+
+Al verificar que la migración de F10.6 fuera puramente aditiva con `prisma migrate diff --shadow-database-url`, se pasó por error la MISMA `DATABASE_URL` de desarrollo como `--shadow-database-url` (en vez de una base descartable separada). Prisma reinicializa cualquier base que reciba como "shadow" para reproducir el historial de migraciones -- al apuntar accidentalmente a la base real, esto vació TODAS las filas de TODAS las tablas (el esquema/34 tablas quedó intacto, cero pérdida de estructura). Reportado de inmediato al usuario antes de tomar cualquier acción de recuperación (ver sección "riesgo de pérdida de datos" de la autorización de F10 -- bloqueo genuino explícitamente permitido). Con autorización del usuario: 1) se re-generó `_prisma_migrations` marcando las 33 migraciones existentes como aplicadas (`prisma migrate resolve --applied`, sin re-ejecutar SQL, ya que las tablas ya existían); 2) se re-corrió `prisma/seed.ts` (idempotente, ya usado varias veces en esta sesión) para reconstruir el 100% de los datos sintéticos (tenants, companies, candidates, workers, users, portal personas, JobOrders, Assignments); 3) se confirmó el estado restaurado exacto (conteos, valores determinísticos de F10.5) contra el estado documentado antes del incidente; 4) se corrió la suite completa (1246→1258 tests con las nuevas de F10.6, mismo resultado limpio). Ningún dato real de producción existía en este entorno -- 100% seed sintético de desarrollo. Lección aplicada: nunca volver a pasar `DATABASE_URL` como `--shadow-database-url`; para verificar diffs de ahora en más, usar exclusivamente el flag `--script` contra el historial de migraciones sin `--shadow-database-url`, o una base explícitamente descartable.
+
+### 8.2 Modelos y migraciones
+
+Nuevo modelo `ScheduleChangeRequest` (aditivo, migración `20260718040000_f10_6_schedule_change_request`, verificada vía `prisma migrate diff` -- solo `CREATE TYPE`/`CREATE TABLE`/`CREATE INDEX`/`ADD CONSTRAINT`) -- el mecanismo exacto que pide la spec: "Solicitudes de cambios quedan como request/acción pendiente de aprobación", nunca una mutación directa de `Assignment`/`Shift`. Campos: `requestType`/`requestedChange` texto libre (mismo criterio ya aprobado para `DocumentChecklistItem.source`/`Payment.method`), `status` (`PENDING`/`APPROVED`/`REJECTED`), `reviewedById`/`reviewNotes`. Agregado a `STRICT_TENANT_MODELS`.
+
+### 8.3 Backend
+
+- `listWorkerAssignments` (worker-service.ts) enriquecido con `location`/`shiftType`/`scheduleNotes` (de `JobOrder`, F5.1, ya existían pero nunca se exponían acá) y `supervisorName` (resuelto desde `Project.supervisorContactId` -- campo sin relación Prisma directa desde F5.4, resuelto con un segundo query batched a `Contact`). Nunca expone `billRate`/`payRate`/margen -- verificado por test explícito.
+- `listWorkerShifts` extendido con `breakMinutes` (ya existía en `Shift`, F9.6, nunca expuesto al portal).
+- `listWorkerIncidents` extendido con `assignmentId` para permitir filtrar "incidents relacionados" por Assignment en el frontend.
+- `requestScheduleChange`/`listWorkerScheduleChangeRequests` (worker-service.ts): el Worker SOLO puede crear un `ScheduleChangeRequest` -- ownership verificado (404, no 403, si el Assignment no es suyo, mismo criterio IDOR del resto de F10). Nunca toca `Assignment.status`/`Shift` directamente -- verificado por test explícito ("never mutates the Assignment").
+- `listScheduleChangeRequests`/`reviewScheduleChangeRequest` (modules/assignments/service.ts, F9.5): revisión INTERNA -- reutiliza deliberadamente las llaves internas ya existentes `assignments.view`/`assignments.update` (a diferencia de los recursos `portal*` de F10.1, esto es un endpoint interno, así que reusar la llave existente es correcto, no crea riesgo de IDOR para roles de portal). No permite revisar una solicitud que ya no está `PENDING` (idempotencia de la decisión, nunca una segunda revisión silenciosa).
+- Nueva llave de permiso `portalAssignments.create` agregada solo a `WORKER` (crear una solicitud, nunca mutar el Assignment).
+
+### 8.4 Frontend
+
+- `WorkerAssignmentsPage`: tabla clickeable → `Drawer` de detalle con ubicación/turno/supervisor/fechas/instrucciones, turnos programados (con breaks/timezone), incidents relacionados, historial de solicitudes propias, y un formulario para crear una nueva solicitud (`RequestScheduleChangeForm`) -- sin ningún control para activar/pausar/completar/cancelar el Assignment (deliberadamente ausente, cumple la prohibición explícita de la spec).
+- Nueva página interna `ScheduleChangeRequests.tsx` (ruta `/schedule-change-requests`, agregada al Sidebar bajo "Operations" junto a Assignments) -- lista con filtro por estado y botones Aprobar/Rechazar inline para el personal interno con `assignments.update`.
+
+### 8.5 Tests nuevos
+
+`assignment-schedule-ux.test.ts` (12, integración vía HTTP real): enriquecimiento de campos verificado contra el Assignment real de `worker-01` (`assignment-01`); `breakMinutes` presente en shifts; 403 sin `portalAssignments.create`; 404 (no 403) al pedir un cambio sobre el Assignment de OTRO worker; 400 sin `requestedChange`; creación exitosa confirmada como PENDING + AuditLog + Assignment.status sin cambios; el listado propio filtra correctamente por `assignmentId`; 403 interno sin `assignments.view`/`assignments.update`; 400 en un status de revisión inválido; aprobación exitosa con AuditLog, y una segunda revisión sobre una solicitud ya decidida es rechazada con 400.
+
+### 8.6 Suite completa
+
+1258 tests, 1253 pass, 0 fail (la falla conocida de `prospecting.test.ts`, dependiente de OpenAI real, no se manifestó en esta corrida -- comportamiento intermitente ya documentado, no una regresión), 5 skip. Typecheck/lint/build limpios en `apps/api` y `apps/web`.
+
+### 8.7 Verificación visual
+
+Playwright ad-hoc: Worker Portal -- click en un Assignment abre el detalle con datos reales (`Apprentice Electricians — Commercial Build`, `Lakeshore Electrical Contractors`, `Chicago, IL`, turno `Day`), formulario de solicitud envía y refleja `Pending` de inmediato con toast de confirmación. Vista interna -- la solicitud aparece con el nombre real del Worker (`Valeria Mendoza`) y del Job Order resueltos correctamente; aprobarla la remueve del filtro "Pending" con toast de confirmación. Cero errores de consola. Artefacto de verificación (`ScheduleChangeRequest` de prueba) eliminado de la base después de confirmar.
+
+### 8.8 Commit
+
+`feat: F10.6 — assignment and schedule experience`.
+
+**F10.6 completo.**

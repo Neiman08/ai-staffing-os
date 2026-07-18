@@ -1518,11 +1518,47 @@ model Assignment {
   timeEntries  TimeEntry[]
   payrollItems PayrollItem[]
   incidents    OperationalIncident[]
+  // F10.6: solicitudes de cambio de horario del propio Worker -- nunca
+  // mutan el Assignment directamente (spec explícita: el Worker no
+  // puede activar/pausar/completar/cancelar), quedan como
+  // request/acción pendiente de aprobación interna.
+  scheduleChangeRequests ScheduleChangeRequest[]
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
   @@index([tenantId, workerId, status])
   @@index([tenantId, jobOrderId])
+}
+
+enum ScheduleChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// F10.6: "Solicitudes de cambios quedan como request/acción pendiente de
+// aprobación" -- el Worker nunca muta Assignment.status/Shift
+// directamente desde el portal, solo crea este registro; la revisión
+// (aprobar/rechazar) es una acción interna (ver modules/assignments).
+model ScheduleChangeRequest {
+  id           String                       @id @default(cuid())
+  tenantId     String
+  assignmentId String
+  assignment   Assignment                   @relation(fields: [assignmentId], references: [id])
+  // F10.6: quién pidió el cambio -- del contexto de tenancy, nunca del
+  // body (mismo patrón que Candidate.createdById, F5.2).
+  requestedById   String?
+  // F10.6: texto libre, mismo criterio ya aprobado para
+  // `DocumentChecklistItem.source`/`Payment.method` (catálogos abiertos).
+  requestType     String
+  requestedChange String
+  status          ScheduleChangeRequestStatus @default(PENDING)
+  reviewedById    String?
+  reviewNotes     String?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+
+  @@index([tenantId, assignmentId, status])
 }
 
 model Shift {

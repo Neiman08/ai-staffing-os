@@ -40,3 +40,17 @@ export interface InternalJobRequestDetail {
   createdAt: string;
   updatedAt: string;
 }
+
+// F10.6: revisión interna de Schedule Change Requests (creadas desde el
+// Worker Portal -- ver apps/api/.../assignments/service.ts).
+export interface ScheduleChangeRequestListItem {
+  id: string;
+  assignmentId: string;
+  workerName: string;
+  jobOrderTitle: string;
+  requestType: string;
+  requestedChange: string;
+  status: string;
+  reviewNotes: string | null;
+  createdAt: string;
+}

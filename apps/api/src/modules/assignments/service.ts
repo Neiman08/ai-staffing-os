@@ -424,3 +424,87 @@ export async function updateAssignmentStatus(
 
   return toListItem(updated);
 }
+
+export interface ScheduleChangeRequestItem {
+  id: string;
+  assignmentId: string;
+  workerName: string;
+  jobOrderTitle: string;
+  requestType: string;
+  requestedChange: string;
+  status: string;
+  reviewNotes: string | null;
+  createdAt: string;
+}
+
+function toScheduleChangeRequestItem(r: {
+  id: string;
+  assignmentId: string;
+  requestType: string;
+  requestedChange: string;
+  status: string;
+  reviewNotes: string | null;
+  createdAt: Date;
+  assignment: { worker: { candidate: { firstName: string; lastName: string } }; jobOrder: { title: string } };
+}): ScheduleChangeRequestItem {
+  return {
+    id: r.id,
+    assignmentId: r.assignmentId,
+    workerName: `${r.assignment.worker.candidate.firstName} ${r.assignment.worker.candidate.lastName}`,
+    jobOrderTitle: r.assignment.jobOrder.title,
+    requestType: r.requestType,
+    requestedChange: r.requestedChange,
+    status: r.status,
+    reviewNotes: r.reviewNotes,
+    createdAt: r.createdAt.toISOString(),
+  };
+}
+
+// F10.6: revisión interna de solicitudes de cambio de horario del
+// Worker Portal -- acción puramente administrativa, nunca muta el
+// Assignment/Shift real (eso sigue siendo `updateAssignment`/
+// `updateAssignmentStatus` de F9.5, sin cambios). Reutiliza los permisos
+// internos ya existentes de este módulo (`assignments.view`/`.update`)
+// -- a diferencia de los recursos `portal*` (F10.1), esto es un endpoint
+// INTERNO, así que reusar la llave ya existente es correcto (no crea
+// riesgo de IDOR para roles de portal).
+export async function listScheduleChangeRequests(query: { status?: string; assignmentId?: string }): Promise<ScheduleChangeRequestItem[]> {
+  const rows = await scopedDb.scheduleChangeRequest.findMany({
+    where: { status: query.status as never, assignmentId: query.assignmentId },
+    include: { assignment: { include: { worker: { include: { candidate: true } }, jobOrder: { select: { title: true } } } } },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  return rows.map(toScheduleChangeRequestItem);
+}
+
+export async function reviewScheduleChangeRequest(
+  id: string,
+  status: "APPROVED" | "REJECTED",
+  reviewNotes?: string,
+): Promise<ScheduleChangeRequestItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.scheduleChangeRequest.findUnique({ where: { id } });
+  if (!existing) throw AppError.notFound("Schedule change request not found");
+  if (existing.status !== "PENDING") {
+    throw AppError.badRequest(`Cannot review a request that is already ${existing.status}`, { status: existing.status });
+  }
+
+  const updated = await scopedDb.scheduleChangeRequest.update({
+    where: { id },
+    data: { status, reviewNotes: reviewNotes ?? undefined, reviewedById: ctx.userId },
+    include: { assignment: { include: { worker: { include: { candidate: true } }, jobOrder: { select: { title: true } } } } },
+  });
+
+  await logAuditEvent({
+    action: "scheduleChangeRequest.reviewed",
+    entityType: "schedule_change_request",
+    entityId: id,
+    before: { status: existing.status },
+    after: { status, reviewNotes: reviewNotes ?? null },
+  });
+
+  return toScheduleChangeRequestItem(updated);
+}

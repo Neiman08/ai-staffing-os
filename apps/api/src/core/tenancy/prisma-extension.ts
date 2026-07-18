@@ -34,6 +34,7 @@ const STRICT_TENANT_MODELS = new Set([
   "TimeEntry",
   "OperationalIncident",
   "ClientJobRequest",
+  "ScheduleChangeRequest",
   "Document",
   "ComplianceAlert",
   "PayrollRun",

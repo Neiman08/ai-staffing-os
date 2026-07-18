@@ -25,6 +25,7 @@ import {
   Radar,
   ShieldAlert,
   FileText,
+  Repeat2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +68,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: "/candidates", label: "Candidates", icon: Users },
       { to: "/workers", label: "Workers", icon: HardHat },
       { to: "/assignments", label: "Assignments", icon: CalendarClock },
+      { to: "/schedule-change-requests", label: "Schedule Changes", icon: Repeat2 },
       { to: "/compliance", label: "Compliance", icon: ShieldCheck },
       { to: "/payroll", label: "Payroll", icon: Wallet },
       { to: "/invoices", label: "Invoices", icon: Receipt },
