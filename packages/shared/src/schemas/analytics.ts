@@ -121,3 +121,57 @@ export const recruitingMetricsSchema = z.object({
   recruiting: recruitingMetricsBlockSchema,
 });
 export type RecruitingMetrics = z.infer<typeof recruitingMetricsSchema>;
+
+/**
+ * F11.5: winRate/salesCycle sobre Opportunity.stage real (WON/LOST,
+ * OpportunityStage ya existente) -- ninguna etapa nueva inventada.
+ * salesCycleDays usa Opportunity.updatedAt como proxy de "cuándo se
+ * ganó" (no existe un campo closedAt dedicado en el schema) --
+ * documentado como proxy, no como una medición exacta de la fecha de
+ * cierre real si el registro se editó por otro motivo después de
+ * ganarse.
+ */
+export const winRateSchema = z.object({
+  won: z.number(),
+  lost: z.number(),
+  winRatePercent: z.number().nullable(),
+});
+export type WinRate = z.infer<typeof winRateSchema>;
+
+export const salesCycleSchema = z.object({
+  averageDays: z.number().nullable(),
+  opportunitiesWon: z.number(),
+});
+export type SalesCycle = z.infer<typeof salesCycleSchema>;
+
+/**
+ * F11.5: proxy a nivel de EMPRESA (companyId), no de Lead individual --
+ * Opportunity no tiene un leadId real en el schema, así que un
+ * conversionRate lead-a-lead no puede calcularse sin inventar un vínculo
+ * que no existe en los datos. leadToOpportunityRate mide, en cambio, qué
+ * proporción de las companies con un Lead nuevo en el período también
+ * tienen alguna Opportunity real (cualquier etapa, cualquier fecha) --
+ * un proxy honesto, grounded en el FK companyId real de ambos modelos.
+ */
+export const conversionMetricsSchema = z.object({
+  leadConversionRate: z.number().nullable(),
+  // Opcional (no solo nullable): ausente por completo cuando el caller
+  // tiene leads.view pero no opportunities.view (sin permiso, distinto
+  // de "hay datos mide 0/null") -- null cuando sí tiene ambos permisos
+  // pero no hay compañías con Lead en el período (sin datos que medir).
+  leadToOpportunityRate: z.number().nullable().optional(),
+});
+export type ConversionMetrics = z.infer<typeof conversionMetricsSchema>;
+
+const commercialMetricsBlockSchema = z.object({
+  period: resolvedPeriodSchema.optional(),
+  winRate: winRateSchema.optional(),
+  salesCycle: salesCycleSchema.optional(),
+  conversion: conversionMetricsSchema.optional(),
+});
+
+export const commercialMetricsSchema = z.object({
+  generatedAt: z.string(),
+  commercial: commercialMetricsBlockSchema,
+});
+export type CommercialMetrics = z.infer<typeof commercialMetricsSchema>;
