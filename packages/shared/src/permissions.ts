@@ -16,6 +16,7 @@ export const PERMISSION_RESOURCES = [
   "payrollRuns", // F5.7
   "invoices", // F5.8
   "shifts", // F9.6
+  "incidents", // F9.10
 ] as const;
 
 export const PERMISSION_ACTIONS = ["view", "create", "update", "delete"] as const;

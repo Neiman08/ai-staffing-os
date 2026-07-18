@@ -133,6 +133,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "jobOrders.view",
     "agents.view",
     "matching.view", // F6.1: solo vista — nunca matching.run
+    "incidents.view", // F9.10
+    "incidents.create", // F9.10: SAFETY/COMPLIANCE_ISSUE son tipos frecuentes desde este rol
+    "incidents.update", // F9.10
   ],
   Payroll: [
     "timeEntries.view",
@@ -201,6 +204,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "shifts.view", // F9.6
     "shifts.create", // F9.6: Operations programa turnos
     "shifts.update", // F9.6
+    "incidents.view", // F9.10
+    "incidents.create", // F9.10: Operations reporta la mayoría de incidentes operativos
+    "incidents.update", // F9.10
   ],
   Marketing: [
     "companies.view",
@@ -210,7 +216,16 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "opportunities.view",
     "agents.view",
   ],
-  HR: ["candidates.view", "workers.view", "documents.view", "documents.create", "documents.update", "agents.view"],
+  HR: [
+    "candidates.view",
+    "workers.view",
+    "documents.view",
+    "documents.create",
+    "documents.update",
+    "agents.view",
+    "incidents.view", // F9.10
+    "incidents.create", // F9.10: WORKER_COMPLAINT/ATTENDANCE son tipos frecuentes desde este rol
+  ],
   Accounting: [
     "timeEntries.view",
     "payrollRuns.view",
@@ -239,6 +254,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "invoices.view", // F5.8
     "matching.view", // F6.1: solo vista — nunca matching.run
     "shifts.view", // F9.6
+    "incidents.view", // F9.10
   ],
 };
 

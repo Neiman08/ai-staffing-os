@@ -426,8 +426,8 @@ model User {
   // la UI de Users & Roles. Se sincronizan vía webhook (user.updated) y en
   // ClerkAuthProvider.resolveIdentity (lastLoginAt).
   lastLoginAt      DateTime?
-  mfaEnabled       Boolean           @default(false)
-  invitationStatus InvitationStatus  @default(NOT_INVITED)
+  mfaEnabled       Boolean          @default(false)
+  invitationStatus InvitationStatus @default(NOT_INVITED)
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -465,14 +465,14 @@ model RolePermission {
 // ================= CRM =================
 
 model Industry {
-  id         String        @id @default(cuid())
-  tenantId   String? // null = industria global (seed)
-  name       String
-  isGlobal   Boolean       @default(false)
-  companies  Company[]
-  categories JobCategory[]
-  leads      Lead[] // F1
-  campaigns  Campaign[] // F4
+  id              String           @id @default(cuid())
+  tenantId        String? // null = industria global (seed)
+  name            String
+  isGlobal        Boolean          @default(false)
+  companies       Company[]
+  categories      JobCategory[]
+  leads           Lead[] // F1
+  campaigns       Campaign[] // F4
   complianceRules ComplianceRule[]
 
   @@index([tenantId])
@@ -548,6 +548,7 @@ model Company {
   campaignCompanies       CampaignCompany[] // F4
   complianceRules         ComplianceRule[]
   placements              Placement[]
+  incidents               OperationalIncident[]
   createdAt               DateTime                  @default(now())
   updatedAt               DateTime                  @updatedAt
 
@@ -580,25 +581,25 @@ enum EmailVerificationStatus {
 }
 
 model Contact {
-  id                      String                    @id @default(cuid())
-  tenantId                String
-  companyId               String
-  company                 Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  firstName               String
-  lastName                String
-  email                   String?
-  phone                   String?
-  title                   String?
-  linkedinUrl             String? // F1
-  decisionRole            ContactDecisionRole? // F1: distinto de `title` (texto libre) — rol categorizado para targeting comercial
-  isPrimary               Boolean                   @default(false)
+  id                        String                    @id @default(cuid())
+  tenantId                  String
+  companyId                 String
+  company                   Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  firstName                 String
+  lastName                  String
+  email                     String?
+  phone                     String?
+  title                     String?
+  linkedinUrl               String? // F1
+  decisionRole              ContactDecisionRole? // F1: distinto de `title` (texto libre) — rol categorizado para targeting comercial
+  isPrimary                 Boolean                   @default(false)
   // F4.6: transparencia de procedencia — mismo principio que Company
   // desde F4.5 ("nunca inventar", "no disponible" si falta el dato).
-  source                  String? // nombre del proveedor real (ej. "People Data Labs") o null si es manual/import
-  confidenceScore         Float?
-  discoveredAt            DateTime?
-  discoveredByAgentTaskId String?
-  verificationStatus      ContactVerificationStatus @default(UNVERIFIED)
+  source                    String? // nombre del proveedor real (ej. "People Data Labs") o null si es manual/import
+  confidenceScore           Float?
+  discoveredAt              DateTime?
+  discoveredByAgentTaskId   String?
+  verificationStatus        ContactVerificationStatus @default(UNVERIFIED)
   // F4.7: procedencia y verificación del EMAIL específicamente — un
   // Contact puede venir de un proveedor (source) pero tener el email
   // encontrado/verificado después, por una fuente distinta (Website
@@ -607,22 +608,22 @@ model Contact {
   emailSourceUrl            String? // URL exacta de la página, o referencia del proveedor
   emailDiscoveryProvider    String?
   emailVerificationProvider String?
-  emailVerificationStatus   EmailVerificationStatus  @default(NOT_VERIFIED)
+  emailVerificationStatus   EmailVerificationStatus   @default(NOT_VERIFIED)
   emailConfidenceScore      Float? // 0–1, del proveedor de verificación — distinto de confidenceScore (descubrimiento del contacto)
   emailDiscoveredAt         DateTime?
   emailVerifiedAt           DateTime?
   // F4.7: control de envío — por dirección/persona, no por Company.
-  doNotContact              Boolean                  @default(false)
+  doNotContact              Boolean                   @default(false)
   bouncedAt                 DateTime?
   unsubscribedAt            DateTime?
-  createdAt               DateTime                  @default(now())
+  createdAt                 DateTime                  @default(now())
   // F7.8: Contact Verification and Ranking — determinista (contact-ranking.ts),
   // nunca decidido por un LLM. Null cuando el Contact no pasó todavía por
   // el ranking (ej. contactos creados antes de F7.8, o por otra vía).
-  rankingTier             ContactRankingTier?
-  rankingScore            Float?
-  rankingReasons          String[]                  @default([])
-  rankedAt                DateTime?
+  rankingTier               ContactRankingTier?
+  rankingScore              Float?
+  rankingReasons            String[]                  @default([])
+  rankedAt                  DateTime?
 
   @@index([tenantId])
   @@index([companyId])
@@ -829,50 +830,50 @@ model CampaignCompany {
 // ================= TALENTO =================
 
 model JobCategory {
-  id                     String        @id @default(cuid())
+  id                     String           @id @default(cuid())
   tenantId               String? // null = global (seed)
   name                   String // "Journeyman Electrician", "Forklift Operator"...
   industryId             String?
-  industry               Industry?     @relation(fields: [industryId], references: [id])
-  requiredCertifications Json          @default("[]") // keys de DocumentType
+  industry               Industry?        @relation(fields: [industryId], references: [id])
+  requiredCertifications Json             @default("[]") // keys de DocumentType
   candidates             Candidate[]
   jobOrders              JobOrder[]
   opportunities          Opportunity[] // F1
-  possibleForCompanies   Company[]     @relation("CompanyPossibleCategories") // F1
+  possibleForCompanies   Company[]        @relation("CompanyPossibleCategories") // F1
   complianceRules        ComplianceRule[]
 
   @@index([tenantId])
 }
 
 model Candidate {
-  id              String          @id @default(cuid())
-  tenantId        String
-  firstName       String
-  lastName        String
-  email           String?
-  phone           String?
-  languages       String[]        @default([]) // ["es", "en"]
-  city            String?
-  state           String?
-  zip             String?
-  categories      JobCategory[]
-  yearsExperience Int?
-  resumeUrl       String?
-  aiSummary       String?
-  aiScore         Float?
-  status          CandidateStatus @default(NEW)
-  source          String?
-  smsOptIn        Boolean         @default(false) // TCPA desde F0
-  documents       Document[]
-  worker          Worker?
-  qualifications  CandidateQualification[]
-  matches         CandidateMatch[]
-  shortlistEntries CandidateShortlistEntry[]
-  screeningPlans  ScreeningPlan[]
-  interviewPreviews InterviewPreview[]
+  id                 String                    @id @default(cuid())
+  tenantId           String
+  firstName          String
+  lastName           String
+  email              String?
+  phone              String?
+  languages          String[]                  @default([]) // ["es", "en"]
+  city               String?
+  state              String?
+  zip                String?
+  categories         JobCategory[]
+  yearsExperience    Int?
+  resumeUrl          String?
+  aiSummary          String?
+  aiScore            Float?
+  status             CandidateStatus           @default(NEW)
+  source             String?
+  smsOptIn           Boolean                   @default(false) // TCPA desde F0
+  documents          Document[]
+  worker             Worker?
+  qualifications     CandidateQualification[]
+  matches            CandidateMatch[]
+  shortlistEntries   CandidateShortlistEntry[]
+  screeningPlans     ScreeningPlan[]
+  interviewPreviews  InterviewPreview[]
   placementReadiness PlacementReadiness[]
-  onboardings      WorkerOnboarding[]
-  placements       Placement[]
+  onboardings        WorkerOnboarding[]
+  placements         Placement[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -880,33 +881,34 @@ model Candidate {
   // (seed de F0) no tienen un creador humano real. AuditLog sigue siendo
   // la fuente de auditoría detallada; este campo es solo para mostrar
   // "creado por" en la UI sin una consulta adicional.
-  createdById     String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdById        String?
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, state, city])
 }
 
 model Worker {
-  id               String            @id @default(cuid())
-  tenantId         String
-  candidateId      String            @unique
-  candidate        Candidate         @relation(fields: [candidateId], references: [id])
-  employmentType   EmploymentType    @default(W2)
-  defaultPayRate   Decimal           @db.Decimal(10, 2)
-  status           WorkerStatus      @default(AVAILABLE)
-  complianceStatus ComplianceStatus  @default(PENDING)
-  hiredAt          DateTime?
-  documents        Document[]
-  assignments      Assignment[]
-  payrollItems     PayrollItem[]
-  alerts           ComplianceAlert[]
-  onboardings      WorkerOnboarding[]
+  id                        String                     @id @default(cuid())
+  tenantId                  String
+  candidateId               String                     @unique
+  candidate                 Candidate                  @relation(fields: [candidateId], references: [id])
+  employmentType            EmploymentType             @default(W2)
+  defaultPayRate            Decimal                    @db.Decimal(10, 2)
+  status                    WorkerStatus               @default(AVAILABLE)
+  complianceStatus          ComplianceStatus           @default(PENDING)
+  hiredAt                   DateTime?
+  documents                 Document[]
+  assignments               Assignment[]
+  payrollItems              PayrollItem[]
+  alerts                    ComplianceAlert[]
+  onboardings               WorkerOnboarding[]
   complianceRuleEvaluations ComplianceRuleEvaluation[]
-  placements       Placement[]
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  placements                Placement[]
+  incidents                 OperationalIncident[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, complianceStatus])
@@ -915,47 +917,48 @@ model Worker {
 // ================= VACANTES Y OPERACIONES =================
 
 model JobOrder {
-  id               String            @id @default(cuid())
-  tenantId         String
-  companyId        String
-  company          Company           @relation(fields: [companyId], references: [id])
-  projectId        String?
-  project          Project?          @relation(fields: [projectId], references: [id])
-  categoryId       String
-  category         JobCategory       @relation(fields: [categoryId], references: [id])
-  title            String
-  description      String? // F5.1: descripción operativa general — distinta de scheduleNotes (específico de horario)
-  workersNeeded    Int
-  workersFilled    Int               @default(0)
-  billRate         Decimal           @db.Decimal(10, 2)
-  payRate          Decimal           @db.Decimal(10, 2)
-  location         Json? // { city, state, address }
-  shiftType        ShiftType         @default(DAY)
-  scheduleNotes    String?
-  startDate        DateTime
-  endDate          DateTime?
-  status           JobOrderStatus    @default(DRAFT) // F5.1: arranca en DRAFT, nunca directo en OPEN
-  requirements     Json              @default("[]") // keys de DocumentType requeridos
-  urgency          RiskLevel         @default(MEDIUM)
+  id                        String                     @id @default(cuid())
+  tenantId                  String
+  companyId                 String
+  company                   Company                    @relation(fields: [companyId], references: [id])
+  projectId                 String?
+  project                   Project?                   @relation(fields: [projectId], references: [id])
+  categoryId                String
+  category                  JobCategory                @relation(fields: [categoryId], references: [id])
+  title                     String
+  description               String? // F5.1: descripción operativa general — distinta de scheduleNotes (específico de horario)
+  workersNeeded             Int
+  workersFilled             Int                        @default(0)
+  billRate                  Decimal                    @db.Decimal(10, 2)
+  payRate                   Decimal                    @db.Decimal(10, 2)
+  location                  Json? // { city, state, address }
+  shiftType                 ShiftType                  @default(DAY)
+  scheduleNotes             String?
+  startDate                 DateTime
+  endDate                   DateTime?
+  status                    JobOrderStatus             @default(DRAFT) // F5.1: arranca en DRAFT, nunca directo en OPEN
+  requirements              Json                       @default("[]") // keys de DocumentType requeridos
+  urgency                   RiskLevel                  @default(MEDIUM)
   // F5.1: referencia de actor sin @relation — mismo patrón que
   // PayrollRun.createdById (decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
   // body del cliente. Nullable para compatibilidad con registros ya
   // existentes (seed de F0), que no tienen un creador humano real.
-  createdById      String?
-  assignments      Assignment[]
-  pricingScenarios PricingScenario[]
-  qualifications   CandidateQualification[]
-  matches          CandidateMatch[]
-  shortlistEntries CandidateShortlistEntry[]
-  screeningPlans   ScreeningPlan[]
-  interviewPreviews InterviewPreview[]
-  placementReadiness PlacementReadiness[]
-  onboardings      WorkerOnboarding[]
+  createdById               String?
+  assignments               Assignment[]
+  pricingScenarios          PricingScenario[]
+  qualifications            CandidateQualification[]
+  matches                   CandidateMatch[]
+  shortlistEntries          CandidateShortlistEntry[]
+  screeningPlans            ScreeningPlan[]
+  interviewPreviews         InterviewPreview[]
+  placementReadiness        PlacementReadiness[]
+  onboardings               WorkerOnboarding[]
   complianceRuleEvaluations ComplianceRuleEvaluation[]
-  placements       Placement[]
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  placements                Placement[]
+  incidents                 OperationalIncident[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 
   @@index([tenantId, status])
   @@index([companyId])
@@ -1090,24 +1093,24 @@ model CandidateShortlistEntry {
 // humana. Un registro por par, upsert en cada regeneración, historial
 // vía AuditLog.
 model ScreeningPlan {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  candidateId         String
-  candidate           Candidate @relation(fields: [candidateId], references: [id])
-  jobOrderId          String
-  jobOrder            JobOrder  @relation(fields: [jobOrderId], references: [id])
-  questions           Json
-  allowedDisqualifiers String[] @default([])
-  manualReviewFlags   String[] @default([])
-  missingInformation  String[] @default([])
-  riskFlags           String[] @default([])
-  rulesVersion        Int
-  calculatedAt        DateTime
+  id                   String    @id @default(cuid())
+  tenantId             String
+  candidateId          String
+  candidate            Candidate @relation(fields: [candidateId], references: [id])
+  jobOrderId           String
+  jobOrder             JobOrder  @relation(fields: [jobOrderId], references: [id])
+  questions            Json
+  allowedDisqualifiers String[]  @default([])
+  manualReviewFlags    String[]  @default([])
+  missingInformation   String[]  @default([])
+  riskFlags            String[]  @default([])
+  rulesVersion         Int
+  calculatedAt         DateTime
   // F8.8: quién generó el plan -- del contexto de tenancy, nunca del
   // body (mismo patrón que Candidate.createdById, F5.2).
-  generatedById       String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  generatedById        String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId])
@@ -1144,30 +1147,30 @@ enum InterviewPreviewStatus {
 // F8; historial vía AuditLog. Nunca modifica un calendario real, nunca
 // envía invitaciones.
 model InterviewPreview {
-  id                  String                 @id @default(cuid())
-  tenantId            String
-  candidateId         String
-  candidate           Candidate              @relation(fields: [candidateId], references: [id])
-  jobOrderId          String
-  jobOrder            JobOrder               @relation(fields: [jobOrderId], references: [id])
-  status              InterviewPreviewStatus @default(DRAFT)
-  proposedWindows     Json
-  durationMinutes     Int
-  timezone            String
-  modality            InterviewModality
-  locationOrLink      String?
-  participants        Json
-  restrictions        String[]               @default([])
-  conflicts           Json
-  availabilityConfirmed Boolean              @default(false)
-  missingInformation  String[]               @default([])
-  rulesVersion        Int
-  calculatedAt        DateTime
+  id                    String                 @id @default(cuid())
+  tenantId              String
+  candidateId           String
+  candidate             Candidate              @relation(fields: [candidateId], references: [id])
+  jobOrderId            String
+  jobOrder              JobOrder               @relation(fields: [jobOrderId], references: [id])
+  status                InterviewPreviewStatus @default(DRAFT)
+  proposedWindows       Json
+  durationMinutes       Int
+  timezone              String
+  modality              InterviewModality
+  locationOrLink        String?
+  participants          Json
+  restrictions          String[]               @default([])
+  conflicts             Json
+  availabilityConfirmed Boolean                @default(false)
+  missingInformation    String[]               @default([])
+  rulesVersion          Int
+  calculatedAt          DateTime
   // F8.9: quién propuso/generó el preview -- del contexto de tenancy,
   // nunca del body (mismo patrón que Candidate.createdById, F5.2).
-  createdById         String?
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
+  createdById           String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, status])
@@ -1239,26 +1242,26 @@ enum OnboardingStatus {
 // crea ni activa un Worker por sí mismo. `INVITED` es un estado
 // interno/preview, nunca implica una invitación real enviada.
 model WorkerOnboarding {
-  id             String           @id @default(cuid())
+  id             String                  @id @default(cuid())
   tenantId       String
   candidateId    String
-  candidate      Candidate        @relation(fields: [candidateId], references: [id])
+  candidate      Candidate               @relation(fields: [candidateId], references: [id])
   jobOrderId     String
-  jobOrder       JobOrder         @relation(fields: [jobOrderId], references: [id])
+  jobOrder       JobOrder                @relation(fields: [jobOrderId], references: [id])
   workerId       String?
-  worker         Worker?          @relation(fields: [workerId], references: [id])
-  status         OnboardingStatus @default(INVITED)
+  worker         Worker?                 @relation(fields: [workerId], references: [id])
+  status         OnboardingStatus        @default(INVITED)
   progress       Int
-  blockers       String[]         @default([])
-  warnings       String[]         @default([])
+  blockers       String[]                @default([])
+  warnings       String[]                @default([])
   nextBestAction String
   rulesVersion   Int
   // F9.1: quién inició el onboarding -- del contexto de tenancy, nunca
   // del body (mismo patrón que Candidate.createdById, F5.2).
   startedById    String?
   checklistItems DocumentChecklistItem[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, status])
@@ -1287,17 +1290,17 @@ enum ChecklistItemStatus {
 // solo su estado de checklist. Nunca se guarda PII innecesaria: solo
 // metadata (label, fechas, referencias por id).
 model DocumentChecklistItem {
-  id                   String                 @id @default(cuid())
+  id                   String              @id @default(cuid())
   tenantId             String
   workerOnboardingId   String
-  workerOnboarding     WorkerOnboarding       @relation(fields: [workerOnboardingId], references: [id])
+  workerOnboarding     WorkerOnboarding    @relation(fields: [workerOnboardingId], references: [id])
   documentTypeId       String
-  documentType         DocumentType           @relation(fields: [documentTypeId], references: [id])
+  documentType         DocumentType        @relation(fields: [documentTypeId], references: [id])
   documentId           String?
-  document             Document?              @relation(fields: [documentId], references: [id])
+  document             Document?           @relation(fields: [documentId], references: [id])
   label                String
-  required             Boolean                @default(true)
-  status               ChecklistItemStatus    @default(NOT_REQUESTED)
+  required             Boolean             @default(true)
+  status               ChecklistItemStatus @default(NOT_REQUESTED)
   // F9.2: texto libre, no enum -- mismo criterio ya aprobado para
   // `Payment.method` ("el proyecto prefiere datos sobre código para
   // catálogos abiertos").
@@ -1307,9 +1310,9 @@ model DocumentChecklistItem {
   verifiedById         String?
   rejectionReason      String?
   notes                String?
-  manualReviewRequired Boolean                @default(false)
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
+  manualReviewRequired Boolean             @default(false)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   @@unique([workerOnboardingId, documentTypeId])
   @@index([tenantId, workerOnboardingId, status])
@@ -1335,24 +1338,24 @@ enum ComplianceEvaluationStatus {
 // existente de `DocumentType` (por key, no una FK múltiple -- mismo
 // criterio ya usado por `JobOrder.requirements`).
 model ComplianceRule {
-  id                     String          @id @default(cuid())
-  tenantId               String
-  name                   String
-  state                  String?
-  industryId             String?
-  industry               Industry?       @relation(fields: [industryId], references: [id])
-  companyId              String?
-  company                Company?        @relation(fields: [companyId], references: [id])
-  jobCategoryId          String?
-  jobCategory            JobCategory?    @relation(fields: [jobCategoryId], references: [id])
-  assignmentType         EmploymentType?
-  requiredDocumentTypeKeys String[]      @default([])
-  active                 Boolean         @default(true)
+  id                       String          @id @default(cuid())
+  tenantId                 String
+  name                     String
+  state                    String?
+  industryId               String?
+  industry                 Industry?       @relation(fields: [industryId], references: [id])
+  companyId                String?
+  company                  Company?        @relation(fields: [companyId], references: [id])
+  jobCategoryId            String?
+  jobCategory              JobCategory?    @relation(fields: [jobCategoryId], references: [id])
+  assignmentType           EmploymentType?
+  requiredDocumentTypeKeys String[]        @default([])
+  active                   Boolean         @default(true)
   // F9.3: quién configuró la regla -- del contexto de tenancy, nunca
   // del body (mismo patrón que Candidate.createdById, F5.2).
-  createdById            String?
-  createdAt              DateTime        @default(now())
-  updatedAt              DateTime        @updatedAt
+  createdById              String?
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
 
   @@index([tenantId, active])
 }
@@ -1364,27 +1367,27 @@ model ComplianceRule {
 // cambia `Worker.complianceStatus` (ese sigue siendo dominio exclusivo
 // de F5.5).
 model ComplianceRuleEvaluation {
-  id                 String                     @id @default(cuid())
-  tenantId           String
-  workerId           String
-  worker             Worker                     @relation(fields: [workerId], references: [id])
-  jobOrderId         String
-  jobOrder           JobOrder                   @relation(fields: [jobOrderId], references: [id])
-  requiredChecks     String[]                   @default([])
-  satisfiedChecks    String[]                   @default([])
-  missingChecks      String[]                   @default([])
-  expiredChecks      String[]                   @default([])
-  blockers           String[]                   @default([])
-  warnings           String[]                   @default([])
-  manualReviewFlags  String[]                   @default([])
-  complianceStatus   ComplianceEvaluationStatus
-  rulesVersion       Int
-  evaluatedAt        DateTime
+  id                String                     @id @default(cuid())
+  tenantId          String
+  workerId          String
+  worker            Worker                     @relation(fields: [workerId], references: [id])
+  jobOrderId        String
+  jobOrder          JobOrder                   @relation(fields: [jobOrderId], references: [id])
+  requiredChecks    String[]                   @default([])
+  satisfiedChecks   String[]                   @default([])
+  missingChecks     String[]                   @default([])
+  expiredChecks     String[]                   @default([])
+  blockers          String[]                   @default([])
+  warnings          String[]                   @default([])
+  manualReviewFlags String[]                   @default([])
+  complianceStatus  ComplianceEvaluationStatus
+  rulesVersion      Int
+  evaluatedAt       DateTime
   // F9.3: quién disparó la evaluación -- del contexto de tenancy, nunca
   // del body (mismo patrón que Candidate.createdById, F5.2).
-  evaluatedById      String?
-  createdAt          DateTime                   @default(now())
-  updatedAt          DateTime                   @updatedAt
+  evaluatedById     String?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
 
   @@unique([workerId, jobOrderId])
   @@index([tenantId, jobOrderId, complianceStatus])
@@ -1411,35 +1414,35 @@ enum PlacementStatus {
 // el Placement queda en DRAFT con un blocker explícito, nunca se
 // infiere una compensación silenciosamente (ver `placement.ts`).
 model Placement {
-  id             String          @id @default(cuid())
-  tenantId       String
-  candidateId    String
-  candidate      Candidate       @relation(fields: [candidateId], references: [id])
-  workerId       String?
-  worker         Worker?         @relation(fields: [workerId], references: [id])
-  companyId      String
-  company        Company         @relation(fields: [companyId], references: [id])
-  jobOrderId     String
-  jobOrder       JobOrder        @relation(fields: [jobOrderId], references: [id])
-  payRate        Decimal?        @db.Decimal(10, 2)
-  billRate       Decimal?        @db.Decimal(10, 2)
-  startDate      DateTime?
-  endDate        DateTime?
-  shiftType      ShiftType?
-  status         PlacementStatus @default(DRAFT)
-  blockers       String[]        @default([])
-  warnings       String[]        @default([])
+  id          String          @id @default(cuid())
+  tenantId    String
+  candidateId String
+  candidate   Candidate       @relation(fields: [candidateId], references: [id])
+  workerId    String?
+  worker      Worker?         @relation(fields: [workerId], references: [id])
+  companyId   String
+  company     Company         @relation(fields: [companyId], references: [id])
+  jobOrderId  String
+  jobOrder    JobOrder        @relation(fields: [jobOrderId], references: [id])
+  payRate     Decimal?        @db.Decimal(10, 2)
+  billRate    Decimal?        @db.Decimal(10, 2)
+  startDate   DateTime?
+  endDate     DateTime?
+  shiftType   ShiftType?
+  status      PlacementStatus @default(DRAFT)
+  blockers    String[]        @default([])
+  warnings    String[]        @default([])
   // F9.4: quién aprobó (APPROVED) -- nunca del body, se completa en el
   // wiring al validar la transición.
-  approverId     String?
-  approvedAt     DateTime?
-  notes          String?
+  approverId  String?
+  approvedAt  DateTime?
+  notes       String?
   // F9.4: quién creó el Placement -- del contexto de tenancy, nunca del
   // body (mismo patrón que Candidate.createdById, F5.2).
-  createdById    String?
-  assignments    Assignment[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdById String?
+  assignments Assignment[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@unique([candidateId, jobOrderId])
   @@index([tenantId, jobOrderId, status])
@@ -1463,30 +1466,31 @@ model Project {
 }
 
 model Assignment {
-  id           String           @id @default(cuid())
+  id           String                @id @default(cuid())
   tenantId     String
   workerId     String
-  worker       Worker           @relation(fields: [workerId], references: [id])
+  worker       Worker                @relation(fields: [workerId], references: [id])
   jobOrderId   String
-  jobOrder     JobOrder         @relation(fields: [jobOrderId], references: [id])
+  jobOrder     JobOrder              @relation(fields: [jobOrderId], references: [id])
   projectId    String?
-  project      Project?         @relation(fields: [projectId], references: [id])
+  project      Project?              @relation(fields: [projectId], references: [id])
   // F9.5: enlace opcional al Placement de origen (F9.4) -- nullable
   // para no romper Assignments existentes creadas antes de F9.4/sin
   // pasar por el flujo de Placement (el POST directo a /assignments
   // sigue funcionando igual que F5.4).
   placementId  String?
-  placement    Placement?       @relation(fields: [placementId], references: [id])
-  payRate      Decimal          @db.Decimal(10, 2) // snapshot al asignar
-  billRate     Decimal          @db.Decimal(10, 2) // snapshot al asignar
+  placement    Placement?            @relation(fields: [placementId], references: [id])
+  payRate      Decimal               @db.Decimal(10, 2) // snapshot al asignar
+  billRate     Decimal               @db.Decimal(10, 2) // snapshot al asignar
   startDate    DateTime
   endDate      DateTime?
-  status       AssignmentStatus @default(SCHEDULED)
+  status       AssignmentStatus      @default(SCHEDULED)
   shifts       Shift[]
   timeEntries  TimeEntry[]
   payrollItems PayrollItem[]
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  incidents    OperationalIncident[]
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
 
   @@index([tenantId, workerId, status])
   @@index([tenantId, jobOrderId])
@@ -1512,23 +1516,23 @@ model Shift {
 }
 
 model TimeEntry {
-  id            String          @id @default(cuid())
-  tenantId      String
-  assignmentId  String
-  assignment    Assignment      @relation(fields: [assignmentId], references: [id])
-  date          DateTime        @db.Date
-  regularHours  Decimal         @default(0) @db.Decimal(5, 2)
-  overtimeHours Decimal         @default(0) @db.Decimal(5, 2)
-  doubleHours   Decimal         @default(0) @db.Decimal(5, 2)
-  perDiem       Decimal?        @db.Decimal(8, 2)
-  bonus         Decimal?        @db.Decimal(8, 2)
-  status        TimeEntryStatus @default(PENDING)
-  source        TimeEntrySource @default(MANUAL)
-  approvedById  String?
+  id               String          @id @default(cuid())
+  tenantId         String
+  assignmentId     String
+  assignment       Assignment      @relation(fields: [assignmentId], references: [id])
+  date             DateTime        @db.Date
+  regularHours     Decimal         @default(0) @db.Decimal(5, 2)
+  overtimeHours    Decimal         @default(0) @db.Decimal(5, 2)
+  doubleHours      Decimal         @default(0) @db.Decimal(5, 2)
+  perDiem          Decimal?        @db.Decimal(8, 2)
+  bonus            Decimal?        @db.Decimal(8, 2)
+  status           TimeEntryStatus @default(PENDING)
+  source           TimeEntrySource @default(MANUAL)
+  approvedById     String?
   // F9.6: banderas de revisión -- SEÑALES, nunca una decisión
   // automática de aprobación/rechazo (ver `time-entry-signals.ts`).
-  overtimeFlag     Boolean  @default(false)
-  discrepancyFlag  Boolean  @default(false)
+  overtimeFlag     Boolean         @default(false)
+  discrepancyFlag  Boolean         @default(false)
   discrepancyNotes String?
   rejectionReason  String?
   notes            String?
@@ -1536,24 +1540,89 @@ model TimeEntry {
   // almacena lo que un integrador real reporte, nunca inventa horas.
   clockInAt        DateTime?
   clockOutAt       DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   @@unique([assignmentId, date])
   @@index([tenantId, status])
   @@index([tenantId, date])
 }
 
+// F9.10: catálogo de incidentes -- NO infiere culpa, NO implica sanción
+// automática. Solo clasifica el TIPO de evento reportado por un humano.
+enum IncidentType {
+  NO_SHOW
+  LATE_ARRIVAL
+  EARLY_DEPARTURE
+  ATTENDANCE
+  SAFETY
+  CLIENT_COMPLAINT
+  WORKER_COMPLAINT
+  TIME_DISCREPANCY
+  DOCUMENT_ISSUE
+  COMPLIANCE_ISSUE
+  OTHER
+}
+
+// F9.10: OPEN -> UNDER_REVIEW -> ACTION_REQUIRED -> RESOLVED -> CLOSED,
+// con reapertura permitida en cada paso (ver INCIDENT_STATUS_TRANSITIONS,
+// apps/api operations-intelligence/incident-rules.ts) -- ningún estado
+// implica una sanción o decisión automática, solo el progreso de la
+// REVISIÓN humana del incidente.
+enum IncidentStatus {
+  OPEN
+  UNDER_REVIEW
+  ACTION_REQUIRED
+  RESOLVED
+  CLOSED
+}
+
+// F9.10 (Exceptions and Incidents): registro de un evento operativo
+// reportado por un humano -- NUNCA infiere culpa, NUNCA aplica una
+// sanción, NUNCA termina un Assignment/Worker automáticamente (esas
+// acciones, si proceden, las toma un humano por separado usando los
+// endpoints ya existentes de F9.5/F5.3). Todas las relaciones son
+// opcionales -- un incidente puede reportarse contra un Worker, una
+// Assignment, una Company, o ninguno en particular (ej. OTHER genérico).
+model OperationalIncident {
+  id              String         @id @default(cuid())
+  tenantId        String
+  type            IncidentType
+  status          IncidentStatus @default(OPEN)
+  workerId        String?
+  worker          Worker?        @relation(fields: [workerId], references: [id])
+  assignmentId    String?
+  assignment      Assignment?    @relation(fields: [assignmentId], references: [id])
+  companyId       String?
+  company         Company?       @relation(fields: [companyId], references: [id])
+  jobOrderId      String?
+  jobOrder        JobOrder?      @relation(fields: [jobOrderId], references: [id])
+  // F9.10: el relato de quien reporta -- nunca un veredicto generado
+  // por el sistema.
+  description     String
+  occurredAt      DateTime
+  reportedById    String?
+  resolutionNotes String?
+  resolvedById    String?
+  resolvedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, workerId])
+  @@index([tenantId, type])
+}
+
 // ================= COMPLIANCE =================
 
 model DocumentType {
-  id                 String     @id @default(cuid())
+  id                 String                  @id @default(cuid())
   tenantId           String? // null = global (seed: I-9, W-4, OSHA 10...)
   key                String // "i9", "w4", "osha10", "forklift_cert", "drug_test", "background_check"
   name               String
   category           String // "identity" | "tax" | "safety" | "certification" | "screening"
-  requiresExpiration Boolean    @default(false)
-  appliesTo          Json       @default("{}") // reglas por industria/categoría
+  requiresExpiration Boolean                 @default(false)
+  appliesTo          Json                    @default("{}") // reglas por industria/categoría
   documents          Document[]
   checklistItems     DocumentChecklistItem[]
 
@@ -1561,26 +1630,26 @@ model DocumentType {
 }
 
 model Document {
-  id              String            @id @default(cuid())
+  id              String                  @id @default(cuid())
   tenantId        String
   documentTypeId  String
-  documentType    DocumentType      @relation(fields: [documentTypeId], references: [id])
+  documentType    DocumentType            @relation(fields: [documentTypeId], references: [id])
   candidateId     String?
-  candidate       Candidate?        @relation(fields: [candidateId], references: [id])
+  candidate       Candidate?              @relation(fields: [candidateId], references: [id])
   workerId        String?
-  worker          Worker?           @relation(fields: [workerId], references: [id])
+  worker          Worker?                 @relation(fields: [workerId], references: [id])
   fileUrl         String?
   issuedDate      DateTime?
   expirationDate  DateTime?
-  status          DocumentStatus    @default(PENDING_REVIEW)
+  status          DocumentStatus          @default(PENDING_REVIEW)
   verifiedById    String?
-  verifiedByAgent Boolean           @default(false)
+  verifiedByAgent Boolean                 @default(false)
   aiExtraction    Json?
   rejectionReason String?
   alerts          ComplianceAlert[]
   checklistItems  DocumentChecklistItem[]
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, expirationDate])

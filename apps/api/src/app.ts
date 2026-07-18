@@ -13,6 +13,7 @@ import { talentRouter } from "./modules/talent/router";
 import { workersRouter } from "./modules/workers/router";
 import { assignmentsRouter } from "./modules/assignments/router";
 import { placementsRouter } from "./modules/placements/router";
+import { incidentsRouter } from "./modules/incidents/router";
 import { matchingRouter } from "./modules/matching/router";
 import { complianceRouter } from "./modules/compliance/router";
 import { payrollRouter } from "./modules/payroll/router";
@@ -110,6 +111,7 @@ export function createApp() {
   app.use("/api/v1", workersRouter);
   app.use("/api/v1", assignmentsRouter);
   app.use("/api/v1", placementsRouter);
+  app.use("/api/v1", incidentsRouter);
   app.use("/api/v1", matchingRouter);
   app.use("/api/v1", complianceRouter);
   app.use("/api/v1", payrollRouter);

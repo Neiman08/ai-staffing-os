@@ -409,3 +409,50 @@ Ningún Worker se activa automáticamente, ninguna Assignment se crea, ningún p
 `feat: F9.9 — worker operations UI`.
 
 **F9.9 completo.**
+
+## 15. Resultado de F9.10 — Exceptions and Incidents
+
+### 15.1 Decisión de arquitectura (documentada antes de implementar)
+
+Confirmado por grep exhaustivo antes de implementar: NO existía ningún modelo de incidente en el schema. A diferencia de F9.7/F9.8 (evaluadores puros sin persistencia), F9.10 SÍ necesita un modelo nuevo -- un incidente es un HECHO reportado por un humano en un momento dado, no una señal recalculable a partir de otros datos. Mismo criterio arquitectónico que `Placement` (F9.4): modelo nuevo + módulo standalone en `apps/api/src/modules/incidents/` (no extiende `workers/` ni `assignments/` -- reportar un incidente es una acción distinta de editar el Worker/Assignment que referencia) + grafo de transiciones puro en `operations-intelligence/incident-rules.ts`.
+
+Todas las relaciones (`workerId`/`assignmentId`/`companyId`/`jobOrderId`) son opcionales a nivel de schema -- la validación real ("todo tipo salvo OTHER exige al menos una relación") vive en el módulo puro (`requiresAtLeastOneRelation`) y se aplica en el wiring, nunca a nivel de constraint de base de datos (permite que OTHER exista sin contexto, un escape hatch deliberado en vez de forzar una relación inventada).
+
+**Ninguna acción de este módulo infiere culpa, aplica una sanción, ni termina un Assignment/Worker.** `updateIncidentStatus` nunca llama a `assignments/service.ts` ni a `workers/service.ts` -- confirmado por grep de sus imports.
+
+### 15.2 Arquitectura
+
+- **`packages/db/prisma/schema.prisma`**: enums `IncidentType` (11 valores) e `IncidentStatus` (5 valores) + modelo `OperationalIncident` (relaciones opcionales a Worker/Assignment/Company/JobOrder, `description`/`occurredAt` obligatorios, `reportedById`/`resolutionNotes`/`resolvedById`/`resolvedAt`). Back-relations agregadas en `Worker`/`Assignment`/`Company`/`JobOrder`.
+- **`apps/api/.../operations-intelligence/incident-rules.ts`** (nuevo, puro, `INCIDENT_RULES_VERSION = 1`): `INCIDENT_STATUS_TRANSITIONS`/`isValidIncidentStatusTransition` (OPEN→UNDER_REVIEW→ACTION_REQUIRED→RESOLVED→CLOSED, con reapertura permitida en cada paso intermedio, OPEN puede resolver directo para casos triviales, CLOSED terminal) y `requiresAtLeastOneRelation`. 7 tests unitarios.
+- **`apps/api/src/modules/incidents/service.ts`** (nuevo): `createIncident` (verifica que cada relación enviada exista de verdad, nunca la inventa; `reportedById` siempre del contexto de tenancy), `listIncidents`/`getIncidentById`, `updateIncident` (solo `description`/`occurredAt`, rechaza editar un incidente CLOSED), `updateIncidentStatus` (exige `resolutionNotes` para alcanzar RESOLVED; al salir de RESOLVED/CLOSED hacia un estado anterior limpia `resolvedById`/`resolvedAt`/`resolutionNotes` -- nunca deja una resolución obsoleta).
+- **`apps/api/src/modules/incidents/router.ts`** (nuevo): `GET/POST /incidents`, `GET/PATCH /incidents/:id`, `PATCH /incidents/:id/status`. Recurso RBAC propio `incidents.*` (nunca reutiliza `assignments.*`/`workers.*` -- reportar un incidente es una acción distinta).
+- **`packages/shared/src/permissions.ts`**: nuevo recurso `incidents` (CRUD keys generadas automáticamente). Asignado en el seed: Operations y Compliance ganan `incidents.view/create/update`; HR gana `incidents.view/create`; Manager gana `incidents.view`.
+- **`apps/api/src/core/tenancy/prisma-extension.ts`**: `STRICT_TENANT_MODELS` extendido con `OperationalIncident`.
+- **`apps/api/src/app.ts`**: registrado `incidentsRouter`.
+- Sin UI -- F9.10 no fue designado como la subfase de UI (esa fue F9.9, que ya cubrió F9.1-F9.8); si se pide una UI para incidentes, quedaría para una fase futura o una extensión explícita.
+
+### 15.3 Tests nuevos
+
+`incident-rules.test.ts` (7, puro: idempotencia; camino completo OPEN→CLOSED; OPEN puede resolver directo; UNDER_REVIEW/RESOLVED pueden rebotar hacia atrás; CLOSED terminal; OPEN no puede saltar a CLOSED; `requiresAtLeastOneRelation` distingue OTHER del resto) + 16 tests de integración nuevos en `incidents.test.ts` (RBAC 403; tipo no-OTHER sin ninguna relación rechazado; OTHER sin relación acepta; vínculo real a Company; workerId inexistente rechazado; vínculo real a Worker con `reportedById` real; aislamiento de tenant; filtros de listado; GET por id; PATCH genérico nunca cambia type/status; transición inválida rechazada; RESOLVED exige `resolutionNotes`; camino completo con `resolvedById`/`resolvedAt` verificados; reapertura limpia la resolución previa; CLOSED no editable vía PATCH genérico; AuditLog en creación y cambio de estado). Total: 16/16 en `incidents.test.ts`.
+
+### 15.4 Suite completa
+
+1164 tests, 1158 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones nuevas. Typecheck y lint limpios en `apps/api` y `packages/shared`.
+
+### 15.5 Migraciones
+
+`20260718000000_f9_10_operational_incident` -- 100% aditiva: `CREATE TYPE` ×2 (`IncidentType`, `IncidentStatus`), `CREATE TABLE "OperationalIncident"`, 3 índices, 4 FKs `ON DELETE SET NULL` (un Worker/Assignment/Company/JobOrder eliminado nunca borra el historial del incidente, solo desvincula la relación -- decisión conservadora, ninguno de esos modelos permite delete físico hoy de todas formas). Cero tabla/columna existente modificada.
+
+Además: `npm run seed` re-ejecutado (idempotente, solo upserts) para propagar el recurso de permiso `incidents` nuevo -- mismo paso ya documentado como necesario en F9.6 §11.6.
+
+### 15.6 Limitaciones conocidas
+
+- Sin UI todavía -- ver §15.2. El backend está completo y probado, listo para que una fase futura lo embeba en páginas reales (candidato natural: `WorkerDetail.tsx`/`AssignmentDetail.tsx`, mismo patrón que F9.9).
+- `resolutionNotes` es obligatorio solo para alcanzar RESOLVED -- no se exige para ningún otro estado intermedio, decisión conservadora que no bloquea el flujo de revisión con un campo requerido prematuro.
+- Sin agregación/reporte de incidentes todavía -- eso es explícitamente el alcance de F9.11 (Operational Reports), no se adelantó acá para no mezclar subfases.
+
+### 15.7 Commit
+
+`feat: F9.10 — exceptions and incidents`.
+
+**F9.10 completo.**
