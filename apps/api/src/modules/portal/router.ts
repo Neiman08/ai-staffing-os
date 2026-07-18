@@ -4,6 +4,8 @@ import { AppError } from "../../core/errors";
 import * as clientService from "./client-service";
 import * as clientJobRequestService from "./client-job-request-service";
 import * as internalJobRequestService from "./internal-job-request-service";
+import * as workerService from "./worker-service";
+import * as candidateService from "./candidate-service";
 
 /**
  * F10.2: Client Portal -- todas las rutas viven bajo /portal/client/*,
@@ -249,6 +251,106 @@ portalRouter.post("/client-job-requests/:id/convert", requirePermission("clientJ
         workersNeeded: typeof workersNeeded === "number" ? workersNeeded : undefined,
       }),
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================= F10.4: Worker Portal =================
+
+portalRouter.get("/portal/worker/profile", requirePermission("portalProfile.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.getWorkerProfile());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/onboarding", requirePermission("portalProfile.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerOnboarding());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/documents", requirePermission("portalDocuments.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerDocuments());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/placements", requirePermission("portalAssignments.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerPlacements());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/assignments", requirePermission("portalAssignments.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerAssignments());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/shifts", requirePermission("portalAssignments.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerShifts());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/time-entries", requirePermission("portalTimeEntries.view"), async (req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerTimeEntries({ cursor: req.query.cursor as string | undefined, limit: req.query.limit ? Number(req.query.limit) : undefined }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/worker/incidents", requirePermission("portalIncidents.view"), async (_req, res, next) => {
+  try {
+    res.json(await workerService.listWorkerIncidents());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================= F10.4: Candidate Portal =================
+
+portalRouter.get("/portal/candidate/profile", requirePermission("portalProfile.view"), async (_req, res, next) => {
+  try {
+    res.json(await candidateService.getCandidateProfile());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/candidate/applications", requirePermission("portalProfile.view"), async (_req, res, next) => {
+  try {
+    res.json(await candidateService.listCandidateApplications());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/candidate/onboarding", requirePermission("portalProfile.view"), async (_req, res, next) => {
+  try {
+    res.json(await candidateService.listCandidateOnboarding());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.get("/portal/candidate/documents", requirePermission("portalDocuments.view"), async (_req, res, next) => {
+  try {
+    res.json(await candidateService.listCandidateDocuments());
   } catch (err) {
     next(err);
   }

@@ -167,3 +167,39 @@ Verificación adicional en navegador real (Playwright ad-hoc): flujo completo cl
 `feat: F10.3 — client job requests`.
 
 **F10.3 completo.**
+
+## 6. Resultado de F10.4 — Candidate/Worker Portal
+
+### 6.1 Implementado
+
+- **Backend**: `worker-service.ts` (`ctx.workerId`) y `candidate-service.ts` (`ctx.candidateId`), mismo patrón de ownership de F10.2/F10.3. Ninguno de estos endpoints acepta un `:id` en la URL -- son intrínsecamente auto-scoped, sin superficie de IDOR vía manipulación de path (a diferencia de los endpoints `:id` del Client Portal).
+- **Redacción explícita para el Candidate Portal**: `listCandidateApplications` nunca expone `rank`/`score`/`normalizedScore`/`reasons`/`gaps`/`risks`/`evidence`/`explanation` (lógica interna de scoring, y `rank` revelaría posición frente a otros candidatos -- prohibido explícito del PO) -- solo `qualificationStatus` + `shortlistReviewStatus`. Solo se listan matches `QUALIFIED`/`POSSIBLY_QUALIFIED` -- un `NOT_QUALIFIED` nunca aparece como "aplicación".
+- **Refactor de `PortalShell`/`PortalSidebar`**: parametrizados con `items`/`portalLabel` en vez de triplicar el shell -- reutiliza el 100% de la infraestructura visual de F10.2 para los 3 tipos de portal.
+- **`App.tsx`** extendido: redirige automáticamente `workerId`→`/portal/worker`, `candidateId`→`/portal/candidate` (además del `companyId`→`/portal/client` ya existente de F10.2).
+- **10 páginas nuevas**: Worker Portal (Profile, Onboarding, Documents, Assignments, Time Entries de solo lectura, Incidents) + Candidate Portal (Profile, Applications, Onboarding, Documents).
+
+### 6.2 Tests nuevos
+
+`worker-candidate-portal.test.ts` (11 de integración): RBAC 403 para un rol interno en ambos portales; el caso específico de que `CLIENT_ADMIN` (que SÍ tiene `portalProfile.view`) igual recibe 403 en `/portal/worker/*` porque `ctx.workerId` no existe -- confirma que el permission-check por sí solo no alcanza, el ownership-check es la segunda capa real; contenido real de `worker-01`/`candidate-029` verificado; todos los sub-recursos devuelven la forma esperada; **verificación exhaustiva de que `/portal/candidate/applications` nunca expone las 8 llaves internas de scoring**; solo se muestran calificaciones `QUALIFIED`/`POSSIBLY_QUALIFIED`; un WORKER nunca puede resolver un `candidateId` (ni viceversa).
+
+Verificación visual en navegador real (Playwright ad-hoc): Worker Portal y Candidate Portal renderizan con datos reales (`Valeria Mendoza`, `worker-01`; `Daniela Ortiz`, `candidate-029`), shells visualmente distintos entre sí y del backoffice interno, cero errores de consola.
+
+### 6.3 Suite completa
+
+1231 tests, 1225 pass, 1 fail preexistente sin relación, 5 skip -- cero regresiones (una corrida intermedia mostró 2 fallas transitorias no reproducibles, mismo patrón de flakiness ya documentado en F9.8 -- una segunda corrida limpia lo confirmó). Typecheck/lint/build limpios en `apps/web`.
+
+### 6.4 Migraciones
+
+Ninguna -- F10.4 lee exclusivamente modelos ya existentes (WorkerOnboarding/DocumentChecklistItem/Placement/Assignment/Shift/TimeEntry/OperationalIncident/CandidateMatch/CandidateShortlistEntry, todos de F8/F9).
+
+### 6.5 Limitaciones conocidas
+
+- Perfil de solo lectura -- la edición real (F10.5, Profile and Document UX) llega en la siguiente subfase, deliberadamente.
+- Time Entries de solo lectura en el Worker Portal -- crear/enviar horas propias es F10.7 (Time Entry UX), subfase dedicada.
+- Sin preview de screening/entrevista en el Candidate Portal -- decisión conservadora: redactar esos datos de forma segura (sin exponer `rationale`/`expectedEvidence` de `ScreeningPlan`, lógica interna) exigiría más diseño del que se pidió explícito para F10.4; se documenta como diferido, no se expone información sin la redacción correcta.
+
+### 6.6 Commit
+
+`feat: F10.4 — candidate and worker portal`.
+
+**F10.4 completo.**

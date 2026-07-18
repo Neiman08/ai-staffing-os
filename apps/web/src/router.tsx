@@ -50,6 +50,18 @@ import ClientPortalJobRequests from "./pages/portal/client/JobRequests";
 import ClientPortalJobRequestDetail from "./pages/portal/client/JobRequestDetail";
 import ClientJobRequests from "./pages/ClientJobRequests";
 import ClientJobRequestDetail from "./pages/ClientJobRequestDetail";
+import { WorkerPortalGate } from "@/components/layout/WorkerPortalGate";
+import { CandidatePortalGate } from "@/components/layout/CandidatePortalGate";
+import WorkerProfilePage from "./pages/portal/worker/Profile";
+import WorkerOnboardingPage from "./pages/portal/worker/Onboarding";
+import WorkerDocumentsPage from "./pages/portal/worker/Documents";
+import WorkerAssignmentsPage from "./pages/portal/worker/Assignments";
+import WorkerTimeEntriesPage from "./pages/portal/worker/TimeEntries";
+import WorkerIncidentsPage from "./pages/portal/worker/Incidents";
+import CandidateProfilePage from "./pages/portal/candidate/Profile";
+import CandidateApplicationsPage from "./pages/portal/candidate/Applications";
+import CandidateOnboardingPage from "./pages/portal/candidate/Onboarding";
+import CandidateDocumentsPage from "./pages/portal/candidate/Documents";
 
 export const router = createBrowserRouter([
   // F4.9: /sign-in y /sign-up viven FUERA de RequireAuth a propósito —
@@ -129,6 +141,38 @@ export const router = createBrowserRouter([
       { path: "assignments", element: <ClientAssignments /> },
       { path: "time-entries", element: <ClientTimeEntries /> },
       { path: "incidents", element: <ClientIncidents /> },
+    ],
+  },
+  // F10.4: Worker Portal -- rama separada, mismo criterio que el Client Portal.
+  {
+    path: "/portal/worker",
+    element: (
+      <RequireAuth>
+        <WorkerPortalGate />
+      </RequireAuth>
+    ),
+    children: [
+      { index: true, element: <WorkerProfilePage /> },
+      { path: "onboarding", element: <WorkerOnboardingPage /> },
+      { path: "documents", element: <WorkerDocumentsPage /> },
+      { path: "assignments", element: <WorkerAssignmentsPage /> },
+      { path: "time-entries", element: <WorkerTimeEntriesPage /> },
+      { path: "incidents", element: <WorkerIncidentsPage /> },
+    ],
+  },
+  // F10.4: Candidate Portal -- rama separada, mismo criterio.
+  {
+    path: "/portal/candidate",
+    element: (
+      <RequireAuth>
+        <CandidatePortalGate />
+      </RequireAuth>
+    ),
+    children: [
+      { index: true, element: <CandidateProfilePage /> },
+      { path: "applications", element: <CandidateApplicationsPage /> },
+      { path: "onboarding", element: <CandidateOnboardingPage /> },
+      { path: "documents", element: <CandidateDocumentsPage /> },
     ],
   },
 ]);
