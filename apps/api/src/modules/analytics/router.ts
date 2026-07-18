@@ -4,6 +4,7 @@ import { requireInternalIdentity } from "../../core/rbac/require-permission";
 import * as analyticsService from "./service";
 import * as recruitingService from "./recruiting.service";
 import * as commercialService from "./commercial.service";
+import * as financialService from "./financial.service";
 
 // F11.3: mismo criterio que dashboard/router.ts y reports/router.ts --
 // sin un solo permiso de ruta (el executive dashboard es, por diseño,
@@ -34,6 +35,15 @@ analyticsRouter.get("/analytics/commercial", requireInternalIdentity(), async (r
   try {
     const query = analyticsPeriodQuerySchema.parse(req.query);
     res.json(await commercialService.getCommercialMetrics(query));
+  } catch (err) {
+    next(err);
+  }
+});
+
+analyticsRouter.get("/analytics/financial", requireInternalIdentity(), async (req, res, next) => {
+  try {
+    const query = analyticsPeriodQuerySchema.parse(req.query);
+    res.json(await financialService.getFinancialMetrics(query));
   } catch (err) {
     next(err);
   }

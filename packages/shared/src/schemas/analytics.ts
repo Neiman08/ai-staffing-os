@@ -175,3 +175,51 @@ export const commercialMetricsSchema = z.object({
   commercial: commercialMetricsBlockSchema,
 });
 export type CommercialMetrics = z.infer<typeof commercialMetricsSchema>;
+
+/**
+ * F11.6: margen real día por día -- misma fórmula que
+ * dashboard/service.ts ya usa para su serie de 14 días (regularHours +
+ * overtimeHours + doubleHours, margen = horas * (billRate - payRate)
+ * snapshot de la Assignment), generalizada a cualquier rango en vez de
+ * quedar hardcodeada a 14 días.
+ */
+export const marginTrendPointSchema = z.object({ date: z.string(), hours: z.number(), margin: z.number() });
+export type MarginTrendPoint = z.infer<typeof marginTrendPointSchema>;
+
+/**
+ * F11.6: antigüedad real de facturas impagas -- balance = total -
+ * sum(Payment.amount), mismo cálculo ya usado por
+ * billing/scheduler.ts:flagOverdueInvoicesForTenant (F5.8), nunca una
+ * columna paidAmount que pueda desincronizarse. Los buckets son días
+ * reales desde dueDate hasta hoy -- una factura sin dueDate no entra en
+ * ningún bucket (no se inventa una fecha de vencimiento).
+ */
+export const invoiceAgingSchema = z.object({
+  current: z.string(), // 0-30 días
+  days31to60: z.string(),
+  days61to90: z.string(),
+  over90: z.string(),
+  totalOutstanding: z.string(),
+});
+export type InvoiceAging = z.infer<typeof invoiceAgingSchema>;
+
+export const payrollCostSchema = z.object({
+  totalGross: z.string(),
+  totalBill: z.string(),
+  totalMargin: z.string(),
+  runsIncluded: z.number(),
+});
+export type PayrollCost = z.infer<typeof payrollCostSchema>;
+
+const financialMetricsBlockSchema = z.object({
+  period: resolvedPeriodSchema.optional(),
+  marginTrend: z.array(marginTrendPointSchema).optional(),
+  invoiceAging: invoiceAgingSchema.optional(),
+  payrollCost: payrollCostSchema.optional(),
+});
+
+export const financialMetricsSchema = z.object({
+  generatedAt: z.string(),
+  financial: financialMetricsBlockSchema,
+});
+export type FinancialMetrics = z.infer<typeof financialMetricsSchema>;
