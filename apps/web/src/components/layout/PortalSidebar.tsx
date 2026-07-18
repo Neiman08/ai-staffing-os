@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Briefcase, FileText, Users2, CalendarClock, Clock, ShieldAlert, User, FolderCheck, History } from "lucide-react";
+import { LayoutDashboard, Briefcase, FileText, Users2, CalendarClock, Clock, ShieldAlert, User, FolderCheck, History, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface NavItem {
@@ -46,9 +46,19 @@ export const CANDIDATE_NAV: NavItem[] = [
   { to: "/portal/candidate/audit-log", label: "Audit Trail", icon: History },
 ];
 
-export function PortalSidebar({ brandName, items, portalLabel }: { brandName?: string; items: NavItem[]; portalLabel: string }) {
+function SidebarContent({
+  brandName,
+  items,
+  portalLabel,
+  onNavigate,
+}: {
+  brandName?: string;
+  items: NavItem[];
+  portalLabel: string;
+  onNavigate?: () => void;
+}) {
   return (
-    <aside className="hidden w-60 shrink-0 border-r border-border bg-card/40 md:flex md:flex-col">
+    <>
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
           {brandName?.[0] ?? "…"}
@@ -57,24 +67,76 @@ export function PortalSidebar({ brandName, items, portalLabel }: { brandName?: s
           {brandName ?? "…"} {portalLabel}
         </span>
       </div>
-      <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
+      <nav className="flex-1 space-y-0.5 overflow-y-auto p-2" aria-label={`${portalLabel} navigation`}>
         {items.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
+            onClick={onNavigate}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+                "flex min-h-11 items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
                 isActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
               )
             }
           >
-            <Icon className="h-4 w-4" />
-            {label}
+            {({ isActive }) => (
+              <span className="flex items-center gap-2.5" aria-current={isActive ? "page" : undefined}>
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                {label}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>
-    </aside>
+    </>
+  );
+}
+
+/**
+ * F10.10: en mobile el `<aside>` estático quedaba `hidden` sin ninguna
+ * navegación alternativa -- un Worker/Client/Candidate en un teléfono
+ * literalmente no podía cambiar de página. Ahora `open`/`onClose`
+ * controlan un off-canvas real (focus movido al panel al abrir,
+ * Escape cierra, backdrop cierra, cada click de nav cierra) -- el
+ * `<aside>` de escritorio (`md:flex`) sigue exactamente igual.
+ */
+export function PortalSidebar({
+  brandName,
+  items,
+  portalLabel,
+  open,
+  onClose,
+}: {
+  brandName?: string;
+  items: NavItem[];
+  portalLabel: string;
+  open: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-card/40 md:flex">
+        <SidebarContent brandName={brandName} items={items} portalLabel={portalLabel} />
+      </aside>
+
+      {open && (
+        <div className="fixed inset-0 z-40 flex md:hidden" role="dialog" aria-modal="true" aria-label={`${portalLabel} navigation`}>
+          <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+          <div className="relative flex h-full w-64 flex-col bg-card shadow-xl">
+            <button
+              type="button"
+              aria-label="Close navigation"
+              onClick={onClose}
+              className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <SidebarContent brandName={brandName} items={items} portalLabel={portalLabel} onNavigate={onClose} />
+          </div>
+        </div>
+      )}
+    </>
   );
 }

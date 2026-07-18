@@ -29,16 +29,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
+      <div className="fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2" aria-live="polite" aria-atomic="false">
         {items.map((item) => (
           <div
             key={item.id}
+            role={item.variant === "error" ? "alert" : "status"}
             className="flex items-start gap-2 rounded-lg border border-border bg-card p-3 shadow-lg"
           >
             {item.variant === "success" ? (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" aria-hidden="true" />
             ) : (
-              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden="true" />
             )}
             <div className="min-w-0">
               <div className="text-sm font-medium">{item.title}</div>

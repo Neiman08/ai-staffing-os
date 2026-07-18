@@ -107,7 +107,7 @@ export function Sidebar({ brandName }: SidebarProps) {
         </div>
         <span className="text-sm font-semibold">{brandName ?? "…"}</span>
       </div>
-      <nav className="flex-1 space-y-4 overflow-y-auto p-2">
+      <nav className="flex-1 space-y-4 overflow-y-auto p-2" aria-label="Main navigation">
         {NAV_SECTIONS.map((section, i) => (
           <div key={section.title ?? i} className="space-y-0.5">
             {section.title && (
@@ -122,13 +122,17 @@ export function Sidebar({ brandName }: SidebarProps) {
                 end={end}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+                    "flex min-h-11 items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
                     isActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
                   )
                 }
               >
-                <Icon className="h-4 w-4" />
-                {label}
+                {({ isActive }) => (
+                  <span className="flex items-center gap-2.5" aria-current={isActive ? "page" : undefined}>
+                    <Icon className="h-4 w-4" aria-hidden="true" />
+                    {label}
+                  </span>
+                )}
               </NavLink>
             ))}
           </div>

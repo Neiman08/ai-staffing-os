@@ -442,3 +442,49 @@ Playwright ad-hoc: vista interna muestra el tenant completo con nombres de actor
 `feat: F10.9 — portal audit trail`.
 
 **F10.9 completo.**
+
+## 12. Resultado de F10.10 — Responsive and Accessibility Pass
+
+### 12.1 Alcance de la auditoría
+
+Revisadas todas las superficies NUEVAS de F10.1-F10.9 (los 3 shells de portal, sus ~25 páginas, `Drawer`, `NotificationBell`, `AuditTrail`) en mobile (390px)/tablet (820px)/desktop (1280px) vía Playwright real. Problemas reales encontrados y corregidos (no solo documentados):
+
+### 12.2 Bug real: sin navegación en mobile en los 3 portales
+
+`PortalSidebar` era `hidden ... md:flex` -- por debajo de 768px el `<aside>` completo desaparecía sin ningún reemplazo. Un Worker/Client/Candidate en un teléfono no podía cambiar de página, literalmente. Corregido: `PortalSidebar` ahora acepta `open`/`onClose` y renderiza un nav off-canvas real (backdrop, panel deslizante, botón de cierre) por debajo de `md`, controlado por un botón hamburguesa nuevo en `PortalTopbar` (`onOpenNav`, visible solo `md:hidden`). Cada `NavLink` cierra el panel al navegar. Verificado con Playwright a 390px: abrir el panel, click en un item, navega Y cierra automáticamente. **Deliberadamente no se tocó** el Sidebar/Topbar/AppShell interno (mismo problema, pero preexistente de F0/F1, fuera del alcance "revisar superficies NUEVAS" -- tocarlo sería una reescritura general no pedida) -- documentado como deuda preexistente, no atribuible a F10.
+
+### 12.3 Bug real: `Drawer` sin trampa de foco ni semántica de diálogo
+
+Componente compartido por CADA drawer construido desde F10.2 (crear job request, enviar documento, solicitar cambio de horario, crear/editar time entry -- más de 10 call sites). Antes: sin `role="dialog"`/`aria-modal`, sin foco inicial al abrir, sin trampa de foco (Tab podía escapar hacia la página de atrás), sin restauración de foco al cerrar. Corregido una sola vez en el componente compartido: foco se mueve al primer elemento focuseable al abrir, Tab/Shift+Tab quedan atrapados dentro del panel, Escape cierra y restaura el foco al elemento que abrió el drawer. Verificado con Playwright: 15 Tabs consecutivos nunca escapan del `[role="dialog"]`; Escape cierra correctamente. Regresión verificada: el formulario existente de F10.3 (Job Request) sigue funcionando exactamente igual.
+
+### 12.4 Bug real: confirmaciones de Toast invisibles para lectores de pantalla
+
+`ToastProvider` (usado por CADA mutación de F10.5-F10.9 -- "Perfil actualizado", "Documento enviado", "Solicitud enviada", etc.) no tenía ningún `aria-live`. Un usuario de screen reader nunca se enteraba de que su acción tuvo éxito o falló. Corregido: contenedor con `aria-live="polite"`, cada toast con `role="status"` (éxito) o `role="alert"` (error, más urgente), íconos decorativos marcados `aria-hidden`.
+
+### 12.5 Otros ajustes reales
+
+- `NotificationBell` (F10.8): agregado cierre por Escape (antes solo click-fuera); `role="menu"` reemplazado por `role="region"` + `aria-label` (el rol `menu` implica semántica ARIA de navegación por flechas que nunca se implementó -- un rol incorrecto es peor que ninguno para un screen reader).
+- `PortalSidebar`/internal `Sidebar`: cada link activo ahora expone `aria-current="page"` (antes solo un cambio visual de color, invisible para screen readers); iconos decorativos marcados `aria-hidden`; área táctil de cada link ampliada a `min-h-11` (44px, encima del mínimo AA de 24px).
+- `LoadingTable`: `role="status"`/`aria-label="Loading"` -- antes un loading state completamente silencioso para lectores de pantalla.
+
+### 12.6 Revisado, sin cambios necesarios (ya cumplía)
+
+- `Table`/`TableHeader`/`TableHead`: ya usa `<table>`/`<thead>`/`<th>` reales con scroll horizontal contenido (`overflow-auto`) -- nunca rompe el layout de la página en mobile.
+- Badges de estado: siempre acompañados de texto (`formatStatusLabel`), nunca dependen solo del color.
+- Formularios F10.5-F10.7: `Label`/`htmlFor` + `Input`/`id` ya asociados consistentemente en todos los inputs nuevos.
+- Grillas responsivas (`grid-cols-1 lg:grid-cols-2`, etc.) ya usadas correctamente en Profile/Assignments/TimeEntries desde que se construyeron.
+
+### 12.7 Deuda documentada, deliberadamente no tocada (fuera de alcance conservador)
+
+- Jerarquía de headings `h1`→`h3` (salta `h2`) en `PageHeader`/`CardTitle` -- patrón preexistente usado en TODA la app desde F0, no introducido por F10; corregirlo tocaría el componente `Card` compartido globalmente, una reescritura general no pedida.
+- Mobile nav del shell interno (Sidebar/Topbar/AppShell) -- mismo problema que §12.2 pero preexistente de F0/F1, no una superficie nueva de F10.
+
+### 12.8 Verificación
+
+Sin cambios de backend -- suite completa (1283 tests, 1278 pass, 0 fail, 5 skip) corrida como control, sin regresiones. Typecheck/lint/build limpios en `apps/web`. Verificación visual Playwright a 3 viewports (390/820/1280px): nav off-canvas mobile funcional en Worker Portal, tablet renderiza el sidebar de escritorio normalmente (por encima del breakpoint `md`), trampa de foco del Drawer confirmada programáticamente, cero errores de consola en las 4 corridas.
+
+### 12.9 Commit
+
+`test: F10.10 — responsive and accessibility pass`.
+
+**F10.10 completo.**

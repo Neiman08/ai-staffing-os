@@ -64,8 +64,15 @@ export function NotificationBell() {
     function onClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
     }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
     document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [open]);
 
   function handleItemClick(item: NotificationItem) {
@@ -92,7 +99,7 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-11 z-50 w-80 rounded-md border border-border bg-card shadow-lg" role="menu">
+        <div className="absolute right-0 top-11 z-50 w-80 rounded-md border border-border bg-card shadow-lg" role="region" aria-label="Notifications">
           <div className="border-b border-border px-3 py-2 text-sm font-semibold">Notifications</div>
           <div className="max-h-96 overflow-y-auto">
             {recent?.items.length ? (
