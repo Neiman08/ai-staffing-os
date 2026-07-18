@@ -97,3 +97,37 @@ Un rol de portal JAMÁS recibe un permission key que gatee un endpoint interno s
 `feat: F10.1 — portal roles and permissions`.
 
 **F10.1 completo.**
+
+## 4. Resultado de F10.2 — Client Portal
+
+### 4.1 Implementado
+
+- **Backend** (`apps/api/src/modules/portal/`, nuevo módulo standalone): `client-service.ts` (dashboard, job orders list/detail, shortlist con DTO safo de datos internos, placements, assignments, workers roster, time entries pendientes + approve/reject reutilizando la transición ya probada de F9.6, incidents) + `router.ts` montado en `/api/v1/portal/client/*`. TODA función exige `ctx.companyId` y filtra explícitamente por esa Company -- nunca confía en un id del query/path sin verificar ownership primero (404, nunca 403, cuando el recurso pertenece a otra Company -- no confirma su existencia).
+- **Frontend**: `PortalShell`/`PortalSidebar`/`PortalTopbar` (shell visualmente distinguible del backoffice interno, sin las secciones internas de CRM/Pricing/Agentes/Settings) + `ClientPortalGate` (redirige fuera a quien no tenga `companyId`) + `App.tsx` extendido (redirige automáticamente a `/portal/client` a quien SÍ lo tenga). 6 páginas reales: Dashboard, Job Orders (lista + detalle con shortlist), Workers, Assignments, Time Entries (con aprobar/rechazar gateado por `portalTimeEntries.update`), Incidents.
+- **DTO de shortlist deliberadamente reducido**: solo `candidateId`/`candidateName`/`rank`/`reviewStatus`, nunca `score`/`reasons`/`gaps`/`risks` (lógica interna de scoring) -- y solo entradas `READY_FOR_REVIEW`/`APPROVED`/`HOLD` (nunca `DRAFT`, todavía en trabajo interno, ni `REMOVED`, descartada internamente).
+
+### 4.2 Tests nuevos
+
+`client-portal.test.ts` (14 tests de integración): RBAC 403 para un rol interno; dashboard con conteos reales; **IDOR real dentro del MISMO tenant** verificado explícitamente (company-01 nunca ve el Job Order de company-03, ni por listado ni por ID directo, ni su shortlist -- 404 nunca 403); shortlist nunca expone score/reasons/gaps/risks ni entradas DRAFT/REMOVED; assignments/workers/time-entries/incidents todos scoped; CLIENT_MANAGER (sin `portalTimeEntries.update`) recibe 403 al intentar aprobar horas; tenancy real entre tenant-titan/tenant-acme verificada dos veces (listado y acceso directo por ID).
+
+Bug de test (no de producción) encontrado y corregido durante la propia verificación: mis fixtures asumían `joborder-01` pertenecía a `company-01` -- confirmado por consulta directa a la base de dev que en realidad pertenece a `company-03` (y `joborder-02` a `company-04`); el único Job Order real de `company-01` es `joborder-03`. Corregido el test, cero cambio de código de producción -- el código ya estaba filtrando correctamente, la prueba tenía el fixture equivocado.
+
+### 4.3 Suite completa
+
+1203 tests, 1197 pass, 1 fail preexistente sin relación (`prospecting.test.ts`), 5 skip -- cero regresiones. Typecheck/lint/build limpios en `apps/web`. Verificación visual manual con capturas reales contra los dev servers: Dashboard con conteos reales (1 Job Order abierto, 2 Assignments activas), listado y detalle de Job Order con datos reales, cero errores de consola.
+
+### 4.4 Migraciones
+
+Ninguna -- F10.2 es 100% wiring sobre modelos ya existentes (JobOrder/CandidateShortlistEntry/Placement/Assignment/TimeEntry/OperationalIncident, todos de F5-F9).
+
+### 4.5 Limitaciones conocidas / diferido a otra subfase
+
+- Sin "operational reports" en el Client Portal -- decisión deliberada: los reportes agregados tenant-wide de F9.11 usan nombres/métricas internas, exponerlos a un cliente externo requeriría un rediseño completo de esa vista que no fue pedido explícitamente; se documenta como fuera de alcance en vez de exponer datos internos por default.
+- Sin Notifications ni Audit Trail en el Client Portal todavía -- son F10.8/F10.9 explícitamente, se integran ahí para no mezclar subfases (el nav ya reserva los recursos de permiso `notifications`/`auditLogs` desde F10.1).
+- Sin e2e dedicado a F10.2 -- F10.11 ("End-to-End Portal Tests") es la subfase designada para la suite e2e que cubre todos los portales juntos (roles/tenancy/flujos), evita fragmentar la cobertura en 10 archivos e2e separados.
+
+### 4.6 Commit
+
+`feat: F10.2 — client portal`.
+
+**F10.2 completo.**

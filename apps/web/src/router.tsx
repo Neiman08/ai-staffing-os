@@ -38,6 +38,14 @@ import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
 import Missions from "./pages/Missions";
 import Discovery from "./pages/Discovery";
 import ProductionReadiness from "./pages/ProductionReadiness";
+import { ClientPortalGate } from "@/components/layout/ClientPortalGate";
+import ClientDashboard from "./pages/portal/client/Dashboard";
+import ClientJobOrders from "./pages/portal/client/JobOrders";
+import ClientJobOrderDetail from "./pages/portal/client/JobOrderDetail";
+import ClientWorkers from "./pages/portal/client/Workers";
+import ClientAssignments from "./pages/portal/client/Assignments";
+import ClientTimeEntries from "./pages/portal/client/TimeEntries";
+import ClientIncidents from "./pages/portal/client/Incidents";
 
 export const router = createBrowserRouter([
   // F4.9: /sign-in y /sign-up viven FUERA de RequireAuth a propósito —
@@ -92,6 +100,27 @@ export const router = createBrowserRouter([
       { path: "ai-dashboard", element: <AIDashboard /> },
       { path: "production-readiness", element: <ProductionReadiness /> },
       { path: "settings", element: <Settings /> },
+    ],
+  },
+  // F10.2: rama de rutas SEPARADA para el Client Portal -- nunca
+  // anidada bajo "/" (layout distinguible del backoffice interno,
+  // pedido explícito del PO). Worker/Candidate Portal llegan en F10.4
+  // con su propio branch simétrico.
+  {
+    path: "/portal/client",
+    element: (
+      <RequireAuth>
+        <ClientPortalGate />
+      </RequireAuth>
+    ),
+    children: [
+      { index: true, element: <ClientDashboard /> },
+      { path: "job-orders", element: <ClientJobOrders /> },
+      { path: "job-orders/:id", element: <ClientJobOrderDetail /> },
+      { path: "workers", element: <ClientWorkers /> },
+      { path: "assignments", element: <ClientAssignments /> },
+      { path: "time-entries", element: <ClientTimeEntries /> },
+      { path: "incidents", element: <ClientIncidents /> },
     ],
   },
 ]);
