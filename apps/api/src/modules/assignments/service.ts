@@ -14,6 +14,7 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
+import { doDateRangesOverlap } from "../matching/date-overlap";
 
 const ASSIGNMENT_INCLUDE = {
   worker: { include: { candidate: true } },
@@ -29,6 +30,7 @@ type AssignmentRow = {
   jobOrder: { title: string; company: { name: string } };
   projectId: string | null;
   project: { name: string } | null;
+  placementId: string | null;
   payRate: { toString(): string };
   billRate: { toString(): string };
   startDate: Date;
@@ -37,6 +39,13 @@ type AssignmentRow = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+// F9.5: extiende F5.4/F5.6 -- PAUSED también "ocupa" al Worker/JobOrder
+// (una Assignment pausada sigue reservando el cupo, no está libre). No
+// se tocó `matching/availability.ts` (F6, BLOCKING_ASSIGNMENT_STATUSES)
+// -- fuera de alcance de "extiende Assignment", documentado como
+// limitación conocida en docs/F9_PLAN.md.
+const OCCUPYING_STATUSES = ["SCHEDULED", "ACTIVE", "PAUSED"] as const;
 
 function toListItem(a: AssignmentRow): AssignmentListItem {
   return {
@@ -48,6 +57,7 @@ function toListItem(a: AssignmentRow): AssignmentListItem {
     companyName: a.jobOrder.company.name,
     projectId: a.projectId,
     projectName: a.project?.name ?? null,
+    placementId: a.placementId,
     payRate: a.payRate.toString(),
     billRate: a.billRate.toString(),
     startDate: a.startDate.toISOString(),
@@ -76,7 +86,7 @@ async function getRowById(id: string): Promise<AssignmentRow> {
  */
 async function recomputeJobOrderFillState(jobOrderId: string): Promise<void> {
   const activeCount = await scopedDb.assignment.count({
-    where: { jobOrderId, status: { in: ["SCHEDULED", "ACTIVE"] } },
+    where: { jobOrderId, status: { in: [...OCCUPYING_STATUSES] } },
   });
   const jobOrder = await scopedDb.jobOrder.findUnique({ where: { id: jobOrderId } });
   if (!jobOrder) return;
@@ -102,7 +112,7 @@ async function recomputeJobOrderFillState(jobOrderId: string): Promise<void> {
  */
 async function recomputeWorkerAssignedState(workerId: string): Promise<void> {
   const activeCount = await scopedDb.assignment.count({
-    where: { workerId, status: { in: ["SCHEDULED", "ACTIVE"] } },
+    where: { workerId, status: { in: [...OCCUPYING_STATUSES] } },
   });
   const worker = await scopedDb.worker.findUnique({ where: { id: workerId } });
   if (!worker || worker.status === "ON_LEAVE" || worker.status === "TERMINATED") return;
@@ -164,6 +174,25 @@ export async function createAssignment(input: CreateAssignmentInput): Promise<As
     if (!project) throw AppError.badRequest("Project not found");
   }
 
+  // F9.5: si viene de un Placement (F9.4), exige que ya esté aprobado
+  // (APPROVED/READY_FOR_ONBOARDING/ACTIVE) -- "Placement debe estar
+  // aprobado". El Assignment nace en DRAFT (nuevo lifecycle extendido)
+  // en vez de SCHEDULED cuando viene de un Placement -- el llamador
+  // debe confirmarlo explícitamente vía PATCH .../status, nunca queda
+  // confirmado automáticamente.
+  const APPROVED_PLACEMENT_STATUSES = new Set(["APPROVED", "READY_FOR_ONBOARDING", "ACTIVE"]);
+  let initialStatus: "SCHEDULED" | "DRAFT" = "SCHEDULED";
+  if (input.placementId) {
+    const placement = await scopedDb.placement.findUnique({ where: { id: input.placementId } });
+    if (!placement) throw AppError.badRequest("Placement not found");
+    if (!APPROVED_PLACEMENT_STATUSES.has(placement.status)) {
+      throw AppError.badRequest("Placement must be approved (APPROVED or later) before creating an Assignment from it", {
+        placementStatus: placement.status,
+      });
+    }
+    initialStatus = "DRAFT";
+  }
+
   // F5.4 (plan §6.3, aprobado): compliance gate — bloqueo duro, sin
   // override. El plan dejó "¿existe un override auditado?" como pregunta
   // abierta para el PO; sin esa aprobación explícita, se aplica el
@@ -199,13 +228,14 @@ export async function createAssignment(input: CreateAssignmentInput): Promise<As
       workerId: input.workerId,
       jobOrderId: input.jobOrderId,
       projectId: input.projectId,
+      placementId: input.placementId,
       // F5.4 (aprobado): snapshot al crear — un cambio posterior en
       // JobOrder.payRate/billRate nunca se propaga acá.
       payRate: input.payRate,
       billRate: input.billRate,
       startDate: new Date(input.startDate),
       endDate: input.endDate ? new Date(input.endDate) : undefined,
-      status: "SCHEDULED",
+      status: initialStatus,
     },
   });
 
@@ -312,6 +342,45 @@ export async function updateAssignmentStatus(
       to,
       allowedFromCurrentStatus: ASSIGNMENT_STATUS_TRANSITIONS[from],
     });
+  }
+
+  // F9.5: "impedir overlaps incompatibles" -- solo se verifica al ENTRAR
+  // a un estado que OCUPA al Worker (viniendo de uno que no ocupaba,
+  // ej. DRAFT/PENDING_APPROVAL/CANCELLED -> SCHEDULED). Reutiliza
+  // `doDateRangesOverlap` (F6.2, ya usado también por F8.9) -- nunca
+  // duplica la fórmula de solapamiento.
+  const wasOccupying = (OCCUPYING_STATUSES as readonly string[]).includes(from);
+  const willOccupy = (OCCUPYING_STATUSES as readonly string[]).includes(to);
+  if (!wasOccupying && willOccupy) {
+    const others = await scopedDb.assignment.findMany({
+      where: { workerId: existing.workerId, status: { in: [...OCCUPYING_STATUSES] }, id: { not: id } },
+      select: { id: true, startDate: true, endDate: true },
+    });
+    const overlapping = others.find((o) => doDateRangesOverlap(existing.startDate, existing.endDate, o.startDate, o.endDate));
+    if (overlapping) {
+      throw AppError.badRequest("This Worker already has an overlapping Assignment for this date range", {
+        conflictingAssignmentId: overlapping.id,
+      });
+    }
+
+    // F9.5: "Worker debe cumplir onboarding/compliance" -- si existe un
+    // WorkerOnboarding real (F9.1) para este par (candidateId,
+    // jobOrderId), su estado no puede ser BLOCKED/OFFBOARDED. Chequeo
+    // OPCIONAL/no bloqueante si nunca se usó F9.1 para este Worker
+    // (compatibilidad con Workers/Assignments preexistentes) -- nunca
+    // recalcula el onboarding, solo lo consume como señal.
+    const workerWithCandidate = await scopedDb.worker.findUnique({ where: { id: existing.workerId }, select: { candidateId: true } });
+    if (workerWithCandidate) {
+      const onboarding = await scopedDb.workerOnboarding.findFirst({
+        where: { candidateId: workerWithCandidate.candidateId, jobOrderId: existing.jobOrderId },
+        select: { status: true },
+      });
+      if (onboarding && (onboarding.status === "BLOCKED" || onboarding.status === "OFFBOARDED")) {
+        throw AppError.badRequest(`Cannot confirm Assignment: Worker onboarding for this Job Order is ${onboarding.status}`, {
+          onboardingStatus: onboarding.status,
+        });
+      }
+    }
   }
 
   const updated = await scopedDb.assignment.update({

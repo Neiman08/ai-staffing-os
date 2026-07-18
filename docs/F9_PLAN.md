@@ -200,3 +200,38 @@ Un test de "regla scoped nunca aplica fuera de su categoría" usaba la key `osha
 `feat: F9.4 — approval-gated placements`.
 
 **F9.4 completo.**
+
+## 10. Resultado de F9.5 — Assignment Management
+
+### 10.1 Decisión de arquitectura (documentada antes de implementar)
+
+`packages/shared/src/schemas/assignments.ts` tenía un comentario explícito de F5.4: *"enum real... no se amplía"*. F9.5 lo revisita por instrucción explícita del PO en esta sesión (lifecycle extendido DRAFT/PENDING_APPROVAL/CONFIRMED/ACTIVE/PAUSED/COMPLETED/CANCELLED). Decisión conservadora: en vez de reemplazar el enum, se EXTIENDE aditivamente -- `SCHEDULED` pasa a jugar el rol de "CONFIRMED" (conserva el nombre y el 100% de su semántica/transiciones previas hacia `ACTIVE`/`TERMINATED`), y se agregan `DRAFT`/`PENDING_APPROVAL` (antes de `SCHEDULED`), `PAUSED` (entre `SCHEDULED`/`ACTIVE`) y `CANCELLED` (alternativa reversible a `TERMINATED`, que sigue terminal). Cero transición previa se eliminó -- el grafo nuevo es un superconjunto exacto del anterior. Verificado con las 24 pruebas de integración YA existentes de F5.4, que siguen pasando sin modificar una sola.
+
+### 10.2 Arquitectura
+
+- **`packages/shared/src/schemas/assignments.ts`**: `assignmentStatusSchema` extendido a 8 valores; `ASSIGNMENT_STATUS_TRANSITIONS` extendido preservando el subgrafo original; `createAssignmentInputSchema` gana `placementId` opcional.
+- **`assignments/service.ts`** (extendido, no reescrito): `createAssignment()` -- si viene `placementId`, exige que el `Placement` (F9.4) esté `APPROVED`/`READY_FOR_ONBOARDING`/`ACTIVE` (400 si no), y el Assignment nace en `DRAFT` en vez de `SCHEDULED` (comportamiento F5.4 sin cambios cuando no se provee `placementId`). `updateAssignmentStatus()` -- al ENTRAR a un estado que ocupa al Worker (`SCHEDULED`/`ACTIVE`/`PAUSED`, nuevo `OCCUPYING_STATUSES`) desde uno que no ocupaba, verifica: (a) solapamiento de fechas real contra otras Assignments del mismo Worker en estado ocupante (reutiliza `doDateRangesOverlap`, F6.2, sin duplicar la fórmula -- mismo primitivo ya reusado por F8.9); (b) si existe un `WorkerOnboarding` (F9.1) real para el mismo par, que no esté `BLOCKED`/`OFFBOARDED` (señal consumida, nunca recalculada, chequeo no bloqueante si nunca se usó F9.1 para ese Worker). `recomputeJobOrderFillState`/`recomputeWorkerAssignedState` ahora cuentan `PAUSED` como ocupante (antes solo `SCHEDULED`/`ACTIVE`) -- una Assignment pausada sigue reservando el cupo.
+- **`Assignment.placementId`** (nullable, aditivo) enlaza opcionalmente al `Placement` de origen.
+
+### 10.3 Tests — 7 nuevos en `assignments.test.ts` (todos passing, más las 24 preexistentes verificadas sin regresión)
+
+Rechazo real de crear un Assignment desde un Placement DRAFT (no aprobado); creación real DRAFT desde un Placement APROBADO, nunca SCHEDULED directo; un Assignment DRAFT nunca ocupa Worker/JobOrder; camino feliz completo DRAFT→...→PAUSED→ACTIVE→COMPLETED con verificación de que PAUSED sigue ocupando al Worker; CANCELLED reversible solo a DRAFT; **solapamiento real detectado y rechazado** (dos Assignments DRAFT para el mismo Worker con fechas solapadas, confirmar la segunda bloquea la primera); AuditLog en cambios de estado incluyendo PAUSED.
+
+### 10.4 Suite completa
+
+1076 tests, 1070 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios en `apps/api`, `packages/shared`, y `apps/web` (build de producción exitoso, confirmando que el enum extendido no rompe ningún switch exhaustivo del frontend).
+
+### 10.5 Migraciones
+
+`20260717220000_f9_5_assignment_management` -- 100% aditiva: `ALTER TYPE "AssignmentStatus" ADD VALUE` ×4 (DRAFT/PENDING_APPROVAL/PAUSED/CANCELLED, cero valor eliminado/renombrado), `ALTER TABLE "Assignment" ADD COLUMN "placementId"` (nullable) + FK `ON DELETE SET NULL`.
+
+### 10.6 Limitaciones conocidas
+
+- `matching/availability.ts` (F6, `BLOCKING_ASSIGNMENT_STATUSES = {SCHEDULED, ACTIVE}`) NO se tocó -- fuera de alcance de "extiende Assignment". Implicación real: una Assignment `PAUSED` no bloquea una recomendación de matching F6 para ese Worker en esa ventana de fechas, aunque sí sigue ocupando capacidad real de JobOrder/Worker vía F9.5. Documentado como gap conocido, no un bug silencioso.
+- El chequeo de onboarding es best-effort: solo bloquea si existe un `WorkerOnboarding` real con estado BLOCKED/OFFBOARDED -- Workers creados sin pasar por F9.1 nunca quedan bloqueados por esta regla nueva.
+
+### 10.7 Commit
+
+`feat: F9.5 — assignment lifecycle management`.
+
+**F9.5 completo.**

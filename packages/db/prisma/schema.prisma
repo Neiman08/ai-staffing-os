@@ -216,10 +216,22 @@ enum ProjectStatus {
   CANCELLED
 }
 
+// F9.5: extendido de forma ADITIVA (F5.4 originalmente decía "no se
+// amplía" -- esta sesión lo revisita por instrucción explícita del PO).
+// SCHEDULED/ACTIVE/COMPLETED/TERMINATED conservan EXACTAMENTE su
+// semántica y transiciones previas (F5.4/F6); DRAFT/PENDING_APPROVAL
+// son etapas nuevas ANTES de SCHEDULED (que pasa a jugar el rol de
+// "CONFIRMED"); PAUSED es un estado intermedio reversible entre
+// SCHEDULED/ACTIVE; CANCELLED es una alternativa reversible a
+// TERMINATED (que sigue siendo terminal sin reapertura).
 enum AssignmentStatus {
+  DRAFT
+  PENDING_APPROVAL
   SCHEDULED
   ACTIVE
+  PAUSED
   COMPLETED
+  CANCELLED
   TERMINATED
 }
 
@@ -1415,6 +1427,7 @@ model Placement {
   // F9.4: quién creó el Placement -- del contexto de tenancy, nunca del
   // body (mismo patrón que Candidate.createdById, F5.2).
   createdById    String?
+  assignments    Assignment[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -1448,6 +1461,12 @@ model Assignment {
   jobOrder     JobOrder         @relation(fields: [jobOrderId], references: [id])
   projectId    String?
   project      Project?         @relation(fields: [projectId], references: [id])
+  // F9.5: enlace opcional al Placement de origen (F9.4) -- nullable
+  // para no romper Assignments existentes creadas antes de F9.4/sin
+  // pasar por el flujo de Placement (el POST directo a /assignments
+  // sigue funcionando igual que F5.4).
+  placementId  String?
+  placement    Placement?       @relation(fields: [placementId], references: [id])
   payRate      Decimal          @db.Decimal(10, 2) // snapshot al asignar
   billRate     Decimal          @db.Decimal(10, 2) // snapshot al asignar
   startDate    DateTime

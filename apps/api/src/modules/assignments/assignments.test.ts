@@ -33,8 +33,19 @@ before(async () => {
 });
 
 after(async () => {
+  // F9.4/F9.5: Assignment.placementId y Placement tienen FKs que exigen
+  // borrar Assignment antes que Placement/PlacementReadiness antes que
+  // Candidate/JobOrder.
   if (createdAssignmentIds.length > 0) {
     await prisma.assignment.deleteMany({ where: { id: { in: createdAssignmentIds } } });
+  }
+  if (createdCandidateIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.placement.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
+    await prisma.placementReadiness.deleteMany({
+      where: { OR: [{ candidateId: { in: createdCandidateIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
   }
   if (createdJobOrderIds.length > 0) {
     await prisma.jobOrder.deleteMany({ where: { id: { in: createdJobOrderIds } } });
@@ -517,4 +528,233 @@ test("a status transition writes Activity + AuditLog with before/after and the r
   assert.ok(audit);
   assert.deepEqual(audit?.before, { status: "SCHEDULED" });
   assert.deepEqual(audit?.after, { status: "TERMINATED", reason: "Client cancelled the project" });
+});
+
+// ---------- F9.5: Assignment Management (extended lifecycle) ----------
+
+async function createApprovedPlacement(candidateId: string, jobOrderId: string): Promise<string> {
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/placement-readiness/${jobOrderId}`, {
+    method: "POST",
+    headers: RECRUITER_HEADERS,
+  });
+  const createRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/placement/${jobOrderId}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ payRate: 20, billRate: 30 }),
+  });
+  const placement = (await createRes.json()) as { id: string };
+  await fetch(`${baseUrl}/api/v1/placements/${placement.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "PENDING_APPROVAL" }),
+  });
+  await fetch(`${baseUrl}/api/v1/placements/${placement.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "APPROVED" }),
+  });
+  return placement.id;
+}
+
+test("POST /assignments with a placementId from a DRAFT (unapproved) Placement is rejected with 400", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderId = await createOpenJobOrder();
+  await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/placement-readiness/${jobOrderId}`, { method: "POST", headers: RECRUITER_HEADERS });
+  const placementRes = await fetch(`${baseUrl}/api/v1/candidates/${candidateId}/placement/${jobOrderId}`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+  });
+  const placement = (await placementRes.json()) as { id: string };
+
+  const res = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId, placementId: placement.id, payRate: 20, billRate: 30, startDate: new Date().toISOString() }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST /assignments with an APPROVED Placement's id creates a real Assignment in DRAFT (extended lifecycle), never SCHEDULED directly", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderId = await createOpenJobOrder();
+  const placementId = await createApprovedPlacement(candidateId, jobOrderId);
+
+  const res = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId, placementId, payRate: 20, billRate: 30, startDate: new Date().toISOString() }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { id: string; status: string; placementId: string };
+  createdAssignmentIds.push(body.id);
+  assert.equal(body.status, "DRAFT");
+  assert.equal(body.placementId, placementId);
+});
+
+test("a DRAFT Assignment never occupies the Worker/JobOrder capacity until it reaches an occupying status", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderId = await createOpenJobOrder();
+  const placementId = await createApprovedPlacement(candidateId, jobOrderId);
+
+  const createRes = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId, placementId, payRate: 20, billRate: 30, startDate: new Date().toISOString() }),
+  });
+  const assignment = (await createRes.json()) as { id: string };
+  createdAssignmentIds.push(assignment.id);
+
+  const worker = await prisma.worker.findUniqueOrThrow({ where: { id: workerId } });
+  assert.equal(worker.status, "AVAILABLE", "a DRAFT assignment must never mark the Worker as ASSIGNED");
+});
+
+test("full extended lifecycle DRAFT -> PENDING_APPROVAL -> SCHEDULED -> ACTIVE -> PAUSED -> ACTIVE -> COMPLETED succeeds; PAUSED still occupies the Worker", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderId = await createOpenJobOrder();
+  const placementId = await createApprovedPlacement(candidateId, jobOrderId);
+
+  const createRes = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId, placementId, payRate: 20, billRate: 30, startDate: new Date().toISOString() }),
+  });
+  const assignment = (await createRes.json()) as { id: string };
+  createdAssignmentIds.push(assignment.id);
+
+  for (const status of ["PENDING_APPROVAL", "SCHEDULED", "ACTIVE", "PAUSED"]) {
+    const res = await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+    assert.equal(res.status, 200, `expected 200 moving to ${status}`);
+  }
+
+  const pausedWorker = await prisma.worker.findUniqueOrThrow({ where: { id: workerId } });
+  assert.equal(pausedWorker.status, "ASSIGNED", "PAUSED must still occupy the Worker, never silently freeing it");
+
+  const resumeRes = await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "ACTIVE" }),
+  });
+  assert.equal(resumeRes.status, 200);
+
+  const completeRes = await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "COMPLETED" }),
+  });
+  assert.equal(completeRes.status, 200);
+});
+
+test("CANCELLED is reachable from SCHEDULED and reversible only to DRAFT -- never a permanent rejection", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderId = await createOpenJobOrder();
+  const placementId = await createApprovedPlacement(candidateId, jobOrderId);
+  const createRes = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId, placementId, payRate: 20, billRate: 30, startDate: new Date().toISOString() }),
+  });
+  const assignment = (await createRes.json()) as { id: string };
+  createdAssignmentIds.push(assignment.id);
+
+  for (const status of ["PENDING_APPROVAL", "SCHEDULED"]) {
+    await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  const cancelRes = await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "CANCELLED" }),
+  });
+  assert.equal(cancelRes.status, 200);
+
+  const reopenRes = await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "DRAFT" }),
+  });
+  assert.equal(reopenRes.status, 200);
+});
+
+test("a Worker with two DRAFT assignments on overlapping dates: confirming the first to SCHEDULED succeeds, confirming the second (overlapping) is rejected with 400", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderA = await createOpenJobOrder({ workersNeeded: 5 });
+  const jobOrderB = await createOpenJobOrder({ workersNeeded: 5 });
+  const placementA = await createApprovedPlacement(candidateId, jobOrderA);
+
+  const start = new Date();
+  const sameStartIso = start.toISOString();
+
+  const assignmentARes = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId: jobOrderA, placementId: placementA, payRate: 20, billRate: 30, startDate: sameStartIso }),
+  });
+  const assignmentA = (await assignmentARes.json()) as { id: string };
+  createdAssignmentIds.push(assignmentA.id);
+
+  // Segundo Assignment DRAFT directo (sin Placement) para el MISMO Worker
+  // y una ventana de fechas solapada -- no requiere estar AVAILABLE
+  // porque el primero sigue en DRAFT (no ocupa todavía).
+  const assignmentBRes = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId: jobOrderB, payRate: 20, billRate: 30, startDate: sameStartIso }),
+  });
+  // El segundo, sin placementId, nace SCHEDULED de inmediato (comportamiento
+  // F5.4 preservado) -- pero el Worker ya no está AVAILABLE tras el primero
+  // si este llegó a ocupar. Como A sigue en DRAFT, B sí puede crearse.
+  assert.equal(assignmentBRes.status, 201);
+  const assignmentB = (await assignmentBRes.json()) as { id: string; status: string };
+  createdAssignmentIds.push(assignmentB.id);
+  assert.equal(assignmentB.status, "SCHEDULED", "an Assignment created without a placementId keeps the F5.4 default behavior");
+
+  // Confirmar A (DRAFT -> ... -> SCHEDULED) ahora debe fallar: B ya ocupa
+  // ese rango de fechas para el mismo Worker.
+  await fetch(`${baseUrl}/api/v1/assignments/${assignmentA.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "PENDING_APPROVAL" }),
+  });
+  const conflictRes = await fetch(`${baseUrl}/api/v1/assignments/${assignmentA.id}/status`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ status: "SCHEDULED" }),
+  });
+  assert.equal(conflictRes.status, 400, "confirming an overlapping Assignment for the same Worker must be rejected");
+});
+
+test("changing status to/from PAUSED writes AuditLog entries", async () => {
+  const { workerId, candidateId } = await createAvailableCompliantWorker();
+  const jobOrderId = await createOpenJobOrder();
+  const placementId = await createApprovedPlacement(candidateId, jobOrderId);
+  const createRes = await fetch(`${baseUrl}/api/v1/assignments`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ workerId, jobOrderId, placementId, payRate: 20, billRate: 30, startDate: new Date().toISOString() }),
+  });
+  const assignment = (await createRes.json()) as { id: string };
+  createdAssignmentIds.push(assignment.id);
+
+  for (const status of ["PENDING_APPROVAL", "SCHEDULED", "ACTIVE", "PAUSED"]) {
+    await fetch(`${baseUrl}/api/v1/assignments/${assignment.id}/status`, {
+      method: "PATCH",
+      headers: OPERATIONS_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  const pausedAudit = await prisma.auditLog.findFirst({
+    where: { entityType: "assignment", entityId: assignment.id, action: "assignment.status_changed" },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.ok(pausedAudit);
+  assert.deepEqual(pausedAudit?.after, { status: "PAUSED", reason: null });
 });

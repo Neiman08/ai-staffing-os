@@ -1,23 +1,39 @@
 import { z } from "zod";
 import { paginationQuerySchema } from "./common";
 
-// F5.4: enum real (packages/db/prisma/schema.prisma AssignmentStatus) —
-// no se amplía. Dos estados terminales (COMPLETED/TERMINATED) ya bastan
-// para representar "cerrado" (mismo criterio que el plan aprobado §6.2:
-// el motivo de cierre se captura como texto libre en Activity, no como
-// un campo/enum nuevo — ver `reason` en updateAssignmentStatusInputSchema).
-export const assignmentStatusSchema = z.enum(["SCHEDULED", "ACTIVE", "COMPLETED", "TERMINATED"]);
+// F5.4 originalmente decía "no se amplía" -- F9.5 lo revisita por
+// instrucción explícita del PO (extensión ADITIVA, ver migración
+// `20260717220000_f9_5_assignment_management`). SCHEDULED/ACTIVE/
+// COMPLETED/TERMINATED conservan EXACTAMENTE su semántica y
+// transiciones previas; DRAFT/PENDING_APPROVAL son etapas nuevas antes
+// de SCHEDULED (que pasa a jugar el rol de "CONFIRMED"); PAUSED es
+// reversible entre SCHEDULED/ACTIVE; CANCELLED es una alternativa
+// reversible a TERMINATED (que sigue terminal, sin reapertura).
+export const assignmentStatusSchema = z.enum([
+  "DRAFT",
+  "PENDING_APPROVAL",
+  "SCHEDULED",
+  "ACTIVE",
+  "PAUSED",
+  "COMPLETED",
+  "CANCELLED",
+  "TERMINATED",
+]);
 export type AssignmentStatusValue = z.infer<typeof assignmentStatusSchema>;
 
 /**
- * F5.4: matriz aprobada (plan §6.1-6.2). SCHEDULED es siempre el estado
- * inicial (nunca se crea directo en ACTIVE — debe iniciar explícitamente).
- * COMPLETED/TERMINATED son terminales, sin reapertura (no se pidió una).
+ * F5.4 (base) + F9.5 (extensión aditiva). COMPLETED/TERMINATED siguen
+ * terminales, sin reapertura. CANCELLED siempre puede reabrirse a
+ * DRAFT (nunca un rechazo permanente, mismo criterio que F8.7/F9.1-4).
  */
 export const ASSIGNMENT_STATUS_TRANSITIONS: Record<AssignmentStatusValue, AssignmentStatusValue[]> = {
-  SCHEDULED: ["ACTIVE", "TERMINATED"],
-  ACTIVE: ["COMPLETED", "TERMINATED"],
+  DRAFT: ["PENDING_APPROVAL", "CANCELLED"],
+  PENDING_APPROVAL: ["SCHEDULED", "DRAFT", "CANCELLED"],
+  SCHEDULED: ["ACTIVE", "PAUSED", "CANCELLED", "TERMINATED"],
+  ACTIVE: ["PAUSED", "COMPLETED", "TERMINATED"],
+  PAUSED: ["ACTIVE", "CANCELLED", "TERMINATED"],
   COMPLETED: [],
+  CANCELLED: ["DRAFT"],
   TERMINATED: [],
 };
 
@@ -36,6 +52,7 @@ export const assignmentListItemSchema = z.object({
   companyName: z.string(),
   projectId: z.string().nullable(),
   projectName: z.string().nullable(),
+  placementId: z.string().nullable(),
   payRate: z.string(),
   billRate: z.string(),
   startDate: z.string(),
@@ -73,6 +90,11 @@ export const createAssignmentInputSchema = z
     workerId: z.string().min(1),
     jobOrderId: z.string().min(1),
     projectId: z.string().optional(),
+    // F9.5: enlace opcional a un Placement (F9.4) YA aprobado -- si se
+    // provee, el Assignment nace en DRAFT (nuevo lifecycle extendido)
+    // en vez de SCHEDULED (comportamiento F5.4 sin cambios cuando no
+    // se provee).
+    placementId: z.string().optional(),
     payRate: z.number().nonnegative(),
     billRate: z.number().nonnegative(),
     startDate: z.string().min(1),
