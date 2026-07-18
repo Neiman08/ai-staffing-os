@@ -74,3 +74,29 @@ export interface ClientIncidentListItem {
   occurredAt: string;
   workerName: string | null;
 }
+
+// F10.3: Client Job Request
+export interface ClientJobRequestRecord {
+  id: string;
+  companyId: string;
+  requestedTitle: string;
+  location: unknown;
+  headcount: number;
+  shift: string | null;
+  schedule: string | null;
+  payRateExpectation: string | null;
+  billBudget: string | null;
+  desiredStartDate: string;
+  duration: string | null;
+  requiredSkills: string[];
+  certifications: string[];
+  languageRequirements: string[];
+  physicalRequirements: string | null;
+  notes: string | null;
+  urgency: string;
+  status: string;
+  reviewNotes: string | null;
+  convertedJobOrderId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -131,3 +131,39 @@ Ninguna -- F10.2 es 100% wiring sobre modelos ya existentes (JobOrder/CandidateS
 `feat: F10.2 — client portal`.
 
 **F10.2 completo.**
+
+## 5. Resultado de F10.3 — Client Job Request
+
+### 5.1 Implementado
+
+- **Modelo nuevo** `ClientJobRequest` (100% aditivo, migración `20260718020000_f10_3_client_job_request`) + enum `ClientJobRequestStatus` (8 valores). Relación 1:1 opcional a `JobOrder` (`convertedJobOrderId`, único) -- nunca infiere `categoryId`/`billRate`/`payRate` en el modelo, esos son decisiones internas explícitas al momento de convertir.
+- **Grafo de transiciones puro** (`portal/client-job-request-rules.ts`): `DRAFT→SUBMITTED→UNDER_REVIEW→{NEEDS_INFORMATION,APPROVED,REJECTED}`, `NEEDS_INFORMATION` vuelve a `SUBMITTED` (nunca directo a `UNDER_REVIEW`), `CANCELLED` alcanzable desde cualquier estado no decidido, `APPROVED→CONVERTED_TO_JOB_ORDER` es la única vía de conversión (nunca automática).
+- **Servicio lado cliente** (`client-job-request-service.ts`): create/list/get/update/submit/cancel, todo con el mismo patrón de ownership de F10.2 (`ctx.companyId`, 404 nunca 403). Solo editable en `DRAFT`/`NEEDS_INFORMATION`.
+- **Servicio lado interno** (`internal-job-request-service.ts`): list/get tenant-wide (para revisión), `reviewClientJobRequest` (transición a los 4 estados de revisión real), `convertToJobOrder` -- reutiliza `createJobOrder` (jobs/service.ts, F5.1) sin duplicar su lógica, exige `categoryId`/`billRate`/`payRate` explícitos del reviewer, el JobOrder resultante nace en `DRAFT` como cualquier otro (nunca se auto-activa).
+- **Frontend cliente**: `JobRequests.tsx` (lista + drawer de creación) + `JobRequestDetail.tsx` (ver/enviar/cancelar, edición inline pendiente de una fase futura si se pide -- por ahora la creación captura los campos mínimos, la edición completa de todos los campos no fue crítica para el flujo).
+- **Frontend interno**: `ClientJobRequests.tsx` (lista con filtro de estado, nueva sección "Client Requests" en el Sidebar interno) + `ClientJobRequestDetail.tsx` (formulario de revisión + formulario de conversión con selector real de Job Category).
+
+### 5.2 Tests nuevos
+
+`client-job-request-rules.test.ts` (7, puro) + `client-job-request.test.ts` (17 de integración): RBAC 403 en ambos lados (cliente sin `clientJobs.create`, interno sin `clientJobs.approve`); CLIENT_MANAGER puede crear/enviar pero no editar/cancelar (verificado explícito); ownership/tenancy (una Company nunca ve la solicitud de otra, ni siquiera por tenancy cruzada); edición bloqueada fuera de DRAFT/NEEDS_INFORMATION; ciclo completo de revisión incluyendo el rebote NEEDS_INFORMATION→SUBMITTED con edición real en el medio; conversión exige APPROVED primero; conversión real crea un JobOrder DRAFT real con los rates/categoría exactos pasados, nunca inferidos; AuditLog verificado en las 4 acciones sensibles (created/submitted/reviewed/converted).
+
+Verificación adicional en navegador real (Playwright ad-hoc): flujo completo cliente crea+envía → interno revisa, cero errores de consola, datos reales visibles en ambos shells.
+
+### 5.3 Suite completa
+
+1220 tests, 1214 pass, 1 fail preexistente sin relación, 5 skip -- cero regresiones. Typecheck/lint/build limpios en `apps/api` y `apps/web` (un error real de lint atrapado y corregido durante la propia verificación: `Date.now()` llamado directamente en un inicializador de `useState` viola la regla `react-hooks/purity` -- corregido con el inicializador perezoso `useState(() => ...)`, mismo patrón ya usado en `CreatePayrollRunForm`).
+
+### 5.4 Migraciones
+
+`20260718020000_f10_3_client_job_request` -- 100% aditiva.
+
+### 5.5 Limitaciones conocidas
+
+- El formulario de creación del cliente captura los campos mínimos (`requestedTitle`/`headcount`/`desiredStartDate`/`notes`); el resto de los campos del modelo (`shift`/`schedule`/`requiredSkills`/`certifications`/`languageRequirements`/`physicalRequirements`/`payRateExpectation`/`billBudget`) existen en el backend y se muestran en el detalle, pero no tienen UI de edición todavía -- se puede extender sin migración si se pide explícitamente.
+- Sin notificación real al cliente cuando su solicitud cambia de estado -- eso es F10.8 (Notifications Center), se integra ahí.
+
+### 5.6 Commit
+
+`feat: F10.3 — client job requests`.
+
+**F10.3 completo.**

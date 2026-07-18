@@ -46,6 +46,10 @@ import ClientWorkers from "./pages/portal/client/Workers";
 import ClientAssignments from "./pages/portal/client/Assignments";
 import ClientTimeEntries from "./pages/portal/client/TimeEntries";
 import ClientIncidents from "./pages/portal/client/Incidents";
+import ClientPortalJobRequests from "./pages/portal/client/JobRequests";
+import ClientPortalJobRequestDetail from "./pages/portal/client/JobRequestDetail";
+import ClientJobRequests from "./pages/ClientJobRequests";
+import ClientJobRequestDetail from "./pages/ClientJobRequestDetail";
 
 export const router = createBrowserRouter([
   // F4.9: /sign-in y /sign-up viven FUERA de RequireAuth a propósito —
@@ -83,6 +87,8 @@ export const router = createBrowserRouter([
       { path: "revenue", element: <Revenue /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "job-orders/:id", element: <JobOrderDetail /> },
+      { path: "client-job-requests", element: <ClientJobRequests /> },
+      { path: "client-job-requests/:id", element: <ClientJobRequestDetail /> },
       { path: "candidates", element: <Candidates /> },
       { path: "candidates/:id", element: <CandidateDetail /> },
       { path: "workers", element: <Workers /> },
@@ -115,6 +121,8 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <ClientDashboard /> },
+      { path: "job-requests", element: <ClientPortalJobRequests /> },
+      { path: "job-requests/:id", element: <ClientPortalJobRequestDetail /> },
       { path: "job-orders", element: <ClientJobOrders /> },
       { path: "job-orders/:id", element: <ClientJobOrderDetail /> },
       { path: "workers", element: <ClientWorkers /> },

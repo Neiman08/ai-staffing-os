@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Briefcase, Users2, CalendarClock, Clock, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, Briefcase, FileText, Users2, CalendarClock, Clock, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -16,6 +16,7 @@ interface NavItem {
 // interno.
 const CLIENT_NAV: NavItem[] = [
   { to: "/portal/client", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/portal/client/job-requests", label: "Job Requests", icon: FileText },
   { to: "/portal/client/job-orders", label: "Job Orders", icon: Briefcase },
   { to: "/portal/client/workers", label: "Workers", icon: Users2 },
   { to: "/portal/client/assignments", label: "Assignments", icon: CalendarClock },

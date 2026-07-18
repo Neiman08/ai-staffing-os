@@ -569,6 +569,7 @@ model Company {
   placements              Placement[]
   incidents               OperationalIncident[]
   portalUsers             User[] // F10.1: usuarios de Client Portal (CLIENT_ADMIN/CLIENT_MANAGER) de esta Company
+  clientJobRequests       ClientJobRequest[] // F10.3
   createdAt               DateTime                  @default(now())
   updatedAt               DateTime                  @updatedAt
 
@@ -979,6 +980,7 @@ model JobOrder {
   complianceRuleEvaluations ComplianceRuleEvaluation[]
   placements                Placement[]
   incidents                 OperationalIncident[]
+  clientJobRequest          ClientJobRequest?          @relation("ClientJobRequestConversion") // F10.3: la ClientJobRequest que se convirtió en este JobOrder, si aplica
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
 
@@ -1633,6 +1635,59 @@ model OperationalIncident {
   @@index([tenantId, status])
   @@index([tenantId, workerId])
   @@index([tenantId, type])
+}
+
+// F10.3: estado real de una solicitud de personal ORIGINADA por el
+// cliente -- NUNCA se convierte automáticamente en JobOrder. Grafo de
+// transiciones en apps/api/.../portal/client-job-request-rules.ts (puro).
+enum ClientJobRequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  NEEDS_INFORMATION
+  APPROVED
+  CONVERTED_TO_JOB_ORDER
+  REJECTED
+  CANCELLED
+}
+
+// F10.3 (Client Job Request): registro de la solicitud tal como la
+// describe el cliente -- nunca infiere categoryId/payRate/billRate
+// (esos son juicio interno, se piden explícitos recién en el momento
+// de convertir a JobOrder real, ver ClientJobRequestService.convert()).
+model ClientJobRequest {
+  id                   String                 @id @default(cuid())
+  tenantId             String
+  companyId            String
+  company              Company                @relation(fields: [companyId], references: [id])
+  requestedTitle       String
+  location             Json?
+  headcount            Int
+  shift                ShiftType?
+  schedule             String?
+  payRateExpectation   Decimal?               @db.Decimal(10, 2)
+  billBudget           Decimal?               @db.Decimal(10, 2)
+  desiredStartDate     DateTime
+  duration             String?
+  requiredSkills       String[]               @default([])
+  certifications       String[]               @default([])
+  languageRequirements String[]               @default([])
+  physicalRequirements String?
+  notes                String?
+  urgency              RiskLevel              @default(MEDIUM)
+  status               ClientJobRequestStatus @default(DRAFT)
+  // F10.3: quién en el cliente creó la solicitud -- del contexto de
+  // tenancy (ctx.userId, el User de portal), nunca del body.
+  createdById          String?
+  reviewedById         String?
+  reviewNotes          String?
+  convertedJobOrderId  String?                @unique
+  convertedJobOrder    JobOrder?              @relation("ClientJobRequestConversion", fields: [convertedJobOrderId], references: [id])
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, status])
 }
 
 // ================= COMPLIANCE =================

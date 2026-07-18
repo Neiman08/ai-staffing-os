@@ -24,6 +24,7 @@ import {
   Rocket,
   Radar,
   ShieldAlert,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -62,6 +63,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Operations",
     items: [
       { to: "/job-orders", label: "Job Orders", icon: Briefcase },
+      { to: "/client-job-requests", label: "Client Requests", icon: FileText },
       { to: "/candidates", label: "Candidates", icon: Users },
       { to: "/workers", label: "Workers", icon: HardHat },
       { to: "/assignments", label: "Assignments", icon: CalendarClock },
