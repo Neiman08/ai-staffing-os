@@ -14,6 +14,10 @@ import Pipeline from "./pages/Pipeline";
 import Opportunities from "./pages/Opportunities";
 import FollowUps from "./pages/FollowUps";
 import Revenue from "./pages/Revenue";
+import AnalyticsExecutive from "./pages/AnalyticsExecutive";
+import AnalyticsRecruiting from "./pages/AnalyticsRecruiting";
+import AnalyticsCommercial from "./pages/AnalyticsCommercial";
+import AnalyticsFinancial from "./pages/AnalyticsFinancial";
 import JobOrders from "./pages/JobOrders";
 import JobOrderDetail from "./pages/JobOrderDetail";
 import Candidates from "./pages/Candidates";
@@ -100,6 +104,10 @@ export const router = createBrowserRouter([
       { path: "missions", element: <Missions /> },
       { path: "discovery", element: <Discovery /> },
       { path: "revenue", element: <Revenue /> },
+      { path: "analytics", element: <AnalyticsExecutive /> },
+      { path: "analytics/recruiting", element: <AnalyticsRecruiting /> },
+      { path: "analytics/commercial", element: <AnalyticsCommercial /> },
+      { path: "analytics/financial", element: <AnalyticsFinancial /> },
       { path: "job-orders", element: <JobOrders /> },
       { path: "job-orders/:id", element: <JobOrderDetail /> },
       { path: "client-job-requests", element: <ClientJobRequests /> },

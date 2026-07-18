@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   TrendingUp,
+  BarChart3,
   Building2,
   Contact,
   UserSearch,
@@ -47,6 +48,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
       { to: "/revenue", label: "Revenue", icon: TrendingUp },
+      { to: "/analytics", label: "Analytics", icon: BarChart3, end: true },
     ],
   },
   {
