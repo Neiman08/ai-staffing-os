@@ -9,6 +9,8 @@ import type {
   PayrollRunDetail,
   PayrollRunListItem,
   PaginationQuery,
+  PayrollReadinessQuery,
+  PayrollReadinessResultDto,
   RejectTimeEntryInput,
   ShiftListItem,
   ShiftQuery,
@@ -25,6 +27,7 @@ import {
   TIME_ENTRY_STATUS_TRANSITIONS,
 } from "@ai-staffing-os/shared";
 import { computeDiscrepancyFlag, computeOvertimeFlag, computeShiftScheduledHours, computeSubmissionTargetStatus } from "../operations-intelligence/time-entry-signals";
+import { evaluatePayrollReadiness } from "../operations-intelligence/payroll-readiness";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
@@ -523,6 +526,49 @@ export async function updateShift(id: string, input: UpdateShiftInput): Promise<
   });
 
   return toShiftListItem(updated);
+}
+
+// ================= Payroll Readiness (F9.7) =================
+
+/**
+ * F9.7: recalculado en cada llamada -- nunca persistido (a diferencia de
+ * PlacementReadiness, F8.10). Sin procesamiento real de pagos, sin
+ * conexión bancaria/ACH, sin cálculo fiscal definitivo -- solo agrega
+ * señales que ya existen (TimeEntry.status/flags, Worker.complianceStatus)
+ * y determina si un PayrollRun (F5.7) puede incluir este período de este
+ * Worker con confianza razonable.
+ */
+export async function getPayrollReadiness(query: PayrollReadinessQuery): Promise<PayrollReadinessResultDto> {
+  const worker = await scopedDb.worker.findUnique({ where: { id: query.workerId } });
+  if (!worker) throw AppError.notFound("Worker not found");
+
+  const periodStart = new Date(query.periodStart);
+  const periodEnd = new Date(query.periodEnd);
+
+  const entries = await scopedDb.timeEntry.findMany({
+    where: { date: { gte: periodStart, lte: periodEnd }, assignment: { workerId: query.workerId } },
+  });
+
+  const alreadyExportedItem = await scopedDb.payrollItem.findFirst({
+    where: {
+      workerId: query.workerId,
+      payrollRun: { status: "EXPORTED", periodStart: { lte: periodEnd }, periodEnd: { gte: periodStart } },
+    },
+  });
+
+  const result = evaluatePayrollReadiness({
+    workerComplianceStatus: worker.complianceStatus,
+    timeEntries: entries.map((e) => ({ status: e.status, overtimeFlag: e.overtimeFlag, discrepancyFlag: e.discrepancyFlag })),
+    alreadyExported: alreadyExportedItem !== null,
+  });
+
+  return {
+    workerId: query.workerId,
+    periodStart: query.periodStart,
+    periodEnd: query.periodEnd,
+    timeEntryCount: entries.length,
+    ...result,
+  };
 }
 
 // ================= Payroll Runs (F5.7) =================

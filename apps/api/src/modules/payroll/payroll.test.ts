@@ -857,3 +857,108 @@ test("approving a TimeEntry writes an AuditLog entry", async () => {
   const audit = await prisma.auditLog.findFirst({ where: { entityType: "timeEntry", entityId: entry.id, action: "timeEntry.approved" } });
   assert.ok(audit);
 });
+
+// ================= Payroll Readiness (F9.7) =================
+// F9.7: helper que crea una Assignment y devuelve tanto su id como el
+// workerId real -- createRealAssignment() solo devuelve el assignmentId.
+
+async function createRealAssignmentWithWorker(): Promise<{ assignmentId: string; workerId: string }> {
+  const assignmentId = await createRealAssignment();
+  const assignment = await prisma.assignment.findUniqueOrThrow({ where: { id: assignmentId } });
+  return { assignmentId, workerId: assignment.workerId };
+}
+
+test("GET /payroll/readiness as sales@titan.dev returns 403 (no payrollRuns.view)", async () => {
+  const { workerId } = await createRealAssignmentWithWorker();
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=${workerId}&periodStart=2030-03-01&periodEnd=2030-03-07`,
+    { headers: SALES_HEADERS },
+  );
+  assert.equal(res.status, 403);
+});
+
+test("GET /payroll/readiness with no time entries in the period is NOT_READY", async () => {
+  const { workerId } = await createRealAssignmentWithWorker();
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=${workerId}&periodStart=2030-03-01&periodEnd=2030-03-07`,
+    { headers: PAYROLL_HEADERS },
+  );
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { status: string; timeEntryCount: number };
+  assert.equal(body.status, "NOT_READY");
+  assert.equal(body.timeEntryCount, 0);
+});
+
+test("GET /payroll/readiness with a PENDING entry in the period is NOT_READY", async () => {
+  const { assignmentId, workerId } = await createRealAssignmentWithWorker();
+  await createValidTimeEntry(assignmentId, { date: "2030-03-10" });
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=${workerId}&periodStart=2030-03-08&periodEnd=2030-03-14`,
+    { headers: PAYROLL_HEADERS },
+  );
+  const body = (await res.json()) as { status: string; timeEntryCount: number };
+  assert.equal(body.status, "NOT_READY");
+  assert.equal(body.timeEntryCount, 1);
+});
+
+test("GET /payroll/readiness with all entries APPROVED is READY_FOR_EXPORT", async () => {
+  const { assignmentId, workerId } = await createRealAssignmentWithWorker();
+  await createApprovedEntry(assignmentId, "2030-03-15");
+  await createApprovedEntry(assignmentId, "2030-03-16");
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=${workerId}&periodStart=2030-03-15&periodEnd=2030-03-21`,
+    { headers: PAYROLL_HEADERS },
+  );
+  const body = (await res.json()) as { status: string; timeEntryCount: number };
+  assert.equal(body.status, "READY_FOR_EXPORT");
+  assert.equal(body.timeEntryCount, 2);
+});
+
+test("GET /payroll/readiness reflects real Worker compliance BLOCKED", async () => {
+  const { assignmentId, workerId } = await createRealAssignmentWithWorker();
+  await createApprovedEntry(assignmentId, "2030-03-22");
+  await prisma.worker.update({ where: { id: workerId }, data: { complianceStatus: "BLOCKED" } });
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=${workerId}&periodStart=2030-03-22&periodEnd=2030-03-28`,
+    { headers: PAYROLL_HEADERS },
+  );
+  const body = (await res.json()) as { status: string; blockers: string[] };
+  assert.equal(body.status, "BLOCKED");
+  assert.ok(body.blockers[0]?.includes("compliance"));
+});
+
+test("GET /payroll/readiness returns EXPORTED once the period's PayrollRun is actually exported", async () => {
+  const { assignmentId, workerId } = await createRealAssignmentWithWorker();
+  await createApprovedEntry(assignmentId, "2030-03-29");
+
+  const runRes = await fetch(`${baseUrl}/api/v1/payroll/runs`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ periodStart: "2030-03-29", periodEnd: "2030-04-04" }),
+  });
+  const run = (await runRes.json()) as { id: string };
+  createdPayrollRunIds.push(run.id);
+
+  await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/submit`, { method: "POST", headers: PAYROLL_HEADERS });
+  await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/approve`, { method: "POST", headers: CEO_HEADERS });
+  await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/mark-paid`, { method: "POST", headers: CEO_HEADERS });
+  await fetch(`${baseUrl}/api/v1/payroll/runs/${run.id}/export`, { method: "POST", headers: CEO_HEADERS });
+
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=${workerId}&periodStart=2030-03-29&periodEnd=2030-04-04`,
+    { headers: PAYROLL_HEADERS },
+  );
+  const body = (await res.json()) as { status: string };
+  assert.equal(body.status, "EXPORTED");
+});
+
+test("GET /payroll/readiness for an unknown workerId returns 404", async () => {
+  const res = await fetch(
+    `${baseUrl}/api/v1/payroll/readiness?workerId=does-not-exist&periodStart=2030-03-01&periodEnd=2030-03-07`,
+    { headers: PAYROLL_HEADERS },
+  );
+  assert.equal(res.status, 404);
+});

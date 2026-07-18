@@ -283,3 +283,42 @@ Además: `npm run seed` re-ejecutado (idempotente, solo upserts) para propagar e
 `feat: F9.6 — shifts and time entry structure`.
 
 **F9.6 completo.**
+
+## 12. Resultado de F9.7 — Payroll Readiness
+
+### 12.1 Decisión de arquitectura (documentada antes de implementar)
+
+Confirmado por §3 de este plan (escrito antes de F9.1): F9.7 es "nuevo módulo puro + wiring -- consume Assignment/TimeEntry/Worker.complianceStatus ya existentes", A DIFERENCIA explícita de F9.1/F9.2/F9.4/F9.10 que sí agregan un modelo Prisma nuevo. Decisión conservadora tomada en consecuencia: `PayrollReadiness` NO se persiste -- se recalcula en cada consulta a partir de datos que ya existen (TimeEntry.status/overtimeFlag/discrepancyFlag, Worker.complianceStatus, PayrollItem+PayrollRun.status). Cero migración nueva en esta subfase.
+
+Alcance elegido: por (Worker, período) -- no por Assignment individual, porque un PayrollRun (F5.7) ya agrega por Worker across todas sus Assignments dentro del período; una señal de "listo para nómina" coherente con eso debe evaluarse al mismo nivel, no fragmentada por Assignment.
+
+### 12.2 Arquitectura
+
+- **`apps/api/.../operations-intelligence/payroll-readiness.ts`** (nuevo, puro, `PAYROLL_READINESS_VERSION = 1`): `evaluatePayrollReadiness()`. Estados `NOT_READY | NEEDS_REVIEW | READY_FOR_EXPORT | EXPORTED | BLOCKED`, prioridad determinística: `EXPORTED` (hecho histórico, nunca se reescribe por cambios posteriores de compliance) > `BLOCKED` (compliance real) > `NOT_READY` (sin entradas, o con entradas DRAFT/PENDING/SUBMITTED/REJECTED todavía en flujo) > `NEEDS_REVIEW` (alguna entrada NEEDS_REVIEW) > `READY_FOR_EXPORT`. Entradas ya APPROVED/LOCKED con bandera overtime/discrepancy no bloquean (un humano ya las aprobó a pesar de la señal) -- se listan en `reviewNotes`, informativo. 9 tests unitarios.
+- **`packages/shared/src/schemas/payroll.ts`**: `payrollReadinessStatusSchema` (5 valores), `payrollReadinessQuerySchema` (workerId/periodStart/periodEnd), `payrollReadinessResultSchema`.
+- **`payroll/service.ts`** (extendido): `getPayrollReadiness(query)` -- resuelve el Worker real (404 si no existe), junta sus TimeEntries del período vía `assignment.workerId` (filtro relacional, ningún modelo nuevo), determina `alreadyExported` consultando si existe un `PayrollItem` de ese Worker dentro de un `PayrollRun` `EXPORTED` cuyo rango se solapa con el período consultado, y delega el cálculo al módulo puro.
+- **`payroll/router.ts`**: `GET /payroll/readiness`. Reutiliza `payrollRuns.view` (mismo criterio ya establecido repetidamente: no se inventa un permiso nuevo para una vista de lectura sobre datos que ya exigen ese permiso).
+- Sin cambios en `schema.prisma` -- ninguna migración en esta subfase.
+
+### 12.3 Tests nuevos
+
+`payroll-readiness.test.ts` (9, puro: EXPORTED gana siempre; BLOCKED por compliance incluso con entradas limpias; sin entradas es NOT_READY; DRAFT/PENDING/SUBMITTED mantienen NOT_READY; REJECTED mantiene NOT_READY con mensaje distinto; NEEDS_REVIEW se respeta cuando el resto ya está resuelto; todo APROBADO/LOCKED sin banderas es READY_FOR_EXPORT sin reviewNotes; banderas en entradas ya aprobadas generan reviewNotes informativos sin bloquear; compliance PENDING nunca bloquea, solo BLOCKED) + 7 tests de integración nuevos en `payroll.test.ts` (RBAC 403; sin entradas; con una entrada PENDING; con entradas APROBADAS; compliance BLOCKED real vía `prisma.worker.update`; ciclo completo hasta EXPORTED real verificando que el readiness lo refleja; Worker inexistente devuelve 404). Total: 51/51 en `payroll.test.ts`.
+
+### 12.4 Suite completa
+
+1126 tests, 1120 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones nuevas. Typecheck y lint limpios en `apps/api` y `packages/shared`.
+
+### 12.5 Migraciones
+
+Ninguna -- F9.7 no agrega columnas ni modelos, solo lee datos ya persistidos por F9.6/F5.6/F5.7.
+
+### 12.6 Limitaciones conocidas
+
+- La ventana de "ya exportado" se detecta por solapamiento de rango de fechas entre el período consultado y el `PayrollRun` EXPORTED (`periodStart <= periodEnd consultado` y `periodEnd >= periodStart consultado`) -- un período consultado que solo se solapa PARCIALMENTE con un run ya exportado también se reporta como `EXPORTED` en su totalidad, sin desglosar qué días específicos ya se pagaron. Documentado como simplificación real, no un bug oculto: no se pidió una vista día-por-día.
+- Sin cálculo de impuestos, sin conexión bancaria/ACH, sin procesamiento real de pago -- exactamente como exige la autorización. `getPayrollReadiness` es una vista de solo lectura.
+
+### 12.7 Commit
+
+`feat: F9.7 — payroll readiness evaluator`.
+
+**F9.7 completo.**

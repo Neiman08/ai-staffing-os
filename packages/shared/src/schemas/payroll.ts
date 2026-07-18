@@ -171,6 +171,32 @@ export const shiftListItemSchema = z.object({
 });
 export type ShiftListItem = z.infer<typeof shiftListItemSchema>;
 
+// ================= Payroll Readiness (F9.7) =================
+
+// F9.7: recalculado en cada consulta (nunca persistido) -- consume
+// Worker.complianceStatus + TimeEntry ya existentes, ver
+// apps/api/.../operations-intelligence/payroll-readiness.ts.
+export const payrollReadinessStatusSchema = z.enum(["NOT_READY", "NEEDS_REVIEW", "READY_FOR_EXPORT", "EXPORTED", "BLOCKED"]);
+export type PayrollReadinessStatusValue = z.infer<typeof payrollReadinessStatusSchema>;
+
+export const payrollReadinessQuerySchema = z.object({
+  workerId: z.string().min(1),
+  periodStart: z.string().min(1),
+  periodEnd: z.string().min(1),
+});
+export type PayrollReadinessQuery = z.infer<typeof payrollReadinessQuerySchema>;
+
+export const payrollReadinessResultSchema = z.object({
+  workerId: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  status: payrollReadinessStatusSchema,
+  blockers: z.array(z.string()),
+  reviewNotes: z.array(z.string()),
+  timeEntryCount: z.number(),
+});
+export type PayrollReadinessResultDto = z.infer<typeof payrollReadinessResultSchema>;
+
 // F5.7: enum real (packages/db/prisma/schema.prisma PayrollRunStatus) —
 // no se amplía. Secuencia estrictamente hacia adelante, sin reapertura
 // (plan §9.3): DRAFT → PENDING_APPROVAL → APPROVED → PAID → EXPORTED.

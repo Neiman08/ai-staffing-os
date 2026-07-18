@@ -5,6 +5,7 @@ import {
   createShiftInputSchema,
   createTimeEntryInputSchema,
   paginationQuerySchema,
+  payrollReadinessQuerySchema,
   rejectTimeEntryInputSchema,
   shiftQuerySchema,
   timeEntryQuerySchema,
@@ -120,6 +121,18 @@ payrollRouter.patch("/shifts/:id", requirePermission("shifts.update"), async (re
   try {
     const input = updateShiftInputSchema.parse(req.body);
     res.json(await payrollService.updateShift(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F9.7: reutiliza payrollRuns.view -- es una vista de lectura sobre datos
+// que ya requieren ese mismo permiso (TimeEntry/PayrollRun), no se
+// inventa un permiso nuevo.
+payrollRouter.get("/payroll/readiness", requirePermission("payrollRuns.view"), async (req, res, next) => {
+  try {
+    const query = payrollReadinessQuerySchema.parse(req.query);
+    res.json(await payrollService.getPayrollReadiness(query));
   } catch (err) {
     next(err);
   }
