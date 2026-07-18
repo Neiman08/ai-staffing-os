@@ -879,6 +879,11 @@ model Candidate {
   zip                String?
   categories         JobCategory[]
   yearsExperience    Int?
+  // F10.5: self-service (portal). editable por el propio Candidate/
+  // Worker vía /portal/*/profile -- nunca por el sistema; sin inferencia
+  // silenciosa de disponibilidad/skills.
+  availabilityNotes  String?
+  skills             String[]                  @default([])
   resumeUrl          String?
   aiSummary          String?
   aiScore            Float?

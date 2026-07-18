@@ -9,6 +9,8 @@ export interface WorkerProfile {
   city: string | null;
   state: string | null;
   languages: string[];
+  availabilityNotes: string | null;
+  skills: string[];
   employmentType: string;
   defaultPayRate: string;
   status: string;

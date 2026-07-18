@@ -330,6 +330,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "portalProfile.view",
     "portalProfile.update",
     "portalDocuments.view",
+    "portalDocuments.update", // F10.5: enviar (SUBMITTED) un item del checklist propio
     "portalAssignments.view",
     "portalTimeEntries.view",
     "portalTimeEntries.create",
@@ -342,6 +343,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "portalProfile.view",
     "portalProfile.update",
     "portalDocuments.view",
+    "portalDocuments.update", // F10.5: enviar (SUBMITTED) un item del checklist propio
     "auditLogs.view", // acotado a su propio historial
     ...NOTIFICATION_KEYS,
   ],

@@ -203,3 +203,52 @@ Ninguna -- F10.4 lee exclusivamente modelos ya existentes (WorkerOnboarding/Docu
 `feat: F10.4 — candidate and worker portal`.
 
 **F10.4 completo.**
+
+## 7. Resultado de F10.5 — Profile and Document UX
+
+### 7.1 Auditoría previa
+
+Confirmado por auditoría: ningún campo self-service editable existía más allá de `phone`/`city`/`state`/`languages` (ya de solo lectura desde F10.4); `Document.fileUrl` siempre fue un `String?` de texto libre, sin ningún endpoint real de upload de bytes en todo el proyecto. `DocumentChecklistItem.documentId → Document?` ya existía desde F9.2 pero nunca se había usado -- el vínculo real entre "seguimiento de checklist" y "archivo real" estaba modelado pero sin ningún caller.
+
+### 7.2 Modelos y migraciones
+
+Aditivo únicamente: `Candidate.availabilityNotes String?` y `Candidate.skills String[] @default([])` (migración `20260718030000_f10_5_profile_self_service`, verificada con `prisma migrate diff` -- solo `ADD COLUMN`). Viven en `Candidate` (no en `Worker`) porque tanto `worker-service.ts` como `candidate-service.ts` ya hacen join a `Candidate`, así que un solo punto de adición sirve a ambos portales sin duplicar el campo.
+
+### 7.3 DocumentStorageAdapter
+
+`apps/api/src/core/document-storage/{adapter.ts, local-mock.provider.ts}` -- interfaz desacoplada (mismo patrón que `AuthProvider`, F0/F4.9) con una única implementación mock hoy: nunca toca disco/red, genera una referencia `mock://pending-storage-adapter/<uuid>/<filename-sanitizado>`, marcada explícitamente `status: "pending"`. Cuando exista un proveedor real, se agrega una segunda implementación sin tocar ningún módulo de negocio.
+
+### 7.4 Backend
+
+- `updateWorkerProfile`/`updateCandidateProfile`: whitelist estricta (`phone`, `city`, `state`, `languages`, `availabilityNotes`, `skills`) -- nunca `employmentType`/`defaultPayRate`/`status`/`complianceStatus`/`yearsExperience`/`aiScore` (juicio interno). Router valida tipos (arrays de strings) antes de llegar al service. AuditLog en cada update (`portal.worker_profile_updated`/`portal.candidate_profile_updated`).
+- `submitWorkerDocument`/`submitCandidateDocument`: valida ownership (404, no 403, si el `DocumentChecklistItem` no pertenece a la identidad actual -- mismo criterio IDOR de F10.1-F10.4), valida la transición vía `isValidChecklistItemTransition(from, "SUBMITTED")` (el grafo de F9.2 solo permite esa transición desde `PENDING`), crea un `Document` real (`fileUrl` = referencia mock, `status: PENDING_REVIEW`) y lo enlaza vía `DocumentChecklistItem.documentId` -- **bug propio detectado y corregido antes de testear**: la primera versión escribía la referencia mock en `DocumentChecklistItem.source`, pisando su significado original de F9.2 ("cómo se originó este item", texto libre tipo `"agent_extracted"`); la versión corregida usa `source: "worker_upload"`/`"candidate_upload"` (un valor de ese mismo vocabulario) y deja la referencia de storage donde siempre debió vivir: `Document.fileUrl`, enlazado vía `documentId`. AuditLog en cada submit (`portal.worker_document_submitted`/`portal.candidate_document_submitted`).
+- Rutas nuevas: `PATCH /portal/worker/profile` y `PATCH /portal/candidate/profile` (gateadas por `portalProfile.update`), `POST /portal/worker/documents/:id/submit` y `POST /portal/candidate/documents/:id/submit` (gateadas por `portalDocuments.update`, una llave nueva -- `portalDocuments.view` no implica poder escribir). `ROLE_PERMISSIONS.WORKER`/`.CANDIDATE` (seed) extendidos con `portalDocuments.update`.
+
+### 7.5 Frontend
+
+`ProfileEditForm`/`SubmitDocumentDrawer` (`apps/web/src/pages/portal/shared/`) -- compartidos entre Worker y Candidate Portal (mismo shape editable exacto), evita duplicar el formulario dos veces. `WorkerProfilePage`/`CandidateProfilePage` ahora incluyen el formulario editable junto a la vista de solo lectura existente. `WorkerDocumentsPage`/`CandidateDocumentsPage` agregan un botón "Enviar" solo visible en items `PENDING`, que abre un `Drawer` con `SubmitDocumentDrawer` -- deliberadamente NO es un file picker real (etiqueta explícita "Almacenamiento de archivos real pendiente de integración" visible en la UI), solo captura `fileName`/`notas`.
+
+### 7.6 Tests nuevos
+
+- `local-mock.provider.test.ts` (3): prefijo `mock://` garantizado, sanitización de nombre de archivo, unicidad por llamada.
+- `profile-document-ux.test.ts` (12, integración vía HTTP real): 403 sin `portalProfile.update`/`portalDocuments.update`; update persiste solo los campos whitelisted; campos internos (`status`, `yearsExperience`) ignorados silenciosamente aunque se envíen; 400 si `languages`/`skills` no son arrays; el update del candidato nunca toca la fila de otro candidato; 404 (no 403) al intentar enviar el checklist item de otra identidad; 400 en una transición inválida (`VERIFIED`→`SUBMITTED`); submit exitoso crea un `Document` real con `fileUrl` `mock://`, lo enlaza vía `documentId`, y genera AuditLog.
+
+### 7.7 Suite completa
+
+1246 tests, 1240 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, depende de OpenAI real), 5 skip -- cero regresiones. Typecheck/lint/build limpios en `apps/api` y `apps/web`.
+
+### 7.8 Verificación visual
+
+Playwright ad-hoc contra los dev servers ya corriendo (no se relanzaron): Worker Portal -- edición de perfil persiste y se refleja de inmediato (`Chicago`, `555-0199`, skills, disponibilidad), envío de un documento `PENDING` transiciona visualmente a `Submitted` con toast de confirmación. Candidate Portal -- mismo flujo de edición de perfil confirmado. Cero errores de consola en las 4 páginas. Fixture temporal (`WorkerOnboarding`/`DocumentChecklistItem` para `worker-01`/`candidate-029`, que no tenían checklist real seedeado) creada y eliminada después de verificar; los campos de `Candidate` mutados durante la verificación manual fueron restaurados a su estado determinístico de seed.
+
+**Higiene de datos de prueba**: se detectó que la primera versión de `profile-document-ux.test.ts` solo restauraba `availabilityNotes`/`skills` en su `after()`, dejando `phone`/`city` mutados permanentemente en la persona seed compartida `candidate-034` (worker-01). Corregido: el `before()` ahora captura el estado original completo (`phone`/`city`/`state`/`languages`/`availabilityNotes`/`skills`) y el `after()` lo restaura exacto, en vez de asumir `null`.
+
+### 7.9 Deuda/observaciones (no bloqueantes para F10.5)
+
+- **Inconsistencia de seed pre-existente (F10.1, no introducida por F10.5)**: el `User` de portal `candidate-portal@titan.dev` tiene su propio `firstName`/`lastName` ("Daniela Ortiz") distinto del `Candidate` real al que apunta (`candidate-029` = "Jordan Taylor"). El topbar muestra el nombre del `User`; la página de perfil muestra correctamente el nombre del `Candidate` real (dato correcto, fuente de verdad). Cosmético, no afecta autorización ni tenancy -- diferido, no se toca en F10.5 (tocar identidad de seed es territorio de F10.1).
+
+### 7.10 Commit
+
+`feat: F10.5 — profile and document experience`.
+
+**F10.5 completo.**

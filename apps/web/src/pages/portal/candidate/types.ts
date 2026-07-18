@@ -9,6 +9,8 @@ export interface CandidateProfile {
   city: string | null;
   state: string | null;
   languages: string[];
+  availabilityNotes: string | null;
+  skills: string[];
   yearsExperience: number | null;
   status: string;
 }

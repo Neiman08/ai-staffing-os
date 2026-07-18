@@ -1,15 +1,28 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatStatusLabel, statusVariant } from "@/lib/status";
+import { ProfileEditForm, type EditableProfileFields } from "../shared/ProfileEditForm";
 import type { WorkerProfile } from "./types";
 
 export default function WorkerProfilePage() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data: profile, isLoading } = useQuery({
     queryKey: ["portal-worker-profile"],
     queryFn: () => apiFetch<WorkerProfile>("/portal/worker/profile"),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (input: EditableProfileFields) => apiFetch<WorkerProfile>("/portal/worker/profile", { method: "PATCH", body: JSON.stringify(input) }),
+    onSuccess: () => {
+      toast({ title: "Perfil actualizado", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["portal-worker-profile"] });
+    },
+    onError: (err) => toast({ title: "No se pudo actualizar el perfil", description: String(err), variant: "error" }),
   });
 
   if (isLoading || !profile) {
@@ -46,6 +59,14 @@ export default function WorkerProfilePage() {
               <span className="text-muted-foreground">Idiomas</span>
               <span>{profile.languages.join(", ").toUpperCase() || "—"}</span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Skills</span>
+              <span>{profile.skills.join(", ") || "—"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Disponibilidad</span>
+              <span>{profile.availabilityNotes ?? "—"}</span>
+            </div>
           </CardContent>
         </Card>
 
@@ -70,6 +91,26 @@ export default function WorkerProfilePage() {
               <span className="text-muted-foreground">Contratado</span>
               <span>{profile.hiredAt ? new Date(profile.hiredAt).toLocaleDateString() : "—"}</span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Editar mi perfil</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ProfileEditForm
+              initial={{
+                phone: profile.phone,
+                city: profile.city,
+                state: profile.state,
+                languages: profile.languages,
+                availabilityNotes: profile.availabilityNotes,
+                skills: profile.skills,
+              }}
+              onSave={(input) => updateMutation.mutate(input)}
+              isSaving={updateMutation.isPending}
+            />
           </CardContent>
         </Card>
       </div>

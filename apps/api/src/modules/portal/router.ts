@@ -129,6 +129,47 @@ function parseJobRequestBody(body: Record<string, unknown>) {
   };
 }
 
+// F10.5: whitelist explícita -- cualquier campo fuera de esta lista
+// (employmentType/defaultPayRate/status/complianceStatus/etc, juicio
+// interno) queda simplemente ignorado, nunca aceptado silenciosamente.
+function parseProfileUpdateBody(body: Record<string, unknown>) {
+  const out: {
+    phone?: string | null;
+    city?: string | null;
+    state?: string | null;
+    languages?: string[];
+    availabilityNotes?: string | null;
+    skills?: string[];
+  } = {};
+  if ("phone" in body) out.phone = (body.phone as string | null) ?? null;
+  if ("city" in body) out.city = (body.city as string | null) ?? null;
+  if ("state" in body) out.state = (body.state as string | null) ?? null;
+  if ("languages" in body) {
+    if (!Array.isArray(body.languages) || body.languages.some((v) => typeof v !== "string")) {
+      throw AppError.badRequest("languages must be an array of strings");
+    }
+    out.languages = body.languages as string[];
+  }
+  if ("availabilityNotes" in body) out.availabilityNotes = (body.availabilityNotes as string | null) ?? null;
+  if ("skills" in body) {
+    if (!Array.isArray(body.skills) || body.skills.some((v) => typeof v !== "string")) {
+      throw AppError.badRequest("skills must be an array of strings");
+    }
+    out.skills = body.skills as string[];
+  }
+  return out;
+}
+
+function parseDocumentSubmitBody(body: Record<string, unknown>) {
+  if (typeof body.fileName !== "string" || body.fileName.trim().length === 0) {
+    throw AppError.badRequest("fileName is required");
+  }
+  return {
+    fileName: body.fileName,
+    notes: (body.notes as string | null | undefined) ?? null,
+  };
+}
+
 portalRouter.get("/portal/client/job-requests", requirePermission("clientJobs.view"), async (req, res, next) => {
   try {
     res.json(await clientJobRequestService.listClientJobRequests({ cursor: req.query.cursor as string | undefined, limit: req.query.limit ? Number(req.query.limit) : undefined }));
@@ -266,6 +307,18 @@ portalRouter.get("/portal/worker/profile", requirePermission("portalProfile.view
   }
 });
 
+// F10.5: PATCH separado del GET, gateado por portalProfile.update (deny by
+// default -- ver ROLE_PERMISSIONS, solo WORKER/CANDIDATE lo tienen).
+// parseProfileUpdateBody rechaza cualquier campo fuera de la whitelist
+// self-service (nunca employmentType/defaultPayRate/status/complianceStatus).
+portalRouter.patch("/portal/worker/profile", requirePermission("portalProfile.update"), async (req, res, next) => {
+  try {
+    res.json(await workerService.updateWorkerProfile(parseProfileUpdateBody(req.body as Record<string, unknown>)));
+  } catch (err) {
+    next(err);
+  }
+});
+
 portalRouter.get("/portal/worker/onboarding", requirePermission("portalProfile.view"), async (_req, res, next) => {
   try {
     res.json(await workerService.listWorkerOnboarding());
@@ -277,6 +330,16 @@ portalRouter.get("/portal/worker/onboarding", requirePermission("portalProfile.v
 portalRouter.get("/portal/worker/documents", requirePermission("portalDocuments.view"), async (_req, res, next) => {
   try {
     res.json(await workerService.listWorkerDocuments());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F10.5: gateado por portalDocuments.update -- distinto de portalDocuments.view
+// (leer el checklist no implica poder "subir"/marcar SUBMITTED un item).
+portalRouter.post("/portal/worker/documents/:id/submit", requirePermission("portalDocuments.update"), async (req, res, next) => {
+  try {
+    res.json(await workerService.submitWorkerDocument(req.params.id!, parseDocumentSubmitBody(req.body as Record<string, unknown>)));
   } catch (err) {
     next(err);
   }
@@ -332,6 +395,14 @@ portalRouter.get("/portal/candidate/profile", requirePermission("portalProfile.v
   }
 });
 
+portalRouter.patch("/portal/candidate/profile", requirePermission("portalProfile.update"), async (req, res, next) => {
+  try {
+    res.json(await candidateService.updateCandidateProfile(parseProfileUpdateBody(req.body as Record<string, unknown>)));
+  } catch (err) {
+    next(err);
+  }
+});
+
 portalRouter.get("/portal/candidate/applications", requirePermission("portalProfile.view"), async (_req, res, next) => {
   try {
     res.json(await candidateService.listCandidateApplications());
@@ -351,6 +422,14 @@ portalRouter.get("/portal/candidate/onboarding", requirePermission("portalProfil
 portalRouter.get("/portal/candidate/documents", requirePermission("portalDocuments.view"), async (_req, res, next) => {
   try {
     res.json(await candidateService.listCandidateDocuments());
+  } catch (err) {
+    next(err);
+  }
+});
+
+portalRouter.post("/portal/candidate/documents/:id/submit", requirePermission("portalDocuments.update"), async (req, res, next) => {
+  try {
+    res.json(await candidateService.submitCandidateDocument(req.params.id!, parseDocumentSubmitBody(req.body as Record<string, unknown>)));
   } catch (err) {
     next(err);
   }
