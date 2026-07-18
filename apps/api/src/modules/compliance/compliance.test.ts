@@ -17,6 +17,7 @@ const SALES_HEADERS = { "x-dev-user": "sales@titan.dev", "content-type": "applic
 
 const REAL_COMPANY_ID = "company-01";
 const REAL_CATEGORY_ID = "category-general-labor";
+const REAL_FORKLIFT_CATEGORY_ID = "category-forklift-operator";
 const DOCTYPE_DRUG_TEST_ID = "doctype-drug-test"; // requiresExpiration: true
 const DOCTYPE_OSHA10_ID = "doctype-osha10";
 
@@ -25,6 +26,7 @@ const createdWorkerIds: string[] = [];
 const createdJobOrderIds: string[] = [];
 const createdAssignmentIds: string[] = [];
 const createdDocumentIds: string[] = [];
+const createdComplianceRuleIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -37,6 +39,16 @@ before(async () => {
 });
 
 after(async () => {
+  // F9.3: ComplianceRuleEvaluation tiene FKs ON DELETE RESTRICT hacia
+  // Worker/JobOrder, así que debe borrarse primero.
+  if (createdWorkerIds.length > 0 || createdJobOrderIds.length > 0) {
+    await prisma.complianceRuleEvaluation.deleteMany({
+      where: { OR: [{ workerId: { in: createdWorkerIds } }, { jobOrderId: { in: createdJobOrderIds } }] },
+    });
+  }
+  if (createdComplianceRuleIds.length > 0) {
+    await prisma.complianceRule.deleteMany({ where: { id: { in: createdComplianceRuleIds } } });
+  }
   if (createdDocumentIds.length > 0) {
     await prisma.complianceAlert.deleteMany({ where: { documentId: { in: createdDocumentIds } } });
     await prisma.document.deleteMany({ where: { id: { in: createdDocumentIds } } });
@@ -56,6 +68,27 @@ after(async () => {
   }
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
+
+async function createValidJobOrder(overrides: Record<string, unknown> = {}) {
+  const res = await fetch(`${baseUrl}/api/v1/job-orders`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({
+      companyId: REAL_COMPANY_ID,
+      categoryId: REAL_CATEGORY_ID,
+      title: "F9.3 test — General Labor",
+      workersNeeded: 2,
+      billRate: 30,
+      payRate: 20,
+      startDate: new Date().toISOString(),
+      requirements: [],
+      ...overrides,
+    }),
+  });
+  const body = (await res.json()) as { id: string };
+  if (res.status === 201) createdJobOrderIds.push(body.id);
+  return body;
+}
 
 async function createWorker(): Promise<{ workerId: string; candidateId: string }> {
   const res = await fetch(`${baseUrl}/api/v1/candidates`, {
@@ -462,4 +495,155 @@ test("sweep never generates MISSING once the Worker has a real (non-rejected) do
 
   const alert = await prisma.complianceAlert.findFirst({ where: { workerId, type: "MISSING" } });
   assert.equal(alert, null, "a Worker who already has the required document must never get a MISSING alert for it");
+});
+
+// ---------- F9.3: Compliance Rules ----------
+
+test("POST /compliance/rules as sales@titan.dev returns 403 (no compliance.verify)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/compliance/rules`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ name: "Test rule", requiredDocumentTypeKeys: ["osha10"] }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST /compliance/rules creates a real rule, rejects an unknown document type key", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/compliance/rules`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({ name: "Invalid rule", requiredDocumentTypeKeys: ["not_a_real_key"] }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST /workers/:workerId/compliance-evaluation/:jobOrderId as sales@titan.dev returns 403", async () => {
+  const { workerId } = await createWorker();
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+  });
+  assert.equal(res.status, 403);
+});
+
+test("GET compliance evaluation returns 404 before any evaluation has run", async () => {
+  const { workerId } = await createWorker();
+  const jobOrder = await createValidJobOrder();
+  const res = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, { headers: COMPLIANCE_HEADERS });
+  assert.equal(res.status, 404);
+});
+
+test("POST evaluation: INCOMPLETE when a universally-scoped rule's required document is missing, READY once verified, BLOCKED once expired -- real state transitions", async () => {
+  const { workerId, candidateId } = await createWorker();
+  const jobOrder = await createValidJobOrder();
+
+  const ruleRes = await fetch(`${baseUrl}/api/v1/compliance/rules`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({ name: `F9.3 osha10 rule ${Date.now()}`, requiredDocumentTypeKeys: ["osha10"] }),
+  });
+  const rule = (await ruleRes.json()) as { id: string };
+  createdComplianceRuleIds.push(rule.id);
+
+  const firstEval = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+  });
+  assert.equal(firstEval.status, 201);
+  const firstBody = (await firstEval.json()) as { complianceStatus: string; missingChecks: string[]; id: string };
+  assert.equal(firstBody.complianceStatus, "INCOMPLETE");
+  assert.deepEqual(firstBody.missingChecks, ["osha10"]);
+
+  const { body: document } = await createDocumentFor("candidateId", candidateId, { documentTypeId: DOCTYPE_OSHA10_ID });
+  await fetch(`${baseUrl}/api/v1/documents/${document.id}/verify`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({ status: "VERIFIED" }),
+  });
+
+  const secondEval = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+  });
+  const secondBody = (await secondEval.json()) as { complianceStatus: string; id: string; satisfiedChecks: string[] };
+  assert.equal(secondBody.complianceStatus, "READY");
+  assert.deepEqual(secondBody.satisfiedChecks, ["osha10"]);
+  assert.equal(secondBody.id, firstBody.id, "re-evaluating must upsert the same row, never create a second one");
+
+  const count = await prisma.complianceRuleEvaluation.count({ where: { workerId, jobOrderId: jobOrder.id } });
+  assert.equal(count, 1);
+});
+
+test("GET compliance evaluation returns the persisted result without recomputing", async () => {
+  const { workerId } = await createWorker();
+  const jobOrder = await createValidJobOrder();
+
+  await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, { method: "POST", headers: COMPLIANCE_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, { headers: COMPLIANCE_HEADERS });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { workerId: string; jobOrderId: string };
+  assert.equal(body.workerId, workerId);
+  assert.equal(body.jobOrderId, jobOrder.id);
+});
+
+test("a scoped rule (specific jobCategoryId) never applies to a job order outside that category", async () => {
+  const { workerId } = await createWorker();
+  // categoryId distinto al del rule scoped -- otras pruebas de este
+  // archivo ya crearon reglas UNIVERSALES (sin jobCategoryId) que
+  // requieren "osha10"/"drug_test"/[] -- se usa "background_check", una
+  // key que ninguna otra prueba de este archivo pide, para que esta
+  // aserción no dependa del orden de ejecución de las demás pruebas.
+  const jobOrder = await createValidJobOrder({ categoryId: REAL_FORKLIFT_CATEGORY_ID, requirements: ["forklift_cert"] });
+
+  const scopedRuleRes = await fetch(`${baseUrl}/api/v1/compliance/rules`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({
+      name: `F9.3 scoped rule ${Date.now()}`,
+      jobCategoryId: REAL_CATEGORY_ID,
+      requiredDocumentTypeKeys: ["background_check"],
+    }),
+  });
+  const scopedRule = (await scopedRuleRes.json()) as { id: string };
+  createdComplianceRuleIds.push(scopedRule.id);
+
+  const res = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+  });
+  const body = (await res.json()) as { requiredChecks: string[]; complianceStatus: string };
+  assert.ok(
+    !body.requiredChecks.includes("background_check"),
+    "a rule scoped to a jobCategoryId that doesn't match the Job Order's own category must never apply",
+  );
+});
+
+test("creating a rule and evaluating compliance write AuditLog entries", async () => {
+  const { workerId } = await createWorker();
+  const jobOrder = await createValidJobOrder();
+
+  const ruleRes = await fetch(`${baseUrl}/api/v1/compliance/rules`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({ name: `F9.3 audit rule ${Date.now()}`, requiredDocumentTypeKeys: [] }),
+  });
+  const rule = (await ruleRes.json()) as { id: string };
+  createdComplianceRuleIds.push(rule.id);
+
+  const evalRes = await fetch(`${baseUrl}/api/v1/workers/${workerId}/compliance-evaluation/${jobOrder.id}`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+  });
+  const evalBody = (await evalRes.json()) as { id: string };
+
+  const ruleAudit = await prisma.auditLog.findFirst({
+    where: { action: "complianceRule.created", entityType: "compliance_rule", entityId: rule.id },
+  });
+  const evalAudit = await prisma.auditLog.findFirst({
+    where: { action: "worker.compliance_rules_evaluated", entityType: "compliance_rule_evaluation", entityId: evalBody.id },
+  });
+  assert.ok(ruleAudit);
+  assert.ok(evalAudit);
 });

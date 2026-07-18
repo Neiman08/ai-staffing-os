@@ -5,6 +5,7 @@ import {
   verifyDocumentInputSchema,
 } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { AppError } from "../../core/errors";
 import * as complianceService from "./service";
 
 export const complianceRouter = Router();
@@ -78,6 +79,75 @@ complianceRouter.post(
   async (req, res, next) => {
     try {
       res.json(await complianceService.resolveComplianceAlert(req.params.id!));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// F9.3: Compliance Rules -- configurar una regla es el mismo tipo de
+// juicio de compliance que verificar un documento (compliance.verify).
+// Leer la lista de reglas usa el mismo permiso que leer documentos.
+complianceRouter.post("/compliance/rules", requirePermission("compliance.verify"), async (req, res, next) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      throw AppError.badRequest("name is required");
+    }
+    if (!Array.isArray(body.requiredDocumentTypeKeys)) {
+      throw AppError.badRequest("requiredDocumentTypeKeys must be an array");
+    }
+    res.status(201).json(
+      await complianceService.createComplianceRule({
+        name: body.name,
+        state: (body.state as string | null | undefined) ?? null,
+        industryId: (body.industryId as string | null | undefined) ?? null,
+        companyId: (body.companyId as string | null | undefined) ?? null,
+        jobCategoryId: (body.jobCategoryId as string | null | undefined) ?? null,
+        assignmentType: (body.assignmentType as "W2" | "C1099" | null | undefined) ?? null,
+        requiredDocumentTypeKeys: body.requiredDocumentTypeKeys as string[],
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+complianceRouter.get("/compliance/rules", requirePermission("documents.view"), async (_req, res, next) => {
+  try {
+    res.json(await complianceService.listComplianceRules());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F9.3: evalúa Y persiste (upsert) el resultado de las reglas para UN
+// Worker en el contexto de UN JobOrder -- mismo permiso que verificar
+// documentos, es un juicio de compliance.
+complianceRouter.post(
+  "/workers/:workerId/compliance-evaluation/:jobOrderId",
+  requirePermission("compliance.verify"),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(
+        await complianceService.evaluateComplianceForWorkerJobOrder(req.params.workerId!, req.params.jobOrderId!),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+complianceRouter.get(
+  "/workers/:workerId/compliance-evaluation/:jobOrderId",
+  requirePermission("documents.view"),
+  async (req, res, next) => {
+    try {
+      const record = await complianceService.getComplianceRuleEvaluation(req.params.workerId!, req.params.jobOrderId!);
+      if (!record) {
+        throw AppError.notFound("No compliance rule evaluation found for this worker and job order");
+      }
+      res.json(record);
     } catch (err) {
       next(err);
     }

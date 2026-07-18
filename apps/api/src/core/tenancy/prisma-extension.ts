@@ -25,6 +25,8 @@ const STRICT_TENANT_MODELS = new Set([
   "PlacementReadiness",
   "WorkerOnboarding",
   "DocumentChecklistItem",
+  "ComplianceRule",
+  "ComplianceRuleEvaluation",
   "Project",
   "Assignment",
   "Shift",

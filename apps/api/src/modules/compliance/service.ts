@@ -14,6 +14,15 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import { AppError } from "../../core/errors";
+import {
+  evaluateComplianceRules,
+  selectApplicableRules,
+  type ComplianceRuleDefinition,
+  type ComplianceEvaluationContext,
+  type ComplianceEvaluationStatus,
+  type DocumentCheckInput,
+  type DocumentCheckStatus,
+} from "../operations-intelligence/compliance-rules";
 
 // F5.5 (plan §7.2, aprobado): ventana de días antes del vencimiento real
 // para generar una alerta EXPIRING. El plan lo describe como un ejemplo
@@ -438,4 +447,299 @@ export async function runComplianceAlertSweepForTenant(tenantId: string): Promis
     const missing = await generateMissingDocumentAlerts();
     return { expiring, expired, missing };
   });
+}
+
+// ================= F9.3: Compliance Rules (configurables) =================
+
+export interface CreateComplianceRuleInput {
+  name: string;
+  state?: string | null;
+  industryId?: string | null;
+  companyId?: string | null;
+  jobCategoryId?: string | null;
+  assignmentType?: "W2" | "C1099" | null;
+  requiredDocumentTypeKeys: string[];
+}
+
+export interface ComplianceRuleRecord {
+  id: string;
+  name: string;
+  state: string | null;
+  industryId: string | null;
+  companyId: string | null;
+  jobCategoryId: string | null;
+  assignmentType: string | null;
+  requiredDocumentTypeKeys: string[];
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toComplianceRuleRecord(rule: {
+  id: string;
+  name: string;
+  state: string | null;
+  industryId: string | null;
+  companyId: string | null;
+  jobCategoryId: string | null;
+  assignmentType: string | null;
+  requiredDocumentTypeKeys: string[];
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}): ComplianceRuleRecord {
+  return {
+    id: rule.id,
+    name: rule.name,
+    state: rule.state,
+    industryId: rule.industryId,
+    companyId: rule.companyId,
+    jobCategoryId: rule.jobCategoryId,
+    assignmentType: rule.assignmentType,
+    requiredDocumentTypeKeys: rule.requiredDocumentTypeKeys,
+    active: rule.active,
+    createdAt: rule.createdAt.toISOString(),
+    updatedAt: rule.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * F9.3: define una regla de compliance CONFIGURABLE -- todo campo de
+ * scope es opcional (null = aplica a cualquier valor, ver
+ * `compliance-rules.ts`). `requiredDocumentTypeKeys` se valida contra
+ * el catálogo YA existente de `DocumentType` -- nunca acepta una key
+ * inventada.
+ */
+export async function createComplianceRule(input: CreateComplianceRuleInput): Promise<ComplianceRuleRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  if (input.requiredDocumentTypeKeys.length > 0) {
+    const found = await scopedDb.documentType.findMany({ where: { key: { in: input.requiredDocumentTypeKeys } } });
+    const foundKeys = new Set(found.map((d) => d.key));
+    const invalid = input.requiredDocumentTypeKeys.filter((k) => !foundKeys.has(k));
+    if (invalid.length > 0) {
+      throw AppError.badRequest(`Unknown document type key(s): ${invalid.join(", ")}`, { invalid });
+    }
+  }
+
+  const rule = await scopedDb.complianceRule.create({
+    data: {
+      tenantId: ctx.tenantId,
+      name: input.name,
+      state: input.state ?? null,
+      industryId: input.industryId ?? null,
+      companyId: input.companyId ?? null,
+      jobCategoryId: input.jobCategoryId ?? null,
+      assignmentType: input.assignmentType ?? null,
+      requiredDocumentTypeKeys: input.requiredDocumentTypeKeys,
+      createdById: ctx.userId,
+    },
+  });
+
+  await logAuditEvent({
+    action: "complianceRule.created",
+    entityType: "compliance_rule",
+    entityId: rule.id,
+    after: { name: rule.name, requiredDocumentTypeKeys: rule.requiredDocumentTypeKeys },
+  });
+
+  return toComplianceRuleRecord(rule);
+}
+
+export async function listComplianceRules(): Promise<ComplianceRuleRecord[]> {
+  const rules = await scopedDb.complianceRule.findMany({ orderBy: { createdAt: "desc" } });
+  return rules.map(toComplianceRuleRecord);
+}
+
+export interface ComplianceRuleEvaluationRecord {
+  id: string;
+  workerId: string;
+  jobOrderId: string;
+  requiredChecks: string[];
+  satisfiedChecks: string[];
+  missingChecks: string[];
+  expiredChecks: string[];
+  blockers: string[];
+  warnings: string[];
+  manualReviewFlags: string[];
+  complianceStatus: ComplianceEvaluationStatus;
+  rulesVersion: number;
+  evaluatedAt: string;
+  evaluatedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toComplianceRuleEvaluationRecord(record: {
+  id: string;
+  workerId: string;
+  jobOrderId: string;
+  requiredChecks: string[];
+  satisfiedChecks: string[];
+  missingChecks: string[];
+  expiredChecks: string[];
+  blockers: string[];
+  warnings: string[];
+  manualReviewFlags: string[];
+  complianceStatus: string;
+  rulesVersion: number;
+  evaluatedAt: Date;
+  evaluatedById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): ComplianceRuleEvaluationRecord {
+  return {
+    id: record.id,
+    workerId: record.workerId,
+    jobOrderId: record.jobOrderId,
+    requiredChecks: record.requiredChecks,
+    satisfiedChecks: record.satisfiedChecks,
+    missingChecks: record.missingChecks,
+    expiredChecks: record.expiredChecks,
+    blockers: record.blockers,
+    warnings: record.warnings,
+    manualReviewFlags: record.manualReviewFlags,
+    complianceStatus: record.complianceStatus as ComplianceEvaluationStatus,
+    rulesVersion: record.rulesVersion,
+    evaluatedAt: record.evaluatedAt.toISOString(),
+    evaluatedById: record.evaluatedById,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Determina el estado de UN documento requerido a partir de los
+ * `Document` reales del Worker + los de su Candidate de origen (mismo
+ * criterio "no duplicar" ya usado en `generateMissingDocumentAlerts`).
+ * Un documento VERIFIED con `expirationDate` ya pasada cuenta como
+ * EXPIRED, nunca como VERIFIED -- nunca se inventa un documento.
+ */
+function computeDocumentCheckStatus(
+  key: string,
+  documents: Array<{ documentTypeKey: string; status: string; expirationDate: Date | null }>,
+  now: Date,
+): DocumentCheckStatus {
+  const matching = documents.filter((d) => d.documentTypeKey === key);
+  if (matching.length === 0) return "MISSING";
+
+  const verifiedCurrent = matching.some(
+    (d) => d.status === "VERIFIED" && (!d.expirationDate || d.expirationDate.getTime() > now.getTime()),
+  );
+  if (verifiedCurrent) return "VERIFIED";
+
+  const expired = matching.some((d) => d.status === "VERIFIED" && d.expirationDate && d.expirationDate.getTime() <= now.getTime());
+  if (expired) return "EXPIRED";
+
+  const underReview = matching.some((d) => d.status === "PENDING_REVIEW");
+  if (underReview) return "UNDER_REVIEW";
+
+  return "MISSING";
+}
+
+/**
+ * F9.3: evalúa y PERSISTE (upsert) el resultado de las reglas de
+ * compliance aplicables para UN Worker en el contexto de UN JobOrder.
+ * El contexto (estado/industria/cliente/categoría/tipo de asignación)
+ * se deriva de datos YA reales -- nunca inventado. Reutiliza
+ * `Worker.complianceStatus` (F5.5) como señal, nunca lo recalcula.
+ * Nunca cambia `Worker.complianceStatus` ni crea un Assignment.
+ */
+export async function evaluateComplianceForWorkerJobOrder(
+  workerId: string,
+  jobOrderId: string,
+): Promise<ComplianceRuleEvaluationRecord> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const [worker, jobOrder] = await Promise.all([
+    scopedDb.worker.findUnique({
+      where: { id: workerId },
+      include: { candidate: true, documents: { include: { documentType: true } } },
+    }),
+    scopedDb.jobOrder.findUnique({ where: { id: jobOrderId }, include: { company: true } }),
+  ]);
+  if (!worker) throw AppError.notFound("Worker not found");
+  if (!jobOrder) throw AppError.notFound("Job Order not found");
+
+  const evalCtx: ComplianceEvaluationContext = {
+    state: worker.candidate.state,
+    industryId: jobOrder.company.industryId,
+    companyId: jobOrder.companyId,
+    jobCategoryId: jobOrder.categoryId,
+    assignmentType: worker.employmentType,
+  };
+
+  const ruleRows = await scopedDb.complianceRule.findMany({ where: { active: true } });
+  const definitions: ComplianceRuleDefinition[] = ruleRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    scope: {
+      state: r.state,
+      industryId: r.industryId,
+      companyId: r.companyId,
+      jobCategoryId: r.jobCategoryId,
+      assignmentType: r.assignmentType,
+    },
+    requiredDocumentTypeKeys: r.requiredDocumentTypeKeys,
+    active: r.active,
+  }));
+  const applicable = selectApplicableRules(definitions, evalCtx);
+
+  const candidateDocs = await scopedDb.document.findMany({
+    where: { candidateId: worker.candidateId },
+    include: { documentType: true },
+  });
+  const allDocs = [
+    ...worker.documents.map((d) => ({ documentTypeKey: d.documentType.key, status: d.status, expirationDate: d.expirationDate })),
+    ...candidateDocs.map((d) => ({ documentTypeKey: d.documentType.key, status: d.status, expirationDate: d.expirationDate })),
+  ];
+
+  const now = new Date();
+  const requiredKeys = [...new Set(applicable.flatMap((r) => r.requiredDocumentTypeKeys))];
+  const documentChecks: DocumentCheckInput[] = requiredKeys.map((key) => ({
+    documentTypeKey: key,
+    status: computeDocumentCheckStatus(key, allDocs, now),
+  }));
+
+  const result = evaluateComplianceRules(applicable, documentChecks, worker.complianceStatus, now);
+
+  const existing = await scopedDb.complianceRuleEvaluation.findFirst({ where: { workerId, jobOrderId } });
+  const data = {
+    requiredChecks: result.requiredChecks,
+    satisfiedChecks: result.satisfiedChecks,
+    missingChecks: result.missingChecks,
+    expiredChecks: result.expiredChecks,
+    blockers: result.blockers,
+    warnings: result.warnings,
+    manualReviewFlags: result.manualReviewFlags,
+    complianceStatus: result.complianceStatus,
+    rulesVersion: result.rulesVersion,
+    evaluatedAt: new Date(result.evaluatedAt),
+    evaluatedById: ctx.userId,
+  };
+
+  const record = existing
+    ? await scopedDb.complianceRuleEvaluation.update({ where: { id: existing.id }, data })
+    : await scopedDb.complianceRuleEvaluation.create({ data: { tenantId: ctx.tenantId, workerId, jobOrderId, ...data } });
+
+  await logAuditEvent({
+    action: "worker.compliance_rules_evaluated",
+    entityType: "compliance_rule_evaluation",
+    entityId: record.id,
+    after: { workerId, jobOrderId, complianceStatus: record.complianceStatus },
+  });
+
+  return toComplianceRuleEvaluationRecord(record);
+}
+
+/** Lee la evaluación YA persistida. Nunca la recalcula. */
+export async function getComplianceRuleEvaluation(
+  workerId: string,
+  jobOrderId: string,
+): Promise<ComplianceRuleEvaluationRecord | null> {
+  const record = await scopedDb.complianceRuleEvaluation.findFirst({ where: { workerId, jobOrderId } });
+  if (!record) return null;
+  return toComplianceRuleEvaluationRecord(record);
 }

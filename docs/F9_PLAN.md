@@ -132,3 +132,39 @@ El guard que impide activar sin Worker (`if (status === "ACTIVE" && !existing.wo
 `feat: F9.2 — worker document checklists`.
 
 **F9.2 completo.**
+
+## 8. Resultado de F9.3 — Compliance Rules
+
+### 8.1 Arquitectura
+
+- **`operations-intelligence/compliance-rules.ts`** (nuevo, puro): `selectApplicableRules()` (scope AND -- todo campo no-nulo debe coincidir exactamente, null = aplica a cualquier valor) + `evaluateComplianceRules()` (agrega requiredChecks/satisfiedChecks/missingChecks/expiredChecks/blockers/warnings/manualReviewFlags/complianceStatus) + `describeComplianceStatus()`. **Nunca afirma cumplimiento legal** -- textos deliberados "checklist completed"/"operationally ready"/"requires manual compliance review", verificado con test explícito.
+- **Extiende `compliance/service.ts`** (F5.5, sin reescribirlo): `createComplianceRule()`/`listComplianceRules()` (CRUD de reglas configurables, valida las keys contra `DocumentType` ya existente) + `evaluateComplianceForWorkerJobOrder()` (deriva el contexto de scope -- estado del Candidate, industria/cliente de la Company del Job Order, categoría del Job Order, `employmentType` del Worker -- de datos YA reales, nunca inventados) + `getComplianceRuleEvaluation()`. Reutiliza `Worker.complianceStatus` (F5.5) como señal, nunca lo recalcula; nunca lo cambia.
+- **2 modelos nuevos**: `ComplianceRule` (definición configurable) y `ComplianceRuleEvaluation` (resultado persistido, un registro por par workerId+jobOrderId).
+- **`POST/GET /compliance/rules`**, **`POST/GET /workers/:workerId/compliance-evaluation/:jobOrderId`** -- todos gateados por `compliance.verify` (escritura) o `documents.view` (lectura), mismo criterio que el resto de `compliance/router.ts`.
+
+### 8.2 Bug real encontrado y corregido durante la implementación
+
+Un test de "regla scoped nunca aplica fuera de su categoría" usaba la key `osha10` para verificar que NO se requiriera -- pero un test anterior en el mismo archivo ya había creado una regla UNIVERSAL (sin `jobCategoryId`) que también requiere `osha10`, y esa regla persiste en la DB del tenant de test durante toda la corrida. El test fallaba correctamente detectando una interferencia real entre fixtures, no un bug del motor. Corregido usando una key (`background_check`) que ninguna otra prueba del archivo solicita.
+
+### 8.3 Tests — 44 nuevos (todos passing)
+
+`compliance-rules.test.ts` (16, puro): scope AND (todos los campos no-nulos deben coincidir); reglas inactivas nunca seleccionadas; READY/INCOMPLETE/BLOCKED/NEEDS_REVIEW derivados correctamente; unión deduplicada de `requiredDocumentTypeKeys` entre reglas; determinismo; **fairness de lenguaje** (nunca "legally compliant"). `compliance.test.ts` (+8): RBAC 403; rechazo de document type key inventada; **flujo real completo** INCOMPLETE→READY tras verificar un documento real, con upsert (nunca duplica la fila); scope real por categoría del Job Order; AuditLog en creación de regla y evaluación.
+
+### 8.4 Suite completa
+
+1048 tests, 1042 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 8.5 Migraciones
+
+`20260717200000_f9_3_compliance_rules` -- 100% aditiva: 1 enum nuevo (`ComplianceEvaluationStatus`), 2 tablas nuevas (`ComplianceRule` con 3 FKs `ON DELETE SET NULL` por ser todas nullable; `ComplianceRuleEvaluation` con 2 FKs `ON DELETE RESTRICT`), 3 índices.
+
+### 8.6 Limitaciones conocidas
+
+- La evaluación es por (Worker, JobOrder) -- no existe todavía un Assignment real para derivar `assignmentType` de forma más precisa (F9.5 lo agregará); hoy se deriva de `Worker.employmentType`, una aproximación razonable documentada.
+- El motor de reglas no reemplaza el sweep de alertas de F5.5 -- son sistemas complementarios (F5.5 genera alertas reactivas por vencimiento/falta; F9.3 evalúa un snapshot bajo demanda contra reglas configurables).
+
+### 8.7 Commit
+
+`feat: F9.3 — configurable compliance rules`.
+
+**F9.3 completo.**

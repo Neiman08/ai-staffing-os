@@ -451,6 +451,7 @@ model Industry {
   categories JobCategory[]
   leads      Lead[] // F1
   campaigns  Campaign[] // F4
+  complianceRules ComplianceRule[]
 
   @@index([tenantId])
 }
@@ -523,6 +524,7 @@ model Company {
   contracts               Contract[]
   invoices                Invoice[]
   campaignCompanies       CampaignCompany[] // F4
+  complianceRules         ComplianceRule[]
   createdAt               DateTime                  @default(now())
   updatedAt               DateTime                  @updatedAt
 
@@ -814,6 +816,7 @@ model JobCategory {
   jobOrders              JobOrder[]
   opportunities          Opportunity[] // F1
   possibleForCompanies   Company[]     @relation("CompanyPossibleCategories") // F1
+  complianceRules        ComplianceRule[]
 
   @@index([tenantId])
 }
@@ -876,6 +879,7 @@ model Worker {
   payrollItems     PayrollItem[]
   alerts           ComplianceAlert[]
   onboardings      WorkerOnboarding[]
+  complianceRuleEvaluations ComplianceRuleEvaluation[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -923,6 +927,7 @@ model JobOrder {
   interviewPreviews InterviewPreview[]
   placementReadiness PlacementReadiness[]
   onboardings      WorkerOnboarding[]
+  complianceRuleEvaluations ComplianceRuleEvaluation[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -1282,6 +1287,81 @@ model DocumentChecklistItem {
 
   @@unique([workerOnboardingId, documentTypeId])
   @@index([tenantId, workerOnboardingId, status])
+}
+
+// F9.3: estado agregado de una evaluación de reglas de compliance --
+// NUNCA implica cumplimiento legal certificado, ver comentario del
+// módulo puro `compliance-rules.ts`. Distinto de `Worker.complianceStatus`
+// (F5.5, fijo COMPLIANT/PENDING/BLOCKED) -- este es el resultado de
+// aplicar reglas CONFIGURABLES.
+enum ComplianceEvaluationStatus {
+  NOT_EVALUATED
+  INCOMPLETE
+  NEEDS_REVIEW
+  BLOCKED
+  READY
+}
+
+// F9.3: definición CONFIGURABLE de una regla de compliance -- todo
+// campo de scope nullable significa "aplica a cualquier valor", un
+// valor no nulo debe coincidir exactamente (ver `ruleApplies()` en el
+// módulo puro). `requiredDocumentTypeKeys` reutiliza el catálogo YA
+// existente de `DocumentType` (por key, no una FK múltiple -- mismo
+// criterio ya usado por `JobOrder.requirements`).
+model ComplianceRule {
+  id                     String          @id @default(cuid())
+  tenantId               String
+  name                   String
+  state                  String?
+  industryId             String?
+  industry               Industry?       @relation(fields: [industryId], references: [id])
+  companyId              String?
+  company                Company?        @relation(fields: [companyId], references: [id])
+  jobCategoryId          String?
+  jobCategory            JobCategory?    @relation(fields: [jobCategoryId], references: [id])
+  assignmentType         EmploymentType?
+  requiredDocumentTypeKeys String[]      @default([])
+  active                 Boolean         @default(true)
+  // F9.3: quién configuró la regla -- del contexto de tenancy, nunca
+  // del body (mismo patrón que Candidate.createdById, F5.2).
+  createdById            String?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  @@index([tenantId, active])
+}
+
+// F9.3: resultado PERSISTIDO de evaluar las reglas configurables contra
+// UN Worker en el contexto de UN JobOrder (estado/industria/cliente/
+// categoría se derivan de ahí) -- un registro por par, mismo patrón de
+// upsert que el resto de F8/F9. Nunca crea/modifica un Assignment ni
+// cambia `Worker.complianceStatus` (ese sigue siendo dominio exclusivo
+// de F5.5).
+model ComplianceRuleEvaluation {
+  id                 String                     @id @default(cuid())
+  tenantId           String
+  workerId           String
+  worker             Worker                     @relation(fields: [workerId], references: [id])
+  jobOrderId         String
+  jobOrder           JobOrder                   @relation(fields: [jobOrderId], references: [id])
+  requiredChecks     String[]                   @default([])
+  satisfiedChecks    String[]                   @default([])
+  missingChecks      String[]                   @default([])
+  expiredChecks      String[]                   @default([])
+  blockers           String[]                   @default([])
+  warnings           String[]                   @default([])
+  manualReviewFlags  String[]                   @default([])
+  complianceStatus   ComplianceEvaluationStatus
+  rulesVersion       Int
+  evaluatedAt        DateTime
+  // F9.3: quién disparó la evaluación -- del contexto de tenancy, nunca
+  // del body (mismo patrón que Candidate.createdById, F5.2).
+  evaluatedById      String?
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@unique([workerId, jobOrderId])
+  @@index([tenantId, jobOrderId, complianceStatus])
 }
 
 model Project {
