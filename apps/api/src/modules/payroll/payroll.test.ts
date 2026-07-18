@@ -23,6 +23,7 @@ const createdJobOrderIds: string[] = [];
 const createdAssignmentIds: string[] = [];
 const createdTimeEntryIds: string[] = [];
 const createdPayrollRunIds: string[] = [];
+const createdShiftIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -35,6 +36,9 @@ before(async () => {
 });
 
 after(async () => {
+  if (createdShiftIds.length > 0) {
+    await prisma.shift.deleteMany({ where: { id: { in: createdShiftIds } } });
+  }
   if (createdPayrollRunIds.length > 0) {
     // onDelete: Cascade en PayrollItem.payrollRunId ya limpia los items.
     await prisma.payrollRun.deleteMany({ where: { id: { in: createdPayrollRunIds } } });
@@ -577,5 +581,279 @@ test("creating a Payroll run writes Activity + AuditLog", async () => {
   const activity = await prisma.activity.findFirst({ where: { entityType: "payrollRun", entityId: run.id } });
   assert.ok(activity);
   const audit = await prisma.auditLog.findFirst({ where: { entityType: "payrollRun", entityId: run.id, action: "payrollRun.created" } });
+  assert.ok(audit);
+});
+
+// ================= Shifts + extended TimeEntry lifecycle (F9.6) =================
+// F9.6: año 2030 para aislamiento total frente a los fixtures 2026/2029
+// de F5.6/F5.7 que conviven en el mismo archivo hasta su propio after().
+
+async function createShiftFixture(assignmentId: string, date: string, overrides: Record<string, unknown> = {}) {
+  const res = await fetch(`${baseUrl}/api/v1/shifts`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ assignmentId, date, startTime: "09:00", endTime: "17:00", ...overrides }),
+  });
+  const body = (await res.json()) as { id: string };
+  if (res.status === 201) createdShiftIds.push(body.id);
+  return { res, body };
+}
+
+test("POST /shifts as sales@titan.dev returns 403 (no shifts.create)", async () => {
+  const assignmentId = await createRealAssignment();
+  const res = await fetch(`${baseUrl}/api/v1/shifts`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ assignmentId, date: "2030-01-01", startTime: "09:00", endTime: "17:00" }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test("POST /shifts as operations@titan.dev creates a real Shift with computed scheduledHours", async () => {
+  const assignmentId = await createRealAssignment();
+  const { res, body } = (await createShiftFixture(assignmentId, "2030-01-01", { breakMinutes: 30 })) as unknown as {
+    res: Response;
+    body: { scheduledHours: string };
+  };
+  assert.equal(res.status, 201);
+  assert.equal(body.scheduledHours, "7.50");
+});
+
+test("POST /shifts computes scheduledHours correctly for an overnight shift crossing midnight", async () => {
+  const assignmentId = await createRealAssignment();
+  const { res, body } = (await createShiftFixture(assignmentId, "2030-01-02", { startTime: "22:00", endTime: "06:00" })) as unknown as {
+    res: Response;
+    body: { scheduledHours: string };
+  };
+  assert.equal(res.status, 201);
+  assert.equal(body.scheduledHours, "8.00");
+});
+
+test("POST /shifts rejects a malformed startTime", async () => {
+  const assignmentId = await createRealAssignment();
+  const res = await fetch(`${baseUrl}/api/v1/shifts`, {
+    method: "POST",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ assignmentId, date: "2030-01-03", startTime: "9am", endTime: "17:00" }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("GET /shifts filters by assignmentId", async () => {
+  const assignmentId = await createRealAssignment();
+  await createShiftFixture(assignmentId, "2030-01-04");
+
+  const res = await fetch(`${baseUrl}/api/v1/shifts?assignmentId=${assignmentId}`, { headers: OPERATIONS_HEADERS });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { items: Array<{ assignmentId: string }> };
+  assert.ok(body.items.length > 0);
+  for (const item of body.items) assert.equal(item.assignmentId, assignmentId);
+});
+
+test("PATCH /shifts/:id updates fields and PATCH on a nonexistent id returns 404", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createShiftFixture(assignmentId, "2030-01-05");
+  const shift = body as { id: string };
+
+  const patchRes = await fetch(`${baseUrl}/api/v1/shifts/${shift.id}`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ startTime: "08:00", endTime: "16:00", notes: "Shift moved earlier" }),
+  });
+  assert.equal(patchRes.status, 200);
+  const updated = (await patchRes.json()) as { startTime: string; scheduledHours: string };
+  assert.equal(updated.startTime, "08:00");
+  assert.equal(updated.scheduledHours, "8.00");
+
+  const notFoundRes = await fetch(`${baseUrl}/api/v1/shifts/does-not-exist`, {
+    method: "PATCH",
+    headers: OPERATIONS_HEADERS,
+    body: JSON.stringify({ startTime: "08:00" }),
+  });
+  assert.equal(notFoundRes.status, 404);
+});
+
+test("creating a Shift writes Activity on the Assignment + AuditLog on the Shift", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createShiftFixture(assignmentId, "2030-01-06");
+  const shift = body as { id: string };
+
+  const activity = await prisma.activity.findFirst({ where: { entityType: "assignment", entityId: assignmentId, subject: { contains: "Shift scheduled" } } });
+  assert.ok(activity);
+  const audit = await prisma.auditLog.findFirst({ where: { entityType: "shift", entityId: shift.id, action: "shift.created" } });
+  assert.ok(audit);
+});
+
+test("a Shift created under one tenant is invisible under another tenant context", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createShiftFixture(assignmentId, "2030-01-07");
+  const shift = body as { id: string };
+
+  await runWithTenancyContext({ tenantId: "tenant-does-not-exist", userId: "irrelevant", permissions: [] }, async () => {
+    const found = await prisma.shift.findFirst({ where: { id: shift.id, tenantId: "tenant-does-not-exist" } });
+    assert.equal(found, null);
+  });
+});
+
+// ---- TimeEntry: startAsDraft + submit/approve/reject/reopen lifecycle ----
+
+test("POST /time-entries with startAsDraft:true creates a DRAFT entry instead of PENDING", async () => {
+  const assignmentId = await createRealAssignment();
+  const { res, body } = (await createValidTimeEntry(assignmentId, { date: "2030-02-01", startAsDraft: true })) as unknown as {
+    res: Response;
+    body: { status: string };
+  };
+  assert.equal(res.status, 201);
+  assert.equal(body.status, "DRAFT");
+});
+
+test("a DRAFT TimeEntry is editable, same as PENDING", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-02", startAsDraft: true });
+  const entry = body as { id: string };
+
+  const patchRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}`, {
+    method: "PATCH",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ regularHours: 5 }),
+  });
+  assert.equal(patchRes.status, 200);
+  assert.equal(Number((await patchRes.json() as { regularHours: string }).regularHours), 5);
+});
+
+test("submitting a DRAFT with no matching Shift and no overtime routes to SUBMITTED", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-03", startAsDraft: true, regularHours: 8 });
+  const entry = body as { id: string };
+
+  const res = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/submit`, { method: "POST", headers: PAYROLL_HEADERS });
+  assert.equal(res.status, 200);
+  const updated = (await res.json()) as { status: string; overtimeFlag: boolean; discrepancyFlag: boolean };
+  assert.equal(updated.status, "SUBMITTED");
+  assert.equal(updated.overtimeFlag, false);
+  assert.equal(updated.discrepancyFlag, false);
+});
+
+test("submitting a DRAFT whose hours diverge from a matching Shift routes to NEEDS_REVIEW with discrepancy notes", async () => {
+  const assignmentId = await createRealAssignment();
+  await createShiftFixture(assignmentId, "2030-02-04", { startTime: "09:00", endTime: "17:00" }); // 8h scheduled
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-04", startAsDraft: true, regularHours: 11 }); // 3h off
+  const entry = body as { id: string };
+
+  const res = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/submit`, { method: "POST", headers: PAYROLL_HEADERS });
+  assert.equal(res.status, 200);
+  const updated = (await res.json()) as { status: string; discrepancyFlag: boolean; discrepancyNotes: string | null };
+  assert.equal(updated.status, "NEEDS_REVIEW");
+  assert.equal(updated.discrepancyFlag, true);
+  assert.ok(updated.discrepancyNotes?.includes("11h"));
+});
+
+test("a TimeEntry logging more than 8 total hours is flagged overtimeFlag:true at creation", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-05", regularHours: 6, overtimeHours: 3 });
+  const entry = body as unknown as { overtimeFlag: boolean };
+  assert.equal(entry.overtimeFlag, true);
+});
+
+test("submit rejects a non-DRAFT entry (already PENDING)", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-06" });
+  const entry = body as { id: string };
+  const res = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/submit`, { method: "POST", headers: PAYROLL_HEADERS });
+  assert.equal(res.status, 400);
+});
+
+test("approve/reject/reopen as sales@titan.dev all return 403 (no timeEntries.update)", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-07" });
+  const entry = body as { id: string };
+
+  const approveRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/approve`, { method: "POST", headers: SALES_HEADERS });
+  assert.equal(approveRes.status, 403);
+  const rejectRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/reject`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ rejectionReason: "test" }),
+  });
+  assert.equal(rejectRes.status, 403);
+  const reopenRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/reopen`, { method: "POST", headers: SALES_HEADERS });
+  assert.equal(reopenRes.status, 403);
+});
+
+test("approve transitions PENDING -> APPROVED and records approvedById", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-08" });
+  const entry = body as { id: string };
+
+  const res = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/approve`, { method: "POST", headers: PAYROLL_HEADERS });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as { status: string }).status, "APPROVED");
+  const row = await prisma.timeEntry.findUniqueOrThrow({ where: { id: entry.id } });
+  assert.ok(row.approvedById);
+});
+
+test("reject requires a rejectionReason, transitions to REJECTED, and reopen brings it back to DRAFT clearing the reason", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-09" });
+  const entry = body as { id: string };
+
+  const missingReasonRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/reject`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({}),
+  });
+  assert.equal(missingReasonRes.status, 400);
+
+  const rejectRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/reject`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ rejectionReason: "Hours look wrong, please recheck" }),
+  });
+  assert.equal(rejectRes.status, 200);
+  const rejected = (await rejectRes.json()) as { status: string; rejectionReason: string | null };
+  assert.equal(rejected.status, "REJECTED");
+  assert.equal(rejected.rejectionReason, "Hours look wrong, please recheck");
+
+  const reopenRes = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/reopen`, { method: "POST", headers: PAYROLL_HEADERS });
+  assert.equal(reopenRes.status, 200);
+  const reopened = (await reopenRes.json()) as { status: string; rejectionReason: string | null };
+  assert.equal(reopened.status, "DRAFT");
+  assert.equal(reopened.rejectionReason, null);
+});
+
+test("invalid transition DRAFT -> APPROVED (skipping submit) is rejected with 400", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-10", startAsDraft: true });
+  const entry = body as { id: string };
+
+  const res = await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/approve`, { method: "POST", headers: PAYROLL_HEADERS });
+  assert.equal(res.status, 400);
+});
+
+test("bulk-approve now also accepts SUBMITTED entries, not only PENDING", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-11", startAsDraft: true, regularHours: 8 });
+  const entry = body as { id: string };
+  await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/submit`, { method: "POST", headers: PAYROLL_HEADERS });
+
+  const res = await fetch(`${baseUrl}/api/v1/time-entries/bulk-approve`, {
+    method: "POST",
+    headers: PAYROLL_HEADERS,
+    body: JSON.stringify({ ids: [entry.id] }),
+  });
+  assert.equal(res.status, 200);
+  const result = (await res.json()) as { approved: number; skipped: number };
+  assert.equal(result.approved, 1);
+  const row = await prisma.timeEntry.findUniqueOrThrow({ where: { id: entry.id } });
+  assert.equal(row.status, "APPROVED");
+});
+
+test("approving a TimeEntry writes an AuditLog entry", async () => {
+  const assignmentId = await createRealAssignment();
+  const { body } = await createValidTimeEntry(assignmentId, { date: "2030-02-12" });
+  const entry = body as { id: string };
+  await fetch(`${baseUrl}/api/v1/time-entries/${entry.id}/approve`, { method: "POST", headers: PAYROLL_HEADERS });
+
+  const audit = await prisma.auditLog.findFirst({ where: { entityType: "timeEntry", entityId: entry.id, action: "timeEntry.approved" } });
   assert.ok(audit);
 });

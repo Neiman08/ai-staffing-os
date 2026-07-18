@@ -235,3 +235,51 @@ Rechazo real de crear un Assignment desde un Placement DRAFT (no aprobado); crea
 `feat: F9.5 — assignment lifecycle management`.
 
 **F9.5 completo.**
+
+## 11. Resultado de F9.6 — Shift and Time Structure
+
+### 11.1 Decisión de arquitectura (documentada antes de implementar)
+
+`packages/shared/src/schemas/payroll.ts` tenía el mismo comentario "no se amplía" que Assignment tuvo antes de F9.5 -- mismo criterio: EXTENSIÓN ADITIVA, no reemplazo. `TimeEntryStatus` pasa de 3 a 7 valores (DRAFT/PENDING/SUBMITTED/NEEDS_REVIEW/APPROVED/REJECTED/LOCKED); PENDING conserva su rol original exacto ("ya enviado, sin submit explícito" -- `createTimeEntry` lo sigue produciendo por default salvo que se pida `startAsDraft`), APPROVED/LOCKED conservan sus transiciones previas sin cambio. `TIME_ENTRY_STATUS_TRANSITIONS`/`isValidTimeEntryStatusTransition` viven en `packages/shared` (mismo patrón que Assignment/Candidate/Worker) -- el módulo puro `apps/api/.../time-entry-signals.ts` los re-exporta en vez de duplicarlos.
+
+Las banderas `overtimeFlag`/`discrepancyFlag` son SEÑALES, nunca una decisión automática: ningún código las usa para aprobar/rechazar por sí solo, solo para enrutar el submit determinísticamente (discrepancia real → `NEEDS_REVIEW`; sin discrepancia → `SUBMITTED`) y para que un humano las vea en el listado antes de aprobar. Sin Shift programado para el mismo Assignment+fecha, nunca hay discrepancia que evaluar -- no se inventa una expectativa (mismo criterio que `PlacementReadiness.missingInformation`, F8.10).
+
+### 11.2 Arquitectura
+
+- **`apps/api/.../operations-intelligence/time-entry-signals.ts`** (nuevo, puro, `TIME_ENTRY_SIGNALS_VERSION = 1`): `computeOvertimeFlag()` (>8h totales o overtime/double ya declaradas), `computeDiscrepancyFlag()` (compara total registrado vs. duración programada de un Shift real, umbral 1h de ruido), `computeShiftScheduledHours()` (maneja turnos que cruzan medianoche), `computeSubmissionTargetStatus()`. Re-exporta `TIME_ENTRY_STATUS_TRANSITIONS`/`isValidTimeEntryStatusTransition` desde `@ai-staffing-os/shared`. 14 tests unitarios.
+- **`packages/shared/src/schemas/payroll.ts`**: `timeEntryStatusSchema` extendido a 7 valores + `TIME_ENTRY_STATUS_TRANSITIONS`/`isValidTimeEntryStatusTransition` (canónicos); `createTimeEntryInputSchema` gana `startAsDraft` opcional; nuevo `rejectTimeEntryInputSchema` (rejectionReason obligatorio); `timeEntryListItemSchema` gana `overtimeFlag`/`discrepancyFlag`/`discrepancyNotes`/`rejectionReason`; nuevos `createShiftInputSchema`/`updateShiftInputSchema`/`shiftQuerySchema`/`shiftListItemSchema` (Shift CRUD, gap real confirmado por grep antes de implementar -- no existía).
+- **`packages/shared/src/permissions.ts`**: nuevo recurso `shifts` (CRUD keys `shifts.view/create/update/delete` generadas automáticamente). Asignado en el seed: Operations gana `shifts.view/create/update`; Payroll/Manager ganan `shifts.view` (solo lectura, para evaluar discrepancyFlag).
+- **`payroll/service.ts`** (extendido): Shift CRUD (`listShifts`/`createShift`/`updateShift`, sin delete -- no pedido). `createTimeEntry()`/`updateTimeEntry()` ahora calculan `overtimeFlag`/`discrepancyFlag` vía `computeSignalsForEntry()` (busca un Shift real para el mismo Assignment+fecha); `updateTimeEntry` ahora también acepta edición en DRAFT, no solo PENDING. Nuevas transiciones de una sola entrada: `submitTimeEntry()` (DRAFT → SUBMITTED/NEEDS_REVIEW, recalcula señales en el momento del submit por si las horas cambiaron mientras seguía DRAFT), `approveTimeEntry()`, `rejectTimeEntry()` (exige `rejectionReason`), `reopenTimeEntry()` (REJECTED → DRAFT, limpia el motivo -- nunca un rechazo permanente). `bulkApproveTimeEntries()` ahora acepta SUBMITTED además de PENDING como elegible (NEEDS_REVIEW queda excluido a propósito: exige revisión manual antes de aprobar).
+- **`payroll/router.ts`**: `GET/POST /shifts`, `PATCH /shifts/:id`, `POST /time-entries/:id/{submit,approve,reject,reopen}`. Todos los verbos de un solo TimeEntry reutilizan `timeEntries.update` (mismo criterio ya establecido en F5.6 para bulk-approve -- no se inventa un permiso nuevo por cada verbo).
+- **`packages/db/prisma/schema.prisma`**: `TimeEntryStatus` extendido (4 valores nuevos, aditivo). `Shift` gana `timezone String?` (mismo patrón que `InterviewPreview.timezone`, F8.9) + `notes String?`. `TimeEntry` gana `overtimeFlag`/`discrepancyFlag`/`discrepancyNotes`/`rejectionReason`/`notes`/`clockInAt`/`clockOutAt` (los dos últimos solo almacenan lo que un integrador real reporte vía `source=TIMECLOCK`, nunca inventan horas -- sin wiring de un integrador real todavía, campos reservados).
+
+### 11.3 Tests nuevos
+
+`time-entry-signals.test.ts` (14, puro) + 19 tests de integración nuevos en `payroll.test.ts` (Shift CRUD + RBAC + tenancy + AuditLog; startAsDraft; DRAFT editable; submit → SUBMITTED sin Shift/sin discrepancia; submit → NEEDS_REVIEW con discrepancia real y notas verificadas; overtimeFlag en creación; submit rechaza no-DRAFT; approve/reject/reopen RBAC 403; approve fija approvedById; reject exige motivo y reopen lo limpia; transición inválida DRAFT→APPROVED rechazada; bulk-approve ahora acepta SUBMITTED; AuditLog en approve). Total: 44/44 en `payroll.test.ts`.
+
+### 11.4 Suite completa
+
+1110 tests, 1104 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones nuevas. Typecheck y lint limpios en `apps/api` y `packages/shared`. RBAC 403 matrix (13 tests) verificado en aislamiento tras agregar el recurso `shifts`.
+
+### 11.5 Migraciones
+
+`20260717230000_f9_6_shift_time_structure` -- 100% aditiva: `ALTER TYPE "TimeEntryStatus" ADD VALUE` ×4 (DRAFT/SUBMITTED/NEEDS_REVIEW/REJECTED, cero valor eliminado/renombrado), `ALTER TABLE "Shift" ADD COLUMN` ×2, `ALTER TABLE "TimeEntry" ADD COLUMN` ×7 (todas nullable o con default, cero columna NOT NULL sin default).
+
+Además: `npm run seed` re-ejecutado (idempotente, solo upserts) para propagar el recurso de permiso `shifts` nuevo a la base de datos de desarrollo -- sin esto, todos los endpoints de Shift devuelven 403 aunque el código esté correcto (detectado y corregido durante la propia verificación de F9.6, ver §11.6).
+
+### 11.6 Bugs encontrados y corregidos durante F9.6
+
+- Bug de proceso (no de lógica): tras agregar el recurso `shifts` a `packages/shared/src/permissions.ts`, los tests de integración fallaban con 403 en todos los endpoints de Shift -- la base de datos de desarrollo no tenía las filas `Permission`/`RolePermission` nuevas hasta re-ejecutar `npm run seed`. Documentado acá para que F9.7-F9.12 no repitan la misma sorpresa si agregan más recursos de permiso nuevos.
+- Bug de test (no de producción): la primera corrida de `payroll.test.ts` se ejecutó sin `--test-concurrency=1` (el flag que sí usa `npm test`), lo que intercaló asserts de tests distintos y produjo fallos espurios con mensajes de otro test. Confirmado no-bug re-ejecutando con el flag correcto: 44/44 pass.
+
+### 11.7 Limitaciones conocidas
+
+- Shift no tiene `delete` expuesto -- no fue pedido explícitamente y evita huérfanos silenciosos en cálculos de discrepancia ya persistidos en TimeEntries existentes. La permission key `shifts.delete` existe (generada automáticamente por el catálogo CRUD) pero no está asignada a ningún rol ni tiene endpoint.
+- `clockInAt`/`clockOutAt` son campos reservados sin wiring real todavía (ningún integrador de reloj checador existe en el sistema) -- documentado como gap conocido para una fase futura, no un bug oculto.
+- Un Assignment puede tener más de un Shift el mismo día (split shift) por diseño -- `findScheduledHoursForEntry()` usa el primero por orden de creación cuando calcula la discrepancia, sin sumar turnos múltiples en una sola expectativa inventada.
+
+### 11.8 Commit
+
+`feat: F9.6 — shifts and time entry structure`.
+
+**F9.6 completo.**

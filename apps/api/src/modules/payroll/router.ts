@@ -2,9 +2,13 @@ import { Router } from "express";
 import {
   bulkApproveTimeEntriesInputSchema,
   createPayrollRunInputSchema,
+  createShiftInputSchema,
   createTimeEntryInputSchema,
   paginationQuerySchema,
+  rejectTimeEntryInputSchema,
+  shiftQuerySchema,
   timeEntryQuerySchema,
+  updateShiftInputSchema,
   updateTimeEntryInputSchema,
 } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
@@ -55,6 +59,71 @@ payrollRouter.post(
     }
   },
 );
+
+// F9.6: envía un DRAFT a revisión — reutiliza timeEntries.update (mismo
+// criterio ya establecido en F5.6 para bulk-approve: no se inventa un
+// permiso nuevo por cada verbo del lifecycle).
+payrollRouter.post("/time-entries/:id/submit", requirePermission("timeEntries.update"), async (req, res, next) => {
+  try {
+    res.json(await payrollService.submitTimeEntry(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+payrollRouter.post("/time-entries/:id/approve", requirePermission("timeEntries.update"), async (req, res, next) => {
+  try {
+    res.json(await payrollService.approveTimeEntry(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+payrollRouter.post("/time-entries/:id/reject", requirePermission("timeEntries.update"), async (req, res, next) => {
+  try {
+    const input = rejectTimeEntryInputSchema.parse(req.body);
+    res.json(await payrollService.rejectTimeEntry(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+payrollRouter.post("/time-entries/:id/reopen", requirePermission("timeEntries.update"), async (req, res, next) => {
+  try {
+    res.json(await payrollService.reopenTimeEntry(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================= Shifts (F9.6) =================
+
+payrollRouter.get("/shifts", requirePermission("shifts.view"), async (req, res, next) => {
+  try {
+    const query = shiftQuerySchema.parse(req.query);
+    res.json(await payrollService.listShifts(query));
+  } catch (err) {
+    next(err);
+  }
+});
+
+payrollRouter.post("/shifts", requirePermission("shifts.create"), async (req, res, next) => {
+  try {
+    const input = createShiftInputSchema.parse(req.body);
+    res.status(201).json(await payrollService.createShift(input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+payrollRouter.patch("/shifts/:id", requirePermission("shifts.update"), async (req, res, next) => {
+  try {
+    const input = updateShiftInputSchema.parse(req.body);
+    res.json(await payrollService.updateShift(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ================= Payroll Runs (F5.7) =================
 

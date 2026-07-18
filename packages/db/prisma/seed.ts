@@ -149,6 +149,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "companies.view",
     "pricingScenarios.view",
     "agents.view",
+    "shifts.view", // F9.6: necesita ver el Shift programado para evaluar discrepancyFlag
   ],
   Sales: [
     "companies.view",
@@ -197,6 +198,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "timeEntries.view",
     "agents.view",
     "matching.view", // F6.1: solo vista — nunca matching.run
+    "shifts.view", // F9.6
+    "shifts.create", // F9.6: Operations programa turnos
+    "shifts.update", // F9.6
   ],
   Marketing: [
     "companies.view",
@@ -234,6 +238,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "agents.view",
     "invoices.view", // F5.8
     "matching.view", // F6.1: solo vista — nunca matching.run
+    "shifts.view", // F9.6
   ],
 };
 

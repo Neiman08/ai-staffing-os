@@ -235,9 +235,19 @@ enum AssignmentStatus {
   TERMINATED
 }
 
+// F9.6: extendido de forma ADITIVA sobre F5.6 (PENDING/APPROVED/LOCKED,
+// conservan EXACTAMENTE su semántica y transiciones previas -- ver
+// `operations-intelligence/time-entry-signals.ts`). DRAFT/SUBMITTED/
+// NEEDS_REVIEW/REJECTED son etapas nuevas del lifecycle extendido;
+// `createTimeEntry` sigue produciendo PENDING sin cambios salvo que se
+// pida explícitamente el nuevo flujo (`startAsDraft`).
 enum TimeEntryStatus {
+  DRAFT
   PENDING
+  SUBMITTED
+  NEEDS_REVIEW
   APPROVED
+  REJECTED
   LOCKED
 }
 
@@ -1491,6 +1501,12 @@ model Shift {
   startTime    String // "22:00"
   endTime      String // "06:00"
   breakMinutes Int        @default(0)
+  // F9.6: nombre IANA opcional (ej. "America/Chicago") -- mismo patrón
+  // ya establecido por `InterviewPreview.timezone` (F8.9): campo String
+  // plano, descriptivo, sin conversión/aritmética de fechas. Nullable
+  // para no romper turnos existentes que nunca lo declararon.
+  timezone     String?
+  notes        String?
 
   @@index([tenantId, date])
 }
@@ -1509,6 +1525,17 @@ model TimeEntry {
   status        TimeEntryStatus @default(PENDING)
   source        TimeEntrySource @default(MANUAL)
   approvedById  String?
+  // F9.6: banderas de revisión -- SEÑALES, nunca una decisión
+  // automática de aprobación/rechazo (ver `time-entry-signals.ts`).
+  overtimeFlag     Boolean  @default(false)
+  discrepancyFlag  Boolean  @default(false)
+  discrepancyNotes String?
+  rejectionReason  String?
+  notes            String?
+  // F9.6: metadata de clock-in/out cuando `source = TIMECLOCK` -- solo
+  // almacena lo que un integrador real reporte, nunca inventa horas.
+  clockInAt        DateTime?
+  clockOutAt       DateTime?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 

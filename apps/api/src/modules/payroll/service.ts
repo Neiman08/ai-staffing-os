@@ -2,17 +2,29 @@ import type {
   BulkApproveTimeEntriesInput,
   BulkApproveTimeEntriesResult,
   CreatePayrollRunInput,
+  CreateShiftInput,
   CreateTimeEntryInput,
   Paginated,
   PayrollItem,
   PayrollRunDetail,
   PayrollRunListItem,
   PaginationQuery,
+  RejectTimeEntryInput,
+  ShiftListItem,
+  ShiftQuery,
   TimeEntryListItem,
   TimeEntryQuery,
+  TimeEntryStatusValue,
+  UpdateShiftInput,
   UpdateTimeEntryInput,
 } from "@ai-staffing-os/shared";
-import { isValidPayrollRunStatusTransition, PAYROLL_RUN_STATUS_TRANSITIONS } from "@ai-staffing-os/shared";
+import {
+  isValidPayrollRunStatusTransition,
+  isValidTimeEntryStatusTransition,
+  PAYROLL_RUN_STATUS_TRANSITIONS,
+  TIME_ENTRY_STATUS_TRANSITIONS,
+} from "@ai-staffing-os/shared";
+import { computeDiscrepancyFlag, computeOvertimeFlag, computeShiftScheduledHours, computeSubmissionTargetStatus } from "../operations-intelligence/time-entry-signals";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
@@ -39,6 +51,10 @@ type TimeEntryRow = {
   doubleHours: { toString(): string };
   status: string;
   source: string;
+  overtimeFlag: boolean;
+  discrepancyFlag: boolean;
+  discrepancyNotes: string | null;
+  rejectionReason: string | null;
 };
 
 function toListItem(entry: TimeEntryRow): TimeEntryListItem {
@@ -61,7 +77,37 @@ function toListItem(entry: TimeEntryRow): TimeEntryListItem {
     billAmount: billAmount.toFixed(2),
     payAmount: payAmount.toFixed(2),
     margin: (billAmount - payAmount).toFixed(2),
+    overtimeFlag: entry.overtimeFlag,
+    discrepancyFlag: entry.discrepancyFlag,
+    discrepancyNotes: entry.discrepancyNotes,
+    rejectionReason: entry.rejectionReason,
   };
+}
+
+/**
+ * F9.6: busca un Shift programado para el mismo Assignment+fecha -- si
+ * existe más de uno (split shift, ver createShiftInputSchema), usa el
+ * primero por orden de creación; no suma turnos múltiples en una sola
+ * "duración esperada" inventada.
+ */
+async function findScheduledHoursForEntry(assignmentId: string, date: Date): Promise<{ scheduledHours: number } | null> {
+  const shift = await scopedDb.shift.findFirst({
+    where: { assignmentId, date },
+    orderBy: { id: "asc" },
+  });
+  if (!shift) return null;
+  return { scheduledHours: computeShiftScheduledHours(shift.startTime, shift.endTime, shift.breakMinutes) };
+}
+
+async function computeSignalsForEntry(
+  assignmentId: string,
+  date: Date,
+  hours: { regularHours: number; overtimeHours: number; doubleHours: number },
+): Promise<{ overtimeFlag: boolean; discrepancyFlag: boolean; discrepancyNotes: string | null }> {
+  const scheduled = await findScheduledHoursForEntry(assignmentId, date);
+  const overtimeFlag = computeOvertimeFlag(hours);
+  const discrepancy = computeDiscrepancyFlag(hours, scheduled);
+  return { overtimeFlag, discrepancyFlag: discrepancy.flag, discrepancyNotes: discrepancy.notes };
 }
 
 export async function listTimeEntries(query: TimeEntryQuery): Promise<Paginated<TimeEntryListItem>> {
@@ -115,18 +161,29 @@ export async function createTimeEntry(input: CreateTimeEntryInput): Promise<Time
     throw AppError.conflict("A TimeEntry already exists for this Assignment and date", { existingId: existing.id });
   }
 
+  const hours = {
+    regularHours: input.regularHours ?? 0,
+    overtimeHours: input.overtimeHours ?? 0,
+    doubleHours: input.doubleHours ?? 0,
+  };
+  const signals = await computeSignalsForEntry(input.assignmentId, entryDate, hours);
+  const initialStatus: TimeEntryStatusValue = input.startAsDraft ? "DRAFT" : "PENDING";
+
   const created = await scopedDb.timeEntry.create({
     data: {
       tenantId: ctx.tenantId,
       assignmentId: input.assignmentId,
       date: entryDate,
-      regularHours: input.regularHours ?? 0,
-      overtimeHours: input.overtimeHours ?? 0,
-      doubleHours: input.doubleHours ?? 0,
+      regularHours: hours.regularHours,
+      overtimeHours: hours.overtimeHours,
+      doubleHours: hours.doubleHours,
       perDiem: input.perDiem,
       bonus: input.bonus,
-      status: "PENDING",
+      status: initialStatus,
       source: "MANUAL",
+      overtimeFlag: signals.overtimeFlag,
+      discrepancyFlag: signals.discrepancyFlag,
+      discrepancyNotes: signals.discrepancyNotes,
     },
     include: TIME_ENTRY_INCLUDE,
   });
@@ -141,7 +198,7 @@ export async function createTimeEntry(input: CreateTimeEntryInput): Promise<Time
     action: "timeEntry.created",
     entityType: "timeEntry",
     entityId: created.id,
-    after: { assignmentId: input.assignmentId, date: input.date, status: "PENDING" },
+    after: { assignmentId: input.assignmentId, date: input.date, status: initialStatus, overtimeFlag: signals.overtimeFlag, discrepancyFlag: signals.discrepancyFlag },
   });
 
   return toListItem(created);
@@ -151,21 +208,24 @@ export async function updateTimeEntry(id: string, input: UpdateTimeEntryInput): 
   const existing = await scopedDb.timeEntry.findUnique({ where: { id } });
   if (!existing) throw AppError.notFound("Time entry not found");
 
-  // F5.6 (plan §8, aprobado implícito por el ciclo de vida): una vez
-  // APPROVED (o LOCKED, cuando exista Payroll) las horas dejan de ser
-  // editables a mano libre — corregirlas requeriría primero revertir la
-  // aprobación, fuera de alcance de F5.6.
-  if (existing.status !== "PENDING") {
+  // F5.6 (plan §8, aprobado implícito por el ciclo de vida) + F9.6
+  // (extensión aditiva): editable mientras sigue DRAFT o PENDING — una
+  // vez SUBMITTED/NEEDS_REVIEW/APPROVED/LOCKED las horas dejan de ser
+  // editables a mano libre (corregirlas requeriría antes un reject/
+  // reopen explícito, ver `rejectTimeEntry`/`reopenTimeEntry`).
+  if (existing.status !== "PENDING" && existing.status !== "DRAFT") {
     throw AppError.badRequest(`Cannot edit a Time entry that is already ${existing.status}`, {
       status: existing.status,
     });
   }
 
-  assertReasonableHours({
+  const mergedHours = {
     regularHours: input.regularHours ?? Number(existing.regularHours),
     overtimeHours: input.overtimeHours ?? Number(existing.overtimeHours),
     doubleHours: input.doubleHours ?? Number(existing.doubleHours),
-  });
+  };
+  assertReasonableHours(mergedHours);
+  const signals = await computeSignalsForEntry(existing.assignmentId, existing.date, mergedHours);
 
   const updated = await scopedDb.timeEntry.update({
     where: { id },
@@ -175,6 +235,9 @@ export async function updateTimeEntry(id: string, input: UpdateTimeEntryInput): 
       doubleHours: input.doubleHours,
       perDiem: input.perDiem,
       bonus: input.bonus,
+      overtimeFlag: signals.overtimeFlag,
+      discrepancyFlag: signals.discrepancyFlag,
+      discrepancyNotes: signals.discrepancyNotes,
       // F5.6: assignmentId/date/status nunca aparecen acá —
       // updateTimeEntryInputSchema no los declara.
     },
@@ -211,7 +274,11 @@ export async function bulkApproveTimeEntries(input: BulkApproveTimeEntriesInput)
   if (!ctx) throw AppError.unauthorized();
 
   const candidates = await scopedDb.timeEntry.findMany({ where: { id: { in: input.ids } } });
-  const eligible = candidates.filter((e) => e.status === "PENDING");
+  // F9.6: SUBMITTED se suma a PENDING como elegible -- ambos representan
+  // "ya enviado, esperando revisión" en el lifecycle extendido; NEEDS_REVIEW
+  // se excluye a propósito (requiere revisión manual explícita antes de
+  // aprobar, nunca un bulk-approve ciego sobre una discrepancia detectada).
+  const eligible = candidates.filter((e) => e.status === "PENDING" || e.status === "SUBMITTED");
   const eligibleIds = eligible.map((e) => e.id);
 
   if (eligibleIds.length > 0) {
@@ -239,6 +306,223 @@ export async function bulkApproveTimeEntries(input: BulkApproveTimeEntriesInput)
   }
 
   return { approved: eligibleIds.length, skipped: candidates.length - eligibleIds.length };
+}
+
+/**
+ * F9.6: transición genérica de un único TimeEntry -- guardada por el
+ * grafo canónico (`TIME_ENTRY_STATUS_TRANSITIONS`, packages/shared).
+ * Nunca decide POR SÍ SOLA aprobar/rechazar: cada wrapper público abajo
+ * fija explícitamente el `to` que representa una acción humana real.
+ */
+async function transitionTimeEntry(
+  id: string,
+  to: TimeEntryStatusValue,
+  action: string,
+  extra?: { rejectionReason?: string | null; approvedById?: string | null },
+): Promise<TimeEntryListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.timeEntry.findUnique({ where: { id } });
+  if (!existing) throw AppError.notFound("Time entry not found");
+
+  const from = existing.status as TimeEntryStatusValue;
+  if (from === to) return toListItem(await scopedDb.timeEntry.findUniqueOrThrow({ where: { id }, include: TIME_ENTRY_INCLUDE }));
+
+  if (!isValidTimeEntryStatusTransition(from, to)) {
+    throw AppError.badRequest(`Cannot transition Time entry from ${from} to ${to}`, {
+      from,
+      to,
+      allowedFromCurrentStatus: TIME_ENTRY_STATUS_TRANSITIONS[from],
+    });
+  }
+
+  const updated = await scopedDb.timeEntry.update({
+    where: { id },
+    data: {
+      status: to,
+      rejectionReason: extra?.rejectionReason !== undefined ? extra.rejectionReason : undefined,
+      approvedById: extra?.approvedById !== undefined ? extra.approvedById : undefined,
+    },
+    include: TIME_ENTRY_INCLUDE,
+  });
+
+  await logActivity({
+    entityType: "assignment",
+    entityId: existing.assignmentId,
+    type: "SYSTEM",
+    subject: `Time entry status changed: ${from} → ${to}`,
+  });
+  await logAuditEvent({
+    action,
+    entityType: "timeEntry",
+    entityId: id,
+    before: { status: from },
+    after: { status: to },
+  });
+
+  return toListItem(updated);
+}
+
+/**
+ * F9.6: envía un DRAFT a revisión -- recalcula las señales sobre las
+ * horas ACTUALES (pudieron editarse mientras seguía DRAFT) y decide el
+ * destino determinísticamente vía `computeSubmissionTargetStatus`, nunca
+ * a discreción de quien llama.
+ */
+export async function submitTimeEntry(id: string): Promise<TimeEntryListItem> {
+  const existing = await scopedDb.timeEntry.findUnique({ where: { id } });
+  if (!existing) throw AppError.notFound("Time entry not found");
+  if (existing.status !== "DRAFT") {
+    throw AppError.badRequest(`Cannot submit a Time entry that is ${existing.status} (must be DRAFT)`, { status: existing.status });
+  }
+
+  const hours = {
+    regularHours: Number(existing.regularHours),
+    overtimeHours: Number(existing.overtimeHours),
+    doubleHours: Number(existing.doubleHours),
+  };
+  const signals = await computeSignalsForEntry(existing.assignmentId, existing.date, hours);
+  if (signals.discrepancyFlag !== existing.discrepancyFlag || signals.overtimeFlag !== existing.overtimeFlag) {
+    await scopedDb.timeEntry.update({
+      where: { id },
+      data: { overtimeFlag: signals.overtimeFlag, discrepancyFlag: signals.discrepancyFlag, discrepancyNotes: signals.discrepancyNotes },
+    });
+  }
+  const target = computeSubmissionTargetStatus(signals.discrepancyFlag);
+  return transitionTimeEntry(id, target, "timeEntry.submitted");
+}
+
+export async function approveTimeEntry(id: string): Promise<TimeEntryListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+  return transitionTimeEntry(id, "APPROVED", "timeEntry.approved", { approvedById: ctx.userId });
+}
+
+export async function rejectTimeEntry(id: string, input: RejectTimeEntryInput): Promise<TimeEntryListItem> {
+  return transitionTimeEntry(id, "REJECTED", "timeEntry.rejected", { rejectionReason: input.rejectionReason });
+}
+
+/** F9.6: REJECTED siempre reabre a DRAFT (nunca un rechazo permanente) -- limpia el rejectionReason previo al reabrir. */
+export async function reopenTimeEntry(id: string): Promise<TimeEntryListItem> {
+  return transitionTimeEntry(id, "DRAFT", "timeEntry.reopened", { rejectionReason: null });
+}
+
+// ================= Shifts (F9.6) =================
+
+function toShiftListItem(shift: {
+  id: string;
+  assignmentId: string;
+  assignment: { worker: { candidate: { firstName: string; lastName: string } }; jobOrder: { title: string } };
+  date: Date;
+  startTime: string;
+  endTime: string;
+  breakMinutes: number;
+  timezone: string | null;
+  notes: string | null;
+}): ShiftListItem {
+  return {
+    id: shift.id,
+    assignmentId: shift.assignmentId,
+    workerName: `${shift.assignment.worker.candidate.firstName} ${shift.assignment.worker.candidate.lastName}`,
+    jobOrderTitle: shift.assignment.jobOrder.title,
+    date: shift.date.toISOString(),
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    breakMinutes: shift.breakMinutes,
+    scheduledHours: computeShiftScheduledHours(shift.startTime, shift.endTime, shift.breakMinutes).toFixed(2),
+    timezone: shift.timezone,
+    notes: shift.notes,
+  };
+}
+
+const SHIFT_INCLUDE = {
+  assignment: { include: { worker: { include: { candidate: true } }, jobOrder: true } },
+} as const;
+
+export async function listShifts(query: ShiftQuery): Promise<Paginated<ShiftListItem>> {
+  const rows = await scopedDb.shift.findMany({
+    ...buildCursorArgs(query),
+    where: {
+      assignmentId: query.assignmentId,
+      date:
+        query.dateFrom || query.dateTo
+          ? {
+              gte: query.dateFrom ? new Date(query.dateFrom) : undefined,
+              lte: query.dateTo ? new Date(query.dateTo) : undefined,
+            }
+          : undefined,
+    },
+    orderBy: [{ date: "desc" }, { id: "desc" }],
+    include: SHIFT_INCLUDE,
+  });
+
+  const { items, nextCursor } = toCursorPage(rows, query.limit);
+  return { items: items.map(toShiftListItem), nextCursor };
+}
+
+export async function createShift(input: CreateShiftInput): Promise<ShiftListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const assignment = await scopedDb.assignment.findUnique({ where: { id: input.assignmentId } });
+  if (!assignment) throw AppError.badRequest("Assignment not found");
+
+  const created = await scopedDb.shift.create({
+    data: {
+      tenantId: ctx.tenantId,
+      assignmentId: input.assignmentId,
+      date: new Date(input.date),
+      startTime: input.startTime,
+      endTime: input.endTime,
+      breakMinutes: input.breakMinutes ?? 0,
+      timezone: input.timezone,
+      notes: input.notes,
+    },
+    include: SHIFT_INCLUDE,
+  });
+
+  await logActivity({
+    entityType: "assignment",
+    entityId: input.assignmentId,
+    type: "SYSTEM",
+    subject: `Shift scheduled: ${input.date.slice(0, 10)} ${input.startTime}-${input.endTime}`,
+  });
+  await logAuditEvent({
+    action: "shift.created",
+    entityType: "shift",
+    entityId: created.id,
+    after: { assignmentId: input.assignmentId, date: input.date, startTime: input.startTime, endTime: input.endTime },
+  });
+
+  return toShiftListItem(created);
+}
+
+export async function updateShift(id: string, input: UpdateShiftInput): Promise<ShiftListItem> {
+  const existing = await scopedDb.shift.findUnique({ where: { id } });
+  if (!existing) throw AppError.notFound("Shift not found");
+
+  const updated = await scopedDb.shift.update({
+    where: { id },
+    data: {
+      startTime: input.startTime,
+      endTime: input.endTime,
+      breakMinutes: input.breakMinutes,
+      timezone: input.timezone,
+      notes: input.notes,
+    },
+    include: SHIFT_INCLUDE,
+  });
+
+  await logAuditEvent({
+    action: "shift.updated",
+    entityType: "shift",
+    entityId: id,
+    before: { startTime: existing.startTime, endTime: existing.endTime, breakMinutes: existing.breakMinutes },
+    after: { startTime: updated.startTime, endTime: updated.endTime, breakMinutes: updated.breakMinutes },
+  });
+
+  return toShiftListItem(updated);
 }
 
 // ================= Payroll Runs (F5.7) =================

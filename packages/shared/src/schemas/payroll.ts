@@ -1,12 +1,35 @@
 import { z } from "zod";
 import { paginationQuerySchema } from "./common";
 
-// F5.6: enum real (packages/db/prisma/schema.prisma TimeEntryStatus) — no
-// se amplía. LOCKED nunca se alcanza desde este módulo: se reserva para
-// cuando una TimeEntry entra a un PayrollRun (F5.7, todavía no
-// implementado) — F5.6 solo produce PENDING/APPROVED.
-export const timeEntryStatusSchema = z.enum(["PENDING", "APPROVED", "LOCKED"]);
+// F5.6 (base) + F9.6 (extensión ADITIVA -- "no se amplía" original
+// revisitado por instrucción explícita del PO). PENDING/APPROVED/LOCKED
+// conservan EXACTAMENTE su semántica y transiciones previas; DRAFT/
+// SUBMITTED/NEEDS_REVIEW/REJECTED son etapas nuevas del lifecycle
+// extendido (submission/review explícitos). `createTimeEntry` sigue
+// produciendo PENDING sin cambios salvo que se pida el nuevo flujo
+// (`startAsDraft`).
+export const timeEntryStatusSchema = z.enum(["DRAFT", "PENDING", "SUBMITTED", "NEEDS_REVIEW", "APPROVED", "REJECTED", "LOCKED"]);
 export type TimeEntryStatusValue = z.infer<typeof timeEntryStatusSchema>;
+
+/**
+ * REJECTED siempre reabre a DRAFT (nunca un rechazo permanente).
+ * LOCKED es terminal (mismo criterio F5.7: una vez en un PayrollRun, no
+ * se reabre).
+ */
+export const TIME_ENTRY_STATUS_TRANSITIONS: Record<TimeEntryStatusValue, TimeEntryStatusValue[]> = {
+  DRAFT: ["SUBMITTED", "NEEDS_REVIEW"],
+  PENDING: ["APPROVED", "REJECTED", "LOCKED"],
+  SUBMITTED: ["APPROVED", "REJECTED", "NEEDS_REVIEW", "LOCKED"],
+  NEEDS_REVIEW: ["APPROVED", "REJECTED", "SUBMITTED"],
+  APPROVED: ["LOCKED"],
+  REJECTED: ["DRAFT"],
+  LOCKED: [],
+};
+
+export function isValidTimeEntryStatusTransition(from: TimeEntryStatusValue, to: TimeEntryStatusValue): boolean {
+  if (from === to) return true;
+  return TIME_ENTRY_STATUS_TRANSITIONS[from].includes(to);
+}
 
 export const timeEntryQuerySchema = paginationQuerySchema.extend({
   assignmentId: z.string().optional(),
@@ -21,6 +44,11 @@ export type TimeEntryQuery = z.infer<typeof timeEntryQuerySchema>;
 // categoría de hora y la suma diaria <=24h son "validaciones de negocio
 // razonables", verificadas en el servicio contra los valores fusionados
 // (mismo patrón que billRate/payRate de Job Orders).
+//
+// F9.6: `startAsDraft` opcional -- si es true, el TimeEntry nace DRAFT
+// (requiere un submit explícito después) en vez de PENDING directo
+// (comportamiento F5.6 original, preservado por default para no romper
+// integraciones existentes).
 export const createTimeEntryInputSchema = z.object({
   assignmentId: z.string().min(1),
   date: z.string().min(1),
@@ -29,8 +57,15 @@ export const createTimeEntryInputSchema = z.object({
   doubleHours: z.number().min(0).max(24).optional(),
   perDiem: z.number().nonnegative().optional(),
   bonus: z.number().nonnegative().optional(),
+  startAsDraft: z.boolean().optional(),
 });
 export type CreateTimeEntryInput = z.infer<typeof createTimeEntryInputSchema>;
+
+// F9.6: motivo obligatorio al rechazar -- nunca un rechazo silencioso.
+export const rejectTimeEntryInputSchema = z.object({
+  rejectionReason: z.string().min(1),
+});
+export type RejectTimeEntryInput = z.infer<typeof rejectTimeEntryInputSchema>;
 
 // F5.6: sin assignmentId/date (identidad inmutable del registro — cambiar
 // cualquiera de los dos sería, en efecto, otro TimeEntry) ni status (se
@@ -69,8 +104,72 @@ export const timeEntryListItemSchema = z.object({
   billAmount: z.string(),
   payAmount: z.string(),
   margin: z.string(),
+  // F9.6: señales de revisión -- nunca una decisión automática (ver
+  // apps/api time-entry-signals.ts).
+  overtimeFlag: z.boolean(),
+  discrepancyFlag: z.boolean(),
+  discrepancyNotes: z.string().nullable(),
+  rejectionReason: z.string().nullable(),
 });
 export type TimeEntryListItem = z.infer<typeof timeEntryListItemSchema>;
+
+// ================= Shifts (F9.6) =================
+
+// F9.6: sin assignmentId+date únicos forzados por schema (a diferencia de
+// TimeEntry) -- un Assignment puede, en principio, tener más de un Shift
+// planeado el mismo día (ej. split shift); no se inventa una restricción
+// de negocio que el PO no pidió.
+export const createShiftInputSchema = z.object({
+  assignmentId: z.string().min(1),
+  date: z.string().min(1),
+  startTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "startTime must be HH:MM (24h)"),
+  endTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "endTime must be HH:MM (24h)"),
+  breakMinutes: z.number().int().min(0).max(720).optional(),
+  timezone: z.string().min(1).optional(),
+  notes: z.string().optional(),
+});
+export type CreateShiftInput = z.infer<typeof createShiftInputSchema>;
+
+export const updateShiftInputSchema = z.object({
+  startTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "startTime must be HH:MM (24h)")
+    .optional(),
+  endTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "endTime must be HH:MM (24h)")
+    .optional(),
+  breakMinutes: z.number().int().min(0).max(720).optional(),
+  timezone: z.string().min(1).optional(),
+  notes: z.string().optional(),
+});
+export type UpdateShiftInput = z.infer<typeof updateShiftInputSchema>;
+
+export const shiftQuerySchema = paginationQuerySchema.extend({
+  assignmentId: z.string().optional(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+});
+export type ShiftQuery = z.infer<typeof shiftQuerySchema>;
+
+export const shiftListItemSchema = z.object({
+  id: z.string(),
+  assignmentId: z.string(),
+  workerName: z.string(),
+  jobOrderTitle: z.string(),
+  date: z.string(),
+  startTime: z.string(),
+  endTime: z.string(),
+  breakMinutes: z.number(),
+  scheduledHours: z.string(),
+  timezone: z.string().nullable(),
+  notes: z.string().nullable(),
+});
+export type ShiftListItem = z.infer<typeof shiftListItemSchema>;
 
 // F5.7: enum real (packages/db/prisma/schema.prisma PayrollRunStatus) —
 // no se amplía. Secuencia estrictamente hacia adelante, sin reapertura
