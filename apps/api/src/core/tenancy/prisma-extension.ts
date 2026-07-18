@@ -27,6 +27,7 @@ const STRICT_TENANT_MODELS = new Set([
   "DocumentChecklistItem",
   "ComplianceRule",
   "ComplianceRuleEvaluation",
+  "Placement",
   "Project",
   "Assignment",
   "Shift",

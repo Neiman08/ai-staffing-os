@@ -168,3 +168,35 @@ Un test de "regla scoped nunca aplica fuera de su categoría" usaba la key `osha
 `feat: F9.3 — configurable compliance rules`.
 
 **F9.3 completo.**
+
+## 9. Resultado de F9.4 — Placement
+
+### 9.1 Arquitectura
+
+- **`operations-intelligence/placement.ts`** (nuevo, puro): `PLACEMENT_TRANSITIONS` (DRAFT→PENDING_APPROVAL→APPROVED→READY_FOR_ONBOARDING→ACTIVE→COMPLETED, CANCELLED reversible a DRAFT) + `checkPlacementTransition()` -- valida reglas de negocio ADEMÁS del grafo: compensación (`payRate`/`billRate`) debe estar explícita antes de avanzar más allá de DRAFT/CANCELLED (nunca inferida), y Placement Readiness NOT_READY bloquea cualquier estado operativo.
+- **Nuevo módulo `placements/`** (paralelo a `assignments/`/`workers/`, no forzado dentro de un módulo existente dado que Placement es un dominio genuinamente nuevo): `createPlacement()` (idempotente, exige `PlacementReadiness` YA evaluada, 400 si no existe; enlaza `workerId` automáticamente si el Candidate ya tiene Worker, nunca crea uno), `getPlacement()`/`getPlacementById()`, `updatePlacement()` (campos no sensibles al estado), `updatePlacementStatus()` (único camino para cambiar `status`, registra `approverId`/`approvedAt` al llegar a APPROVED).
+- **Nuevo modelo `Placement`**: un registro por par `(candidateId, jobOrderId)`. `payRate`/`billRate` nullable -- si faltan, el registro nace en DRAFT con un blocker explícito en el propio registro (`blockers: string[]`), nunca una compensación inventada.
+- **`POST/GET /candidates/:candidateId/placement/:jobOrderId`**, **`GET/PATCH /placements/:id`**, **`PATCH /placements/:id/status`** -- gateados por `assignments.{create,view,update}` (mismo permiso que Assignments, ya que Operations gestiona ambos y un Placement antecede a un Assignment en el flujo).
+
+### 9.2 Tests — 21 nuevos (todos passing)
+
+`placement.test.ts` (12, puro): transiciones idempotentes/válidas/inválidas; CANCELLED reversible solo a DRAFT; COMPLETED terminal; compensación faltante bloquea cualquier avance salvo DRAFT/CANCELLED; NOT_READY bloquea estados operativos; readiness no-READY_FOR_APPROVAL es warning, no blocker. `placements.test.ts` (+9): RBAC 403; 400 sin Placement Readiness previa; creación real con blocker de compensación visible, sin tocar `Candidate.status`; idempotencia; PATCH status rechaza PENDING_APPROVAL sin compensación, permite tras setearla; **rechazo real de salto DRAFT→ACTIVE** (nunca se activa automáticamente); camino feliz completo DRAFT→...→COMPLETED con `approverId`/`approvedAt` reales; CANCELLED reversible; AuditLog en creación y cambio de estado.
+
+### 9.3 Suite completa
+
+1069 tests, 1063 pass, 1 fail preexistente sin relación (`prospecting.test.ts`, OpenAI real), 5 skip -- cero regresiones. Typecheck y lint limpios.
+
+### 9.4 Migraciones
+
+`20260717210000_f9_4_placement` -- 100% aditiva: 1 enum nuevo (`PlacementStatus`), 1 tabla nueva (`Placement`) con 4 FKs (Candidate/Company/JobOrder `ON DELETE RESTRICT`, Worker `ON DELETE SET NULL`), 2 índices.
+
+### 9.5 Limitaciones conocidas
+
+- `@@unique([candidateId, jobOrderId])` significa un único registro de Placement por par para siempre -- un Placement CANCELLED se reabre a DRAFT (mismo registro), nunca se crea uno nuevo para el mismo par. Decisión conservadora documentada: evita la complejidad de "múltiples placements históricos, solo uno activo" sin que la instrucción lo pidiera explícitamente.
+- `shiftType` reutiliza el enum `ShiftType` ya existente (DAY/NIGHT/WEEKEND/ROTATING) en vez de un campo de texto libre para "shift" -- más estructurado y consistente con `JobOrder.shiftType`.
+
+### 9.6 Commit
+
+`feat: F9.4 — approval-gated placements`.
+
+**F9.4 completo.**

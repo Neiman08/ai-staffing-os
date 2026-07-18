@@ -525,6 +525,7 @@ model Company {
   invoices                Invoice[]
   campaignCompanies       CampaignCompany[] // F4
   complianceRules         ComplianceRule[]
+  placements              Placement[]
   createdAt               DateTime                  @default(now())
   updatedAt               DateTime                  @updatedAt
 
@@ -849,6 +850,7 @@ model Candidate {
   interviewPreviews InterviewPreview[]
   placementReadiness PlacementReadiness[]
   onboardings      WorkerOnboarding[]
+  placements       Placement[]
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -880,6 +882,7 @@ model Worker {
   alerts           ComplianceAlert[]
   onboardings      WorkerOnboarding[]
   complianceRuleEvaluations ComplianceRuleEvaluation[]
+  placements       Placement[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -928,6 +931,7 @@ model JobOrder {
   placementReadiness PlacementReadiness[]
   onboardings      WorkerOnboarding[]
   complianceRuleEvaluations ComplianceRuleEvaluation[]
+  placements       Placement[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -1362,6 +1366,60 @@ model ComplianceRuleEvaluation {
 
   @@unique([workerId, jobOrderId])
   @@index([tenantId, jobOrderId, complianceStatus])
+}
+
+// F9.4: transición APROBADA entre reclutamiento y operaciones -- nunca
+// se activa automáticamente (`ACTIVE` es siempre una transición manual
+// explícita). `COMPLETED` es terminal; `CANCELLED` siempre puede
+// reabrirse a `DRAFT` (nunca un rechazo permanente).
+enum PlacementStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  READY_FOR_ONBOARDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+// F9.4: Placement -- un registro por par (candidateId, jobOrderId,
+// mismo patrón de unicidad que el resto de F8/F9). Exige una
+// `PlacementReadiness` YA evaluada para crearse (consumida como señal,
+// nunca recalculada). `payRate`/`billRate` son nullable -- si faltan,
+// el Placement queda en DRAFT con un blocker explícito, nunca se
+// infiere una compensación silenciosamente (ver `placement.ts`).
+model Placement {
+  id             String          @id @default(cuid())
+  tenantId       String
+  candidateId    String
+  candidate      Candidate       @relation(fields: [candidateId], references: [id])
+  workerId       String?
+  worker         Worker?         @relation(fields: [workerId], references: [id])
+  companyId      String
+  company        Company         @relation(fields: [companyId], references: [id])
+  jobOrderId     String
+  jobOrder       JobOrder        @relation(fields: [jobOrderId], references: [id])
+  payRate        Decimal?        @db.Decimal(10, 2)
+  billRate       Decimal?        @db.Decimal(10, 2)
+  startDate      DateTime?
+  endDate        DateTime?
+  shiftType      ShiftType?
+  status         PlacementStatus @default(DRAFT)
+  blockers       String[]        @default([])
+  warnings       String[]        @default([])
+  // F9.4: quién aprobó (APPROVED) -- nunca del body, se completa en el
+  // wiring al validar la transición.
+  approverId     String?
+  approvedAt     DateTime?
+  notes          String?
+  // F9.4: quién creó el Placement -- del contexto de tenancy, nunca del
+  // body (mismo patrón que Candidate.createdById, F5.2).
+  createdById    String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([candidateId, jobOrderId])
+  @@index([tenantId, jobOrderId, status])
 }
 
 model Project {
