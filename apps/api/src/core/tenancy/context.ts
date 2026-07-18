@@ -16,6 +16,11 @@ export interface TenancyContext {
   // sin MFA", el gate de MFA no aplica a ese actor.
   mfaVerified?: boolean;
   mfaEnforced?: boolean;
+  // F10.1: ver ResolvedIdentity en modules/auth/auth-provider.ts --
+  // mismo significado, poblado 1:1 desde ahí por tenancyMiddleware.
+  companyId?: string;
+  workerId?: string;
+  candidateId?: string;
 }
 
 const storage = new AsyncLocalStorage<TenancyContext>();

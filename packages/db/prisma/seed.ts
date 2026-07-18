@@ -71,6 +71,26 @@ async function seedTenant() {
   });
 }
 
+// F10.1: segundo tenant, alcance mínimo -- exclusivamente para que
+// F10.11 pueda probar fuga real entre tenants vía HTTP (dev-bypass con
+// x-dev-user de tenant-acme nunca debe ver datos de tenant-titan, ni al
+// revés). Nunca se le agregan Candidates/Workers/JobOrders completos --
+// alcance mínimo suficiente para el test de aislamiento (ver
+// docs/F10_PLAN.md §1.2/§2), evita inflar el seed innecesariamente.
+async function seedSecondTenant() {
+  return prisma.tenant.upsert({
+    where: { id: "tenant-acme" },
+    update: { name: "Acme Staffing Client Co", slug: "acme" },
+    create: {
+      id: "tenant-acme",
+      name: "Acme Staffing Client Co",
+      slug: "acme",
+      plan: "STARTER",
+      settings: { timezone: "America/Chicago" },
+    },
+  });
+}
+
 // ============================================================
 // 2. Permissions (imported from packages/shared — single source of
 // truth; F1 found a real bug where this catalog was duplicated here
@@ -97,6 +117,11 @@ async function seedPermissions() {
 
 const ALL_KEYS = ALL_PERMISSIONS.map((p) => p.key);
 
+// F10.1: todo rol autenticado (interno o de portal) tiene su propia
+// bandeja de notificaciones -- se agrega al final de cada array de rol
+// en vez de duplicarlo en los 15 roles.
+const NOTIFICATION_KEYS = ["notifications.view", "notifications.markRead"];
+
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   CEO: ALL_KEYS,
   Admin: ALL_KEYS.filter((k) => k !== "payroll.approve"),
@@ -116,6 +141,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "agents.view",
     "matching.view", // F6.1
     "matching.run", // F6.1
+    ...NOTIFICATION_KEYS,
   ],
   Compliance: [
     "candidates.view",
@@ -136,6 +162,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "incidents.view", // F9.10
     "incidents.create", // F9.10: SAFETY/COMPLIANCE_ISSUE son tipos frecuentes desde este rol
     "incidents.update", // F9.10
+    ...NOTIFICATION_KEYS,
   ],
   Payroll: [
     "timeEntries.view",
@@ -153,6 +180,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "pricingScenarios.view",
     "agents.view",
     "shifts.view", // F9.6: necesita ver el Shift programado para evaluar discrepancyFlag
+    ...NOTIFICATION_KEYS,
   ],
   Sales: [
     "companies.view",
@@ -186,6 +214,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "missions.view", // F4
     "missions.create", // F4
     "missions.update", // F4 — pausar/cancelar/cerrar; missions.delete no se asigna a ningún rol (ver plan §addendum)
+    "clientJobs.view", // F10.3: Sales también participa de la revisión de solicitudes de cliente
+    "clientJobs.approve", // F10.3
+    ...NOTIFICATION_KEYS,
   ],
   Operations: [
     "jobOrders.view",
@@ -207,6 +238,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "incidents.view", // F9.10
     "incidents.create", // F9.10: Operations reporta la mayoría de incidentes operativos
     "incidents.update", // F9.10
+    "clientJobs.view", // F10.3: Operations convierte solicitudes aprobadas en JobOrder real
+    "clientJobs.approve", // F10.3
+    ...NOTIFICATION_KEYS,
   ],
   Marketing: [
     "companies.view",
@@ -215,6 +249,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "leads.view",
     "opportunities.view",
     "agents.view",
+    ...NOTIFICATION_KEYS,
   ],
   HR: [
     "candidates.view",
@@ -225,6 +260,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "agents.view",
     "incidents.view", // F9.10
     "incidents.create", // F9.10: WORKER_COMPLAINT/ATTENDANCE son tipos frecuentes desde este rol
+    ...NOTIFICATION_KEYS,
   ],
   Accounting: [
     "timeEntries.view",
@@ -236,6 +272,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "invoices.create", // F5.8
     "invoices.update", // F5.8
     "invoices.send", // F5.8
+    ...NOTIFICATION_KEYS,
   ],
   Manager: [
     "companies.view",
@@ -255,6 +292,58 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "matching.view", // F6.1: solo vista — nunca matching.run
     "shifts.view", // F9.6
     "incidents.view", // F9.10
+    "auditLogs.view", // F10.9: visibilidad amplia ya establecida en Manager para el resto de los dominios
+    ...NOTIFICATION_KEYS,
+  ],
+  // ================= F10.1: Roles de portal =================
+  // CLIENT_ADMIN/CLIENT_MANAGER/WORKER/CANDIDATE nunca reciben ningún
+  // permiso *interno* de CRUD amplio (assignments.view, timeEntries.view,
+  // documents.view, etc.) -- esos gatean endpoints internos SIN filtro de
+  // ownership (devuelven todo el tenant). En su lugar usan los recursos
+  // `portal*` dedicados (F10.1 §2 / docs/F10_PLAN.md), cuyo service layer
+  // siempre aplica el filtro de ownership real (ctx.companyId/workerId/
+  // candidateId), nunca confía en el query param.
+  CLIENT_ADMIN: [
+    "portalProfile.view",
+    "portalProfile.update",
+    "clientJobs.view",
+    "clientJobs.create",
+    "clientJobs.update", // editar/cancelar sus propias solicitudes (nunca clientJobs.approve -- eso es revisión interna)
+    "portalAssignments.view",
+    "portalTimeEntries.view",
+    "portalTimeEntries.update", // aprobar/rechazar horas de su propia Company
+    "portalIncidents.view",
+    "auditLogs.view", // acotado a su Company en el service, nunca tenant-wide
+    ...NOTIFICATION_KEYS,
+  ],
+  CLIENT_MANAGER: [
+    "portalProfile.view",
+    "portalProfile.update",
+    "clientJobs.view",
+    "clientJobs.create", // puede enviar solicitudes, pero no editar/cancelar las de otros (sin clientJobs.update)
+    "portalAssignments.view",
+    "portalTimeEntries.view", // solo lectura -- sin aprobar horas (menos permisos que CLIENT_ADMIN, pedido explícito)
+    "portalIncidents.view",
+    ...NOTIFICATION_KEYS,
+  ],
+  WORKER: [
+    "portalProfile.view",
+    "portalProfile.update",
+    "portalDocuments.view",
+    "portalAssignments.view",
+    "portalTimeEntries.view",
+    "portalTimeEntries.create",
+    "portalTimeEntries.update", // solo mientras DRAFT -- validado en el service, no en RBAC
+    "portalIncidents.view",
+    "auditLogs.view", // acotado a su propio historial
+    ...NOTIFICATION_KEYS,
+  ],
+  CANDIDATE: [
+    "portalProfile.view",
+    "portalProfile.update",
+    "portalDocuments.view",
+    "auditLogs.view", // acotado a su propio historial
+    ...NOTIFICATION_KEYS,
   ],
 };
 
@@ -320,6 +409,87 @@ async function seedUsers(tenantId: string, roleMap: Map<string, string>) {
   }
 
   return userMap;
+}
+
+// F10.1: usuarios de portal reales para tenant-titan -- deterministas
+// (`x-dev-user` header) para que dev-bypass, e2e y verificación manual
+// puedan simular cada persona de portal sin credenciales de Clerk. Se
+// enlazan a fixtures YA existentes del seed (company-01, worker-01,
+// candidate-029) en vez de inventar registros nuevos -- reutiliza antes
+// de duplicar (docs/F10_PLAN.md §2). Se llama DESPUÉS de que Companies/
+// Workers/Candidates ya existen (ver orden en main()).
+const PORTAL_USERS: Array<{
+  role: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  companyId?: string;
+  workerId?: string;
+  candidateId?: string;
+}> = [
+  { role: "CLIENT_ADMIN", email: "client-admin@titan.dev", firstName: "Patricia", lastName: "Alvarado", companyId: "company-01" },
+  { role: "CLIENT_MANAGER", email: "client-manager@titan.dev", firstName: "Ramón", lastName: "Escobar", companyId: "company-01" },
+  { role: "WORKER", email: "worker-portal@titan.dev", firstName: "Marcus", lastName: "Reyes", workerId: "worker-01" },
+  { role: "CANDIDATE", email: "candidate-portal@titan.dev", firstName: "Daniela", lastName: "Ortiz", candidateId: "candidate-029" },
+];
+
+async function seedPortalUsers(tenantId: string, roleMap: Map<string, string>) {
+  for (const u of PORTAL_USERS) {
+    await prisma.user.upsert({
+      where: { tenantId_email: { tenantId, email: u.email } },
+      update: {
+        firstName: u.firstName,
+        lastName: u.lastName,
+        roleId: roleMap.get(u.role)!,
+        companyId: u.companyId ?? null,
+        workerId: u.workerId ?? null,
+        candidateId: u.candidateId ?? null,
+      },
+      create: {
+        tenantId,
+        email: u.email,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        roleId: roleMap.get(u.role)!,
+        companyId: u.companyId,
+        workerId: u.workerId,
+        candidateId: u.candidateId,
+      },
+    });
+  }
+}
+
+// F10.1: Company + CLIENT_ADMIN mínimos para tenant-acme -- exclusivo
+// para el test de fuga real entre tenants de F10.11, ver
+// seedSecondTenant() más arriba.
+async function seedAcmeCompanyAndClientAdmin(tenantId: string, roleMap: Map<string, string>, industryMap: Map<string, string>) {
+  const company = await prisma.company.upsert({
+    where: { id: "company-acme-01" },
+    update: { name: "Acme Manufacturing (tenant-acme)" },
+    create: {
+      id: "company-acme-01",
+      tenantId,
+      name: "Acme Manufacturing (tenant-acme)",
+      industryId: industryMap.get("Manufacturing")!,
+      status: "CLIENT",
+      city: "Milwaukee",
+      state: "WI",
+      origin: "DEMO_SEED",
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { tenantId_email: { tenantId, email: "client-admin@acme.dev" } },
+    update: { roleId: roleMap.get("CLIENT_ADMIN")!, companyId: company.id },
+    create: {
+      tenantId,
+      email: "client-admin@acme.dev",
+      firstName: "Nicolás",
+      lastName: "Ferreira",
+      roleId: roleMap.get("CLIENT_ADMIN")!,
+      companyId: company.id,
+    },
+  });
 }
 
 // ============================================================
@@ -1661,13 +1831,16 @@ async function main() {
   console.log("Seeding AI Staffing OS (F0)...");
 
   const tenant = await seedTenant();
+  const acmeTenant = await seedSecondTenant(); // F10.1: segundo tenant, alcance mínimo (ver docs/F10_PLAN.md §1.2/§2)
   const permissionIds = await seedPermissions();
   const roleMap = await seedRoles(tenant.id, permissionIds);
+  const acmeRoleMap = await seedRoles(acmeTenant.id, permissionIds);
   const userMap = await seedUsers(tenant.id, roleMap);
   const industryMap = await seedIndustries();
   const categoryMap = await seedJobCategories(industryMap);
   const documentTypeMap = await seedDocumentTypes();
   await seedCompanies(industryMap, categoryMap);
+  await seedAcmeCompanyAndClientAdmin(acmeTenant.id, acmeRoleMap, industryMap); // F10.1
   await seedLeads(tenant.id, industryMap, userMap);
   await seedOpportunities(tenant.id, categoryMap, userMap);
   await seedFollowUps(tenant.id, userMap);
@@ -1676,6 +1849,7 @@ async function main() {
   const { seeds } = await seedCandidates(tenant.id, categoryMap);
   const workers = await seedWorkers(tenant.id, seeds);
   await seedDocuments(tenant.id, workers, documentTypeMap, CATEGORY_SEED_CERTS);
+  await seedPortalUsers(tenant.id, roleMap); // F10.1: depende de company-01/worker-01/candidate-029 ya existentes
 
   const jobOrders = await seedJobOrders(tenant.id, categoryMap);
   await seedProjectsAndAssignments(tenant.id, workers, jobOrders);

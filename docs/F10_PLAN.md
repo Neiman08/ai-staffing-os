@@ -60,3 +60,40 @@ Leídos completos antes de escribir código: `docs/F9_FINAL_REPORT.md`, `docs/F8
 **Permission matrix**: documentada en `packages/shared/src/permissions.ts` con comentarios inline, resources nuevos (`clientJobs`, `portalProfile`, `notifications`) generan CRUD automático; acciones especiales nuevas solo donde CRUD no alcanza: `clientJobs.approve` (revisión interna → CONVERTED_TO_JOB_ORDER), `notifications.markRead`.
 
 Continúa con la implementación real en la subfase correspondiente.
+
+## 3. Resultado de F10.1 — Roles and Permissions
+
+### 3.1 Implementado
+
+- **Schema** (`User`): 3 columnas nuevas nullable (`companyId`/`workerId`/`candidateId`) + FKs `ON DELETE SET NULL` + 3 índices. Migración `20260718010000_f10_1_portal_identity`, 100% aditiva.
+- **`ResolvedIdentity`/`TenancyContext`**: 3 campos opcionales nuevos, poblados por `DevBypassAuthProvider` desde el `User` resuelto.
+- **`packages/shared/src/permissions.ts`**: 8 recursos nuevos (`clientJobs`, `portalProfile`, `notifications`, `portalAssignments`, `portalTimeEntries`, `portalDocuments`, `portalIncidents`, `auditLogs`) + 2 special keys (`clientJobs.approve`, `notifications.markRead`). Decisión de seguridad central documentada en el propio archivo (comentario inline): los recursos `portal*` están DELIBERADAMENTE separados de sus equivalentes internos para que un rol de portal nunca pueda alcanzar un endpoint interno sin ownership filtering.
+- **4 roles nuevos** en el seed: `CLIENT_ADMIN`, `CLIENT_MANAGER` (subconjunto estricto de `CLIENT_ADMIN`, verificado por test), `WORKER`, `CANDIDATE` -- ninguno recibe un solo permiso interno de CRUD amplio (verificado por test exhaustivo de exclusión).
+- **Segundo tenant** `tenant-acme` con una Company mínima (`company-acme-01`) y un `CLIENT_ADMIN` (`client-admin@acme.dev`), exclusivamente para pruebas de fuga real entre tenants.
+- **4 usuarios de portal deterministas** bajo `tenant-titan`, enlazados a fixtures YA existentes del seed (nunca inventados): `client-admin@titan.dev`/`client-manager@titan.dev` → `company-01`; `worker-portal@titan.dev` → `worker-01`; `candidate-portal@titan.dev` → `candidate-029`.
+- **`GET /auth/me`** extendido con `companyId`/`workerId`/`candidateId` -- el frontend los usará (F10.2+) para decidir a qué shell de portal enrutar, nunca inspeccionando el nombre del rol como string mágico.
+- **`notifications.view`/`notifications.markRead`** agregados a los 11 roles internos preexistentes además de los 4 nuevos (bandeja de notificaciones universal, F10.8).
+- **`auditLogs.view`** agregado a Manager (visibilidad amplia ya establecida en ese rol) además de CEO/Admin (vía `ALL_KEYS`) y los roles de portal (acotado por ownership en el service, F10.9).
+- **`clientJobs.view`/`clientJobs.approve`** agregados a Sales y Operations (revisión interna de solicitudes de cliente, F10.3).
+
+### 3.2 Tests nuevos
+
+`portal-identity.test.ts` (12 tests de integración): `/auth/me` resuelve correctamente cada identidad de portal (companyId/workerId/candidateId reales); aislamiento de tenant confirmado para `client-admin@acme.dev`; **los 4 roles de portal nunca reciben ni un solo permiso interno sin ownership** (lista explícita de 32 keys verificada por exact-match, nunca substring); CLIENT_MANAGER es subconjunto estricto y estrictamente menor que CLIENT_ADMIN, con los 3 bloqueadores explícitos del PO verificados uno por uno (`clientJobs.update`, `portalTimeEntries.update`, `auditLogs.view`); WORKER/CANDIDATE comparten la forma de autoservicio pero solo WORKER tiene assignments/time entries; un rol interno (Recruiter) nunca recibe un permiso de portal; fuga de tenant a nivel Prisma confirmada para el `User` de acme.
+
+### 3.3 Suite completa
+
+1189 tests, 1183 pass, 1 fail preexistente sin relación (`prospecting.test.ts`), 5 skip -- cero regresiones. La matriz legacy `rbac-403-matrix.test.ts` (F6.9) sigue pasando sin modificar -- su propio test de coherencia interna no asume un total fijo de roles en la base de datos.
+
+### 3.4 Migraciones
+
+`20260718010000_f10_1_portal_identity` -- 100% aditiva.
+
+### 3.5 Decisión de seguridad documentada (la más importante de F10)
+
+Un rol de portal JAMÁS recibe un permission key que gatee un endpoint interno sin ownership filtering (`workers.view`, `assignments.view`, `timeEntries.view`, `documents.view`, `companies.view`, `candidates.view`, `contacts.view`, `shifts.*`, `incidents.*`). Esto se verifica automáticamente en cada subfase siguiente: cualquier permiso nuevo que se le agregue a un rol de portal en el seed debe ser un recurso `portal*`/`clientJobs`/`notifications`/`auditLogs`, nunca uno de la lista anterior -- el test `portal-identity.test.ts` fallaría inmediatamente si esto se rompe.
+
+### 3.6 Commit
+
+`feat: F10.1 — portal roles and permissions`.
+
+**F10.1 completo.**

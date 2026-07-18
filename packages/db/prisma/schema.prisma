@@ -429,8 +429,27 @@ model User {
   mfaEnabled       Boolean          @default(false)
   invitationStatus InvitationStatus @default(NOT_INVITED)
 
+  // F10.1: identidad de portal -- un User de personal interno tiene las
+  // 3 en null (comportamiento sin cambios desde F0). Un User de portal
+  // tiene EXACTAMENTE una de las tres asignada según su Role
+  // (CLIENT_ADMIN/CLIENT_MANAGER -> companyId, WORKER -> workerId,
+  // CANDIDATE -> candidateId) -- la asignación real se valida en el
+  // service, no en el schema (evita una constraint CHECK frágil para
+  // una regla que puede evolucionar). Sin @unique: nada impide en este
+  // alcance que una Company/Worker/Candidate tenga más de un User de
+  // portal en el futuro (ej. varios contactos de un mismo cliente).
+  companyId   String?
+  company     Company?   @relation(fields: [companyId], references: [id])
+  workerId    String?
+  worker      Worker?    @relation(fields: [workerId], references: [id])
+  candidateId String?
+  candidate   Candidate? @relation(fields: [candidateId], references: [id])
+
   @@unique([tenantId, email])
   @@index([tenantId])
+  @@index([companyId])
+  @@index([workerId])
+  @@index([candidateId])
 }
 
 model Role {
@@ -549,6 +568,7 @@ model Company {
   complianceRules         ComplianceRule[]
   placements              Placement[]
   incidents               OperationalIncident[]
+  portalUsers             User[] // F10.1: usuarios de Client Portal (CLIENT_ADMIN/CLIENT_MANAGER) de esta Company
   createdAt               DateTime                  @default(now())
   updatedAt               DateTime                  @updatedAt
 
@@ -874,6 +894,7 @@ model Candidate {
   placementReadiness PlacementReadiness[]
   onboardings        WorkerOnboarding[]
   placements         Placement[]
+  portalUsers        User[] // F10.1: usuario de Candidate Portal de este Candidate
   // F5.2: referencia de actor sin @relation — mismo patrón que
   // JobOrder.createdById (F5.1, decisión #2 del header del schema). Se
   // completa desde el contexto de tenancy en el service, nunca desde el
@@ -907,6 +928,7 @@ model Worker {
   complianceRuleEvaluations ComplianceRuleEvaluation[]
   placements                Placement[]
   incidents                 OperationalIncident[]
+  portalUsers               User[] // F10.1: usuario de Worker Portal de este Worker
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
 

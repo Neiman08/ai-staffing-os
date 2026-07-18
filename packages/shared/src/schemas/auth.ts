@@ -11,6 +11,13 @@ export const currentUserSchema = z.object({
     name: z.string(),
   }),
   permissions: z.array(z.string()),
+  // F10.1: identidad de portal -- el frontend usa esto para decidir a
+  // qué shell/portal enrutar (interno vs. Client/Worker/Candidate
+  // Portal), nunca el nombre del rol como string mágico. undefined para
+  // todo personal interno.
+  companyId: z.string().nullable().optional(),
+  workerId: z.string().nullable().optional(),
+  candidateId: z.string().nullable().optional(),
 });
 export type CurrentUser = z.infer<typeof currentUserSchema>;
 

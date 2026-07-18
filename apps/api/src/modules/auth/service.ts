@@ -32,6 +32,9 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     email: user.email,
     role: { id: user.role.id, name: user.role.name },
     permissions: ctx.permissions,
+    companyId: user.companyId,
+    workerId: user.workerId,
+    candidateId: user.candidateId,
   };
 }
 

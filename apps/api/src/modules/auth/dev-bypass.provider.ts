@@ -51,6 +51,13 @@ export class DevBypassAuthProvider implements AuthProvider {
       permissions: user.role.permissions.map((rp) => rp.permission.key),
       mfaVerified: user.mfaEnabled,
       mfaEnforced: tenant ? isMfaEnforced(tenant) : false,
+      // F10.1: identidad de portal -- undefined (no null) cuando el
+      // campo no aplica, para que el spread implícito en TenancyContext
+      // se comporte igual que "nunca se seteó" en el resto del código
+      // que ya usa `ctx.companyId` con un simple truthy check.
+      companyId: user.companyId ?? undefined,
+      workerId: user.workerId ?? undefined,
+      candidateId: user.candidateId ?? undefined,
     };
   }
 }

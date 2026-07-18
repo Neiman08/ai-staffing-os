@@ -12,6 +12,15 @@ export interface ResolvedIdentity {
   // muestre un aviso.
   mfaVerified: boolean;
   mfaEnforced: boolean;
+  // F10.1: identidad de portal -- poblado desde User.companyId/workerId/
+  // candidateId (ver dev-bypass.provider.ts). undefined para todo
+  // personal interno (comportamiento sin cambios desde F0). Exactamente
+  // uno debería estar presente para un usuario de portal real, nunca
+  // más de uno -- validado en el service de creación de usuarios de
+  // portal (F10.1), no acá.
+  companyId?: string;
+  workerId?: string;
+  candidateId?: string;
 }
 
 /**
