@@ -37,6 +37,8 @@ before(async () => {
 after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   if (createdRequestId) {
+    // F10.8: limpia la notificación SCHEDULE_CHANGED que la revisión real disparó.
+    await prisma.notification.deleteMany({ where: { entityType: "schedule_change_request", entityId: createdRequestId } });
     await prisma.scheduleChangeRequest.deleteMany({ where: { id: createdRequestId } });
   }
 });

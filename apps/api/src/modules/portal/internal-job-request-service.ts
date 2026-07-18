@@ -10,6 +10,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logAuditEvent } from "../../core/audit-log";
+import { notifyPortalUsers } from "../../core/notifications";
 import { AppError } from "../../core/errors";
 import { isValidClientJobRequestTransition, INTERNAL_REVIEW_STATUSES, type ClientJobRequestStatus } from "./client-job-request-rules";
 import { createJobOrder } from "../jobs/service";
@@ -113,6 +114,23 @@ export async function reviewClientJobRequest(id: string, to: ClientJobRequestSta
     before: { status: from },
     after: { status: to },
   });
+
+  if (to === "NEEDS_INFORMATION") {
+    // F10.8: notifica SOLO a los usuarios de portal de ESTA company --
+    // nunca un recipientRole (cruzaría hacia clientes de otras
+    // companies dentro del mismo tenant, ver core/notifications.ts).
+    await notifyPortalUsers(
+      { companyId: existing.companyId },
+      {
+        type: "JOB_REQUEST_NEEDS_INFORMATION",
+        title: `More information needed: ${existing.requestedTitle}`,
+        body: reviewNotes ?? "The internal team needs more details before proceeding.",
+        entityType: "clientJobRequest",
+        entityId: id,
+        actionUrl: `/portal/client/job-requests/${id}`,
+      },
+    );
+  }
 
   return getInternalJobRequestDetail(id);
 }

@@ -13,6 +13,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
+import { notifyPortalUsers } from "../../core/notifications";
 import { AppError } from "../../core/errors";
 import { doDateRangesOverlap } from "../matching/date-overlap";
 
@@ -505,6 +506,18 @@ export async function reviewScheduleChangeRequest(
     before: { status: existing.status },
     after: { status, reviewNotes: reviewNotes ?? null },
   });
+
+  await notifyPortalUsers(
+    { workerId: updated.assignment.workerId },
+    {
+      type: "SCHEDULE_CHANGED",
+      title: status === "APPROVED" ? "Your schedule change request was approved" : "Your schedule change request was rejected",
+      body: reviewNotes ?? undefined,
+      entityType: "schedule_change_request",
+      entityId: id,
+      actionUrl: "/portal/worker/assignments",
+    },
+  );
 
   return toScheduleChangeRequestItem(updated);
 }

@@ -36,6 +36,9 @@ before(async () => {
 after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   if (createdEntryId) {
+    // F10.8: limpia las notificaciones TIME_ENTRY_APPROVED/REJECTED que el
+    // ciclo reject->reopen->resubmit real disparó.
+    await prisma.notification.deleteMany({ where: { entityType: "timeEntry", entityId: createdEntryId } });
     await prisma.timeEntry.deleteMany({ where: { id: createdEntryId } });
   }
 });

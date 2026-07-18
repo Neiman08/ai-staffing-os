@@ -339,3 +339,66 @@ Las fechas mostradas vía `new Date(isoDateString).toLocaleDateString()` pueden 
 `feat: F10.7 — worker time entry experience`.
 
 **F10.7 completo.**
+
+## 10. Resultado de F10.8 — Notifications Center
+
+### 10.1 Auditoría previa: `Notification` ya existía (F0/F1), nunca conectado a un evento real
+
+Confirmado por auditoría: el modelo `Notification` ya existía desde F0 (`tenantId`, `userId`, `type` genérico INFO/ALERT/APPROVAL/AGENT_ACTIVITY, `title`, `body`, `link`, `readAt`) y tenía un único consumidor real: `GET /dashboard/notifications` (F1), un widget de "top 10" puramente decorativo -- sin mark-as-read, sin navegación, sin NINGÚN caller que creara una notificación a partir de un evento real (los 5 registros existentes eran fixtures estáticos del seed, hardcodeados al usuario admin). Se extiende el modelo existente de forma ADITIVA en vez de crear `PortalNotification` desde cero (`No duplicar si ya existe entidad equivalente`).
+
+### 10.2 Modelos y migraciones
+
+`Notification` extendido (migración `20260718050000_f10_8_notification_center`, aplicada vía `prisma migrate deploy` -- **sin usar `--shadow-database-url`** esta vez, lección aplicada tras el incidente de F10.6 §8.1, verificado por inspección directa del esquema post-aplicación en vez de un diff automatizado):
+- `userId` pasa a nullable (antes NOT NULL) -- **se conserva el nombre**, nunca se renombra a `recipientUserId` (prohibido explícito "no renombrar destructivamente"); es el equivalente exacto pedido por la spec.
+- `recipientRole String?` nuevo -- alternativa de broadcast, exclusivamente segura para roles INTERNOS tenant-wide (Recruiter/Operations/etc.); ningún rol de portal la usa jamás (ver §10.3).
+- `entityType`/`entityId String?`, `priority` (reutiliza el enum `Severity` ya existente -- LOW/MEDIUM/HIGH/CRITICAL -- en vez de crear un enum nuevo).
+- `NotificationType` extendido con los 14 valores de la spec, aditivo (los 4 originales conservan su uso).
+
+### 10.3 Decisión de seguridad: `recipientRole` nunca cruza el límite de un portal
+
+`core/notifications.ts` expone dos funciones: `emitNotification` (bajo nivel, exige recipientUserId XOR recipientRole) y `notifyPortalUsers` (resuelve companyId/workerId/candidateId a Users de PORTAL reales vía el mismo mecanismo de F10.1, y emite una notificación por `userId` específico a CADA uno -- nunca un broadcast por rol). Un broadcast por `recipientRole="CLIENT_ADMIN"` cruzaría companies dentro del mismo tenant (dos clientes distintos pueden compartir tenant-titan) -- por eso está reservado exclusivamente a roles internos que YA ven todos los datos del tenant sin distinción de cliente. Verificado con test explícito (`notifyPortalUsers never leaks to a User of a different company`) y con la prueba end-to-end de que un WORKER nunca ve una notificación dirigida al rol Recruiter.
+
+### 10.4 Idempotencia
+
+`emitNotification` no crea una segunda notificación si ya existe una **no leída** con el mismo (tenant, recipiente, type, entityId) -- evita spam ante reintentos del mismo trigger. Una vez leída, un evento nuevo del mismo tipo sí genera una notificación nueva (información nueva).
+
+### 10.5 Backend: infraestructura + triggers reales wireados
+
+`modules/notifications/{service,router}.ts` -- **una sola ruta compartida** (`GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/:id/read`) para los 15 roles (internos y de portal), ya que `notifications.view`/`.markRead` se agregaron a todos desde F10.1; el scoping real ocurre en el service (`userId` propio + `recipientRole` del rol actual, resuelto vía `Role.name`).
+
+Triggers reales wireados (representativos, no los 14 tipos completos -- ver §10.9 deuda):
+- `JOB_REQUEST_SUBMITTED` -- `submitClientJobRequest` (F10.3) → `recipientRole: "Recruiter"`.
+- `JOB_REQUEST_NEEDS_INFORMATION` -- `reviewClientJobRequest` (F10.3, interno) → `notifyPortalUsers({companyId})`.
+- `TIME_ENTRY_APPROVED`/`TIME_ENTRY_REJECTED` -- `approveTimeEntry`/`rejectTimeEntry` (F9.6, payroll/service.ts) → `notifyPortalUsers({workerId})`.
+- `SCHEDULE_CHANGED` -- `reviewScheduleChangeRequest` (F10.6) → `notifyPortalUsers({workerId})`.
+
+### 10.6 Frontend
+
+`NotificationBell.tsx` (compartido, `components/notifications/`) -- campana funcional real con dropdown (8 más recientes, click marca leída y navega a `actionUrl`), reemplaza el botón decorativo previo en `Topbar.tsx` (interno) y agrega uno nuevo en `PortalTopbar.tsx` (portal, explícitamente diferido desde F10.4 §6.5). El destino de "View all" se deriva de la URL actual (`/portal/client|worker|candidate` vs interno) en vez de recibir un prop fijo, evitando triplicar el componente. `NotificationsCenter.tsx` (compartida) -- historial completo paginado con filtro "solo no leídas", montada como `/notifications` (interno) y `/portal/{client,worker,candidate}/notifications` (los 3 portales).
+
+### 10.7 Tests nuevos
+
+`notifications.test.ts` (6, integración): `emitNotification` exige exactamente uno de `recipientUserId`/`recipientRole`; idempotencia real verificada (segundo emit con el mismo entityId no leído no duplica); `notifyPortalUsers` nunca resuelve a un User de otra company; smoke check de que `notifications.view` funciona para los 15 roles; ciclo completo real (`submit` de un Client Job Request → notificación `recipientRole: Recruiter` real → visible para Recruiter, invisible para WORKER); mark-as-read con 404 real para quien no es dueño ni comparte el `recipientRole`, AuditLog verificado.
+
+### 10.8 Higiene de datos de prueba (deuda retroactiva corregida)
+
+Al conectar triggers reales a flujos YA probados en subfases anteriores (F9.6/F9.7 `payroll.test.ts`, F10.3 `client-job-request.test.ts`, F10.6 `assignment-schedule-ux.test.ts`, F10.7 `time-entry-ux.test.ts`), esos archivos empezaron a generar `Notification` reales como efecto secundario sin limpiarlas (escritos antes de que F10.8 existiera). Detectado visualmente (bandeja de Recruiter con 19 no leídas de corridas de test acumuladas) antes de comitear -- corregido agregando limpieza explícita por `entityType`/`entityId` en el `after()` de los 4 archivos afectados. Verificado: la suite completa corrida dos veces deja exactamente 5 notificaciones (los fixtures originales de seed F0), nunca crece.
+
+### 10.9 Suite completa
+
+1276 tests, 1271 pass, 0 fail, 5 skip -- cero regresiones. Typecheck/lint/build limpios en `apps/api` y `apps/web`.
+
+### 10.10 Verificación visual
+
+Playwright ad-hoc: trigger real (cliente crea+envía un Client Job Request) generó una notificación real visible en la campana de Recruiter (badge de contador, dropdown con título/cuerpo/tipo, link a la solicitud); "View all" navegó al Notifications Center completo con badge de prioridad y acción "Mark read" funcional. Worker Portal: campana muestra notificaciones propias reales (`TIME_ENTRY_REJECTED`, `SCHEDULE_CHANGED` de corridas de test anteriores, confirmando el scoping por `userId`). Cero errores de consola relacionados a notificaciones (un 403 preexistente y no relacionado de `/approvals` para Recruiter, ya presente antes de F10.8, no bloquea el render de la página).
+
+### 10.11 Deuda/decisiones diferidas (no bloqueantes)
+
+- **Solo 4 de los 14 tipos tienen un trigger real wireado** (`JOB_REQUEST_SUBMITTED`, `JOB_REQUEST_NEEDS_INFORMATION`, `TIME_ENTRY_APPROVED`, `TIME_ENTRY_REJECTED`, `SCHEDULE_CHANGED` -- 5 en realidad). Los 9 restantes (`SHORTLIST_READY`, `DOCUMENT_REQUIRED`, `DOCUMENT_EXPIRING`, `ONBOARDING_BLOCKED`, `ASSIGNMENT_UPDATED`, `INCIDENT_UPDATED`, `COMPLIANCE_ACTION_REQUIRED`, `PLACEMENT_READY`, `SYSTEM_NOTICE`) existen en el enum y la infraestructura los soporta completamente, pero no tienen un call site real todavía -- decisión consciente de mantener el alcance de F10.8 a un conjunto representativo y correctamente scoped en vez de forzar triggers contrived para los 14. Deferred, no bloqueante -- agregar uno nuevo es una llamada a `emitNotification`/`notifyPortalUsers`, sin cambios de infraestructura.
+- El widget decorativo original `GET /dashboard/notifications` (F0/F1) queda sin ningún consumidor de frontend (reemplazado por el Notification Center real) pero no se eliminó del backend -- código muerto de bajo riesgo, fuera de alcance eliminar código preexistente no relacionado en F10.8.
+
+### 10.12 Commit
+
+`feat: F10.8 — portal notifications center`.
+
+**F10.8 completo.**

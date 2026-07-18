@@ -10,6 +10,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logAuditEvent } from "../../core/audit-log";
+import { emitNotification } from "../../core/notifications";
 import { AppError } from "../../core/errors";
 import { isValidClientJobRequestTransition, CLIENT_EDITABLE_STATUSES, type ClientJobRequestStatus } from "./client-job-request-rules";
 
@@ -237,7 +238,20 @@ async function transitionOwnedRequest(id: string, to: ClientJobRequestStatus, ac
 }
 
 export async function submitClientJobRequest(id: string): Promise<ClientJobRequestRecord> {
-  return transitionOwnedRequest(id, "SUBMITTED", "clientJobRequest.submitted");
+  const result = await transitionOwnedRequest(id, "SUBMITTED", "clientJobRequest.submitted");
+  // F10.8: broadcast a Recruiter (rol interno tenant-wide, seguro --
+  // ningún dato de la solicitud cruza tenants, y Recruiter ya ve todos
+  // los Job Orders del tenant sin distinción de cliente).
+  await emitNotification({
+    recipientRole: "Recruiter",
+    type: "JOB_REQUEST_SUBMITTED",
+    title: `New job request: ${result.requestedTitle}`,
+    body: `A client submitted a request for ${result.headcount} worker(s).`,
+    entityType: "clientJobRequest",
+    entityId: id,
+    actionUrl: `/client-job-requests/${id}`,
+  });
+  return result;
 }
 
 export async function cancelClientJobRequest(id: string): Promise<ClientJobRequestRecord> {

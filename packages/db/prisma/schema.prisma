@@ -373,6 +373,23 @@ enum NotificationType {
   ALERT
   APPROVAL
   AGENT_ACTIVITY
+  // F10.8: tipos granulares del Portal Notifications Center -- aditivo,
+  // los 4 valores originales conservan su uso existente (dashboard
+  // interno, F0/F7).
+  JOB_REQUEST_SUBMITTED
+  JOB_REQUEST_NEEDS_INFORMATION
+  SHORTLIST_READY
+  DOCUMENT_REQUIRED
+  DOCUMENT_EXPIRING
+  ONBOARDING_BLOCKED
+  ASSIGNMENT_UPDATED
+  SCHEDULE_CHANGED
+  TIME_ENTRY_REJECTED
+  TIME_ENTRY_APPROVED
+  INCIDENT_UPDATED
+  COMPLIANCE_ACTION_REQUIRED
+  PLACEMENT_READY
+  SYSTEM_NOTICE
 }
 
 // ================= NÚCLEO Y TENANCY =================
@@ -2094,16 +2111,33 @@ model DomainEvent {
   @@index([tenantId, type])
 }
 
+// F10.8: extendido de forma ADITIVA -- `userId` conserva su nombre y
+// semántica original (F0), equivalente exacto al "recipientUserId" de
+// la spec (no se renombra una columna existente, ver docs/F10_PLAN.md
+// §10). Ahora nullable porque una notificación puede dirigirse a un
+// ROL completo (`recipientRole`) en vez de a un usuario puntual -- el
+// service (core/notifications.ts) exige exactamente uno de los dos,
+// nunca ambos ni ninguno.
 model Notification {
-  id        String           @id @default(cuid())
-  tenantId  String
-  userId    String
-  type      NotificationType @default(INFO)
-  title     String
-  body      String?
-  link      String?
-  readAt    DateTime?
-  createdAt DateTime         @default(now())
+  id            String           @id @default(cuid())
+  tenantId      String
+  userId        String?
+  // F10.8: SOLO seguro para roles internos tenant-wide (RECRUITER,
+  // OPERATIONS, etc.) -- roles de portal (CLIENT_ADMIN/WORKER/etc.)
+  // NUNCA usan recipientRole, siempre userId específico (un broadcast
+  // por rol cruzaría companies dentro del mismo tenant, ver F10.1).
+  recipientRole String?
+  type          NotificationType @default(INFO)
+  title         String
+  body          String?
+  link          String?
+  entityType    String?
+  entityId      String?
+  priority      Severity         @default(MEDIUM)
+  readAt        DateTime?
+  createdAt     DateTime         @default(now())
 
   @@index([tenantId, userId, readAt])
+  @@index([tenantId, recipientRole, readAt])
+  @@index([tenantId, entityType, entityId])
 }

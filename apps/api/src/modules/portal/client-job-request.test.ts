@@ -37,6 +37,10 @@ before(async () => {
 
 after(async () => {
   if (createdRequestIds.length > 0) {
+    // F10.8: limpia las notificaciones (JOB_REQUEST_SUBMITTED/
+    // JOB_REQUEST_NEEDS_INFORMATION) que estos submit/review reales
+    // dispararon -- entityId no es una FK real, no se limpian solas.
+    await prisma.notification.deleteMany({ where: { entityType: "clientJobRequest", entityId: { in: createdRequestIds } } });
     // Nunca borra el JobOrder convertido -- solo desvincula la FK antes
     // de limpiar la ClientJobRequest, evita violar la constraint única.
     await prisma.clientJobRequest.updateMany({ where: { id: { in: createdRequestIds } }, data: { convertedJobOrderId: null } });

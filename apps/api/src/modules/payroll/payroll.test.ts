@@ -44,6 +44,9 @@ after(async () => {
     await prisma.payrollRun.deleteMany({ where: { id: { in: createdPayrollRunIds } } });
   }
   if (createdTimeEntryIds.length > 0) {
+    // F10.8: limpia las notificaciones TIME_ENTRY_APPROVED/REJECTED que
+    // approve/reject reales dispararon durante estos tests.
+    await prisma.notification.deleteMany({ where: { entityType: "timeEntry", entityId: { in: createdTimeEntryIds } } });
     await prisma.timeEntry.deleteMany({ where: { id: { in: createdTimeEntryIds } } });
   }
   if (createdAssignmentIds.length > 0) {

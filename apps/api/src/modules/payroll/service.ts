@@ -33,6 +33,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
+import { notifyPortalUsers } from "../../core/notifications";
 import { AppError } from "../../core/errors";
 
 const TIME_ENTRY_INCLUDE = {
@@ -400,14 +401,27 @@ export async function submitTimeEntry(id: string): Promise<TimeEntryListItem> {
   return transitionTimeEntry(id, target, "timeEntry.submitted");
 }
 
+async function notifyWorkerOfTimeEntryDecision(timeEntryId: string, type: "TIME_ENTRY_APPROVED" | "TIME_ENTRY_REJECTED", body: string): Promise<void> {
+  const entry = await scopedDb.timeEntry.findUnique({ where: { id: timeEntryId }, include: { assignment: { select: { workerId: true } } } });
+  if (!entry) return;
+  await notifyPortalUsers(
+    { workerId: entry.assignment.workerId },
+    { type, title: type === "TIME_ENTRY_APPROVED" ? "Time entry approved" : "Time entry needs correction", body, entityType: "timeEntry", entityId: timeEntryId, actionUrl: "/portal/worker/time-entries" },
+  );
+}
+
 export async function approveTimeEntry(id: string): Promise<TimeEntryListItem> {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
-  return transitionTimeEntry(id, "APPROVED", "timeEntry.approved", { approvedById: ctx.userId });
+  const result = await transitionTimeEntry(id, "APPROVED", "timeEntry.approved", { approvedById: ctx.userId });
+  await notifyWorkerOfTimeEntryDecision(id, "TIME_ENTRY_APPROVED", `Your hours for ${result.date.slice(0, 10)} were approved.`);
+  return result;
 }
 
 export async function rejectTimeEntry(id: string, input: RejectTimeEntryInput): Promise<TimeEntryListItem> {
-  return transitionTimeEntry(id, "REJECTED", "timeEntry.rejected", { rejectionReason: input.rejectionReason });
+  const result = await transitionTimeEntry(id, "REJECTED", "timeEntry.rejected", { rejectionReason: input.rejectionReason });
+  await notifyWorkerOfTimeEntryDecision(id, "TIME_ENTRY_REJECTED", input.rejectionReason);
+  return result;
 }
 
 /** F9.6: REJECTED siempre reabre a DRAFT (nunca un rechazo permanente) -- limpia el rejectionReason previo al reabrir. */
