@@ -93,6 +93,18 @@ test("Worker AVAILABLE con Assignment SCHEDULED con conflicto de fechas → DATE
   assert.deepEqual(result.conflictingAssignmentIds, ["a-conflict"]);
 });
 
+test("F10 fase previa (deuda de F9.5): Worker AVAILABLE con Assignment PAUSED con conflicto de fechas → DATE_CONFLICT / INELIGIBLE (PAUSED sigue ocupando cupo real)", () => {
+  const result = evaluateWorkerAvailability(
+    baseInput({
+      workerStatus: "AVAILABLE",
+      assignments: [assignment({ id: "a-paused-conflict", status: "PAUSED", startDate: d("2026-08-01"), endDate: d("2026-09-01") })],
+    }),
+  );
+  assert.equal(result.availabilityStatus, "DATE_CONFLICT");
+  assert.equal(result.eligibility, "INELIGIBLE");
+  assert.deepEqual(result.conflictingAssignmentIds, ["a-paused-conflict"]);
+});
+
 test("Worker ASSIGNED sin conflicto de fechas → ELIGIBLE (ASSIGNED no es automáticamente inelegible)", () => {
   const result = evaluateWorkerAvailability(
     baseInput({

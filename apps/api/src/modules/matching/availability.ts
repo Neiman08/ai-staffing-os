@@ -8,10 +8,13 @@
 import type { AvailabilityStatus, MatchEligibility, WorkerAvailabilityResult } from "@ai-staffing-os/shared";
 import { doDateRangesOverlap } from "./date-overlap";
 
-// Solo los 4 valores reales de AssignmentStatus/WorkerStatus (schema.prisma)
-// — como strings, no el enum de Prisma, mismo criterio ya usado en los
+// Como strings, no el enum de Prisma — mismo criterio ya usado en los
 // contratos de F6.1 (packages/shared no depende del cliente generado).
-const BLOCKING_ASSIGNMENT_STATUSES = new Set(["SCHEDULED", "ACTIVE"]);
+// F10 (fase previa, deuda de F9.5): AssignmentStatus se extendió a 8
+// valores en F9.5 y PAUSED sigue ocupando cupo real del Worker
+// (`OCCUPYING_STATUSES` en assignments/service.ts) -- faltaba acá,
+// corregido de forma aditiva (nunca se quita SCHEDULED/ACTIVE).
+const BLOCKING_ASSIGNMENT_STATUSES = new Set(["SCHEDULED", "ACTIVE", "PAUSED"]);
 const KNOWN_WORKER_STATUSES = new Set(["AVAILABLE", "ASSIGNED", "ON_LEAVE", "TERMINATED"]);
 
 export interface AssignmentForAvailability {
@@ -61,7 +64,7 @@ function buildResult(
  * - TERMINATED / ON_LEAVE → WORKER_UNAVAILABLE / INELIGIBLE de inmediato,
  *   nunca se calculan solapamientos (ON_LEAVE explícitamente lo pide así).
  * - AVAILABLE / ASSIGNED → se evalúan por fechas: cualquier Assignment
- *   SCHEDULED/ACTIVE que solape con el Job Order bloquea: DATE_CONFLICT /
+ *   SCHEDULED/ACTIVE/PAUSED que solape con el Job Order bloquea: DATE_CONFLICT /
  *   INELIGIBLE. Sin conflicto → AVAILABLE / ELIGIBLE (elegible en cuanto
  *   a disponibilidad — no implica elegibilidad final, ver F6.3).
  * - Assignment COMPLETED/TERMINATED nunca bloquea, sin importar fechas.
@@ -115,7 +118,7 @@ export function evaluateWorkerAvailability(input: WorkerAvailabilityInput): Work
       eligibility: "INELIGIBLE",
       hasDateConflict: true,
       conflictingAssignmentIds: conflicting.map((a) => a.id),
-      reason: `Worker has ${conflicting.length} overlapping SCHEDULED/ACTIVE assignment(s) for the evaluated Job Order dates.`,
+      reason: `Worker has ${conflicting.length} overlapping SCHEDULED/ACTIVE/PAUSED assignment(s) for the evaluated Job Order dates.`,
       warnings: [],
     });
   }
@@ -127,8 +130,8 @@ export function evaluateWorkerAvailability(input: WorkerAvailabilityInput): Work
     conflictingAssignmentIds: [],
     reason:
       blockingAssignments.length > 0
-        ? "No overlapping SCHEDULED/ACTIVE assignment found for the evaluated Job Order dates."
-        : "Worker has no SCHEDULED/ACTIVE assignments.",
+        ? "No overlapping SCHEDULED/ACTIVE/PAUSED assignment found for the evaluated Job Order dates."
+        : "Worker has no SCHEDULED/ACTIVE/PAUSED assignments.",
     warnings: [],
   });
 }
