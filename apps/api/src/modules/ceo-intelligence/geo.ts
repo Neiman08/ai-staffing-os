@@ -81,6 +81,28 @@ const KNOWN_CITIES: KnownCity[] = [
   { name: "El Paso", stateCode: "TX" },
 ];
 
+// F14 (refinamiento de calidad, 2026-07-19): adyacencia geográfica real
+// de EE.UU., pero SOLO entre estados que ya están en SUPPORTED_STATE_CODES
+// arriba -- ampliar a un estado que el resto del sistema no reconoce no
+// serviría de nada (executeDiscoveryPlan igual lo rechazaría). Usado
+// exclusivamente por el refinamiento progresivo de descubrimiento
+// (mission-executor.ts): si un estado no tiene ningún vecino soportado
+// (ej. Texas hoy, cuyos vecinos reales -- Nuevo México, Oklahoma,
+// Arkansas, Luisiana -- no están en la lista), ese paso del refinamiento
+// simplemente no aporta estados nuevos, degradación honesta, nunca un
+// vecino inventado.
+export const NEARBY_SUPPORTED_STATES: Record<string, string[]> = {
+  IL: ["IN", "WI", "IA", "MO"],
+  IN: ["IL", "OH", "MI"],
+  IA: ["IL", "WI", "MO", "NE"],
+  NE: ["IA", "MO"],
+  WI: ["IL", "IA", "MI"],
+  MI: ["IN", "OH", "WI"],
+  OH: ["IN", "MI"],
+  MO: ["IL", "IA", "NE"],
+  TX: [],
+};
+
 export interface GeoMatch {
   cities: string[];
   states: string[];

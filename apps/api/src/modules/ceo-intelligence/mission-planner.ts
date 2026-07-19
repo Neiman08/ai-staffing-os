@@ -21,11 +21,29 @@ const DEFAULT_MAX_DURATION_MINUTES = 60;
 
 const ALWAYS_REQUIRED_STEPS = new Set<MissionPlanStep>(["discover_companies"]);
 
+/**
+ * F14 (refinamiento de calidad, 2026-07-19): orden específico-primero,
+ * genérico-al-final -- ANTES esto solo respetaba el orden de
+ * `intent.matchedTaxonomyKeys` (a su vez, el orden de declaración en
+ * BUSINESS_TAXONOMY), así que "construction" siempre corría antes que
+ * "electrical" cuando ambos matcheaban la misma instrucción (electrical
+ * está declarada después). Resultado real observado: una misión de
+ * "contratistas eléctricos en Texas" devolvía constructoras generales,
+ * porque la query genérica "construction company" agotaba el cupo de
+ * resultados antes de llegar siquiera a "electrical contractor".
+ *
+ * `isGenericFallback` (taxonomy.ts) es la señal explícita: las entradas
+ * NO genéricas (el trade/sector específico que el usuario realmente
+ * pidió) se ordenan primero, preservando su orden relativo de matching;
+ * las entradas genéricas (Construction/Manufacturing/Warehousing/
+ * Distribution/Healthcare/Retail/Transportation como categoría paraguas)
+ * quedan al final, como último recurso real -- nunca antes.
+ */
 function buildSearchQueries(intent: StructuredIntent) {
   const queries: MissionPlan["searchQueries"] = [];
-  for (const key of intent.matchedTaxonomyKeys) {
-    const entry = getTaxonomyEntry(key);
-    if (!entry) continue;
+  const matchedEntries = intent.matchedTaxonomyKeys.map((key) => getTaxonomyEntry(key)).filter((e) => e !== undefined);
+  const specificFirst = [...matchedEntries].sort((a, b) => Number(a.isGenericFallback) - Number(b.isGenericFallback));
+  for (const entry of specificFirst) {
     for (const phrase of entry.googleSearchPhrases) {
       queries.push({ searchTerm: phrase, crmIndustryBucket: entry.crmIndustryBucket, taxonomyKey: entry.key });
     }

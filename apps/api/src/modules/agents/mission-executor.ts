@@ -8,7 +8,7 @@ import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
-import { SUPPORTED_STATE_CODES } from "../ceo-intelligence/geo";
+import { SUPPORTED_STATE_CODES, NEARBY_SUPPORTED_STATES } from "../ceo-intelligence/geo";
 import { normalizeText } from "../ceo-intelligence/text-normalize";
 import {
   buildCompanyIdentityKeys,
@@ -114,6 +114,19 @@ export interface QueryExecutionRecord {
   rejectedCount: number;
   duplicateCount: number;
   error: string | null;
+  // F14 (refinamiento de calidad, 2026-07-19): cupo real asignado a ESTA
+  // query específicamente (null cuando no aplica cupo, ej. queries
+  // genéricas o de refinamiento) -- transparencia real de por qué una
+  // query específica dejó de aceptar candidatos antes de agotar sus
+  // resultados crudos (reserva espacio real para las demás variantes,
+  // nunca deja que la primera consulta se coma todo el volumen pedido).
+  queryCap: number | null;
+  // 1 = ciudad+estado tal como se interpretó la instrucción; 2 =
+  // refinamiento real a estado completo (la ciudad no alcanzó); 3 =
+  // refinamiento real a estados vecinos soportados (el estado no
+  // alcanzó) -- siempre manteniendo la industria/sector pedido fijo,
+  // nunca ampliando el sector para "completar" el número.
+  refinementRound: 1 | 2 | 3;
 }
 
 export interface RejectedCandidateRecord {
@@ -253,6 +266,10 @@ interface FinalQuery {
   state: string;
   taxonomyKey: string;
   crmIndustryBucket: string | null;
+  // F14: 1 = ronda original (ciudad+estado interpretados), 2 = mismo
+  // término sin filtro de ciudad (la ciudad no alcanzó), 3 = mismo
+  // término en un estado vecino soportado (el estado no alcanzó).
+  refinementRound: 1 | 2 | 3;
 }
 
 /**
@@ -265,8 +282,9 @@ interface FinalQuery {
  * mismo searchTerm en 2 ciudades son 2 queries reales distintas, cada
  * una se ejecuta una sola vez.
  */
-export function buildFinalQueries(plan: MissionPlan, primaryState: string): FinalQuery[] {
-  const cities = plan.cities.length > 0 ? plan.cities : [null];
+export function buildFinalQueries(plan: MissionPlan, primaryState: string, options?: { citiesOverride?: (string | null)[]; refinementRound?: 1 | 2 | 3 }): FinalQuery[] {
+  const cities = options?.citiesOverride ?? (plan.cities.length > 0 ? plan.cities : [null]);
+  const refinementRound = options?.refinementRound ?? 1;
   const seen = new Set<string>();
   const result: FinalQuery[] = [];
 
@@ -288,8 +306,42 @@ export function buildFinalQueries(plan: MissionPlan, primaryState: string): Fina
         state: primaryState,
         taxonomyKey: q.taxonomyKey,
         crmIndustryBucket: q.crmIndustryBucket,
+        refinementRound,
       });
     }
+  }
+
+  return result;
+}
+
+/**
+ * F14 (refinamiento de calidad, 2026-07-19): construye las rondas 2/3
+ * de refinamiento progresivo -- SOLO se agregan al final de la lista de
+ * queries (nunca reemplazan la ronda 1), así que el chequeo real de
+ * "createdCompanyIds.length >= requestedCompanyCount" que ya existe en
+ * el loop principal (executeDiscoveryPlan) decide honestamente si
+ * llegan a ejecutarse -- si la ronda 1 ya alcanzó el volumen pedido, el
+ * loop corta antes de tocar ninguna query de acá, cero costo real
+ * agregado. Nunca amplía el SECTOR pedido -- sólo la geografía.
+ */
+function buildRefinementQueries(plan: MissionPlan, primaryState: string): FinalQuery[] {
+  const result: FinalQuery[] = [];
+
+  // Ronda 2: mismos términos, sin filtro de ciudad (probar todo el
+  // estado) -- solo tiene sentido real si la ronda 1 SÍ tenía ciudad(es)
+  // planificadas; si el plan ya era a nivel estado, repetir sería la
+  // misma query exacta (0 candidatos nuevos, costo real desperdiciado).
+  if (plan.cities.length > 0) {
+    result.push(...buildFinalQueries(plan, primaryState, { citiesOverride: [null], refinementRound: 2 }));
+  }
+
+  // Ronda 3: mismos términos, en cada estado vecino REAL Y SOPORTADO
+  // (NEARBY_SUPPORTED_STATES, geo.ts) -- degradación honesta: si el
+  // estado pedido no tiene ningún vecino soportado hoy (ej. Texas),
+  // esta ronda no agrega nada, nunca un vecino inventado.
+  const nearby = NEARBY_SUPPORTED_STATES[primaryState] ?? [];
+  for (const nearbyState of nearby) {
+    result.push(...buildFinalQueries(plan, nearbyState, { citiesOverride: [null], refinementRound: 3 }));
   }
 
   return result;
@@ -487,7 +539,17 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     return emptyReport("BLOCKED", "Ningún estado soportado detectado en la instrucción — no hay área real para consultar a los proveedores.");
   }
 
-  const finalQueries = buildFinalQueries(params.plan, primaryState);
+  // F14 (refinamiento de calidad, 2026-07-19): la ronda 1 (ciudad+estado
+  // interpretados, específico-antes-que-genérico ya ordenado en
+  // plan.searchQueries por mission-planner.ts) va primero, seguida de
+  // las rondas de refinamiento real (2: mismo término sin ciudad; 3:
+  // mismo término en un estado vecino soportado) -- SIEMPRE al final,
+  // nunca reemplazan la ronda 1. El chequeo real de
+  // "createdCompanyIds.length >= requestedCompanyCount" en el loop de
+  // abajo decide honestamente si el refinamiento llega a ejecutarse:
+  // si la ronda 1 ya alcanzó el volumen pedido, cero costo real
+  // adicional.
+  const finalQueries = [...buildFinalQueries(params.plan, primaryState), ...buildRefinementQueries(params.plan, primaryState)];
   if (finalQueries.length === 0) {
     return emptyReport("BLOCKED", "Todas las queries planificadas quedaron vacías o eran exclusivamente términos de exclusión.");
   }
@@ -586,6 +648,35 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     existingKeys.normalizedNameCityState.add(keys.normalizedNameCityState);
   }
 
+  // F14 (refinamiento de calidad, 2026-07-19): cupo real por query
+  // ESPECÍFICA de la ronda 1 -- sin esto, la primera query devuelta por
+  // el proveedor (hasta 20 resultados de una sola llamada) podía llenar
+  // sola todo el volumen pedido antes de que corriera ninguna otra
+  // variante (hallazgo real: "construction company" agotaba el cupo de
+  // 10 antes de llegar a "electrical contractor"). Pesos 50/30/20% para
+  // las primeras 3 queries específicas (mismo ejemplo pedido por el PO:
+  // 10 empresas -> 5/3/2), 15% para variantes adicionales más allá de
+  // las primeras 3. Las queries genéricas (isGenericFallback) y las de
+  // refinamiento (ronda 2/3) NO tienen cupo individual -- para cuando
+  // llegan a ejecutarse (si llegan) ya estamos en modo "completar lo
+  // que falte", no en modo "repartir".
+  const QUERY_QUOTA_WEIGHTS = [0.5, 0.3, 0.2];
+  const QUERY_QUOTA_TAPER = 0.15;
+  const specificRound1Keys: string[] = [];
+  for (const q of finalQueries) {
+    if (q.refinementRound !== 1) continue;
+    const entry = getTaxonomyEntry(q.taxonomyKey);
+    if (entry?.isGenericFallback) continue;
+    const key = `${q.taxonomyKey}::${q.searchTerm}`;
+    if (!specificRound1Keys.includes(key)) specificRound1Keys.push(key);
+  }
+  const queryCapByKey = new Map<string, number>();
+  specificRound1Keys.forEach((key, index) => {
+    const weight = QUERY_QUOTA_WEIGHTS[index] ?? QUERY_QUOTA_TAPER;
+    queryCapByKey.set(key, Math.max(1, Math.ceil(requestedCompanyCount * weight)));
+  });
+  const acceptedByQueryKey = new Map<string, number>();
+
   outer: for (const query of finalQueries) {
     if (createdCompanyIds.length >= requestedCompanyCount) {
       stopReason = "limit_reached";
@@ -595,6 +686,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
       cancelled = true;
       stopReason = "cancelled";
       break outer;
+    }
+
+    const queryKey = `${query.taxonomyKey}::${query.searchTerm}`;
+    const queryCap = queryCapByKey.get(queryKey) ?? null;
+    if (queryCap !== null && (acceptedByQueryKey.get(queryKey) ?? 0) >= queryCap) {
+      // F14: esta query específica ya alcanzó su cupo -- reserva
+      // espacio real para las demás variantes específicas en vez de
+      // seguir aceptando más de la misma, nunca ejecuta el request de
+      // nuevo para descartarlo (costo real evitado).
+      continue;
     }
 
     const { result, origin, provider, omittedNote } = await executeOneQuery(query, {
@@ -623,6 +724,8 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
       executedAt: new Date().toISOString(),
       rawResultCount: result.candidates.length,
       acceptedCount: 0,
+      queryCap,
+      refinementRound: query.refinementRound,
       rejectedCount: 0,
       duplicateCount: 0,
       error: result.candidates.length === 0 && result.patternsFailed.length > 0 ? result.patternsFailed.join("; ") : null,
@@ -639,7 +742,17 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           website: raw.fields.website?.status === "CONFIRMED" ? (raw.fields.website.value as string) : null,
           phone: raw.fields.phone?.status === "CONFIRMED" ? (raw.fields.phone.value as string) : null,
           city: raw.fields.city?.status === "CONFIRMED" ? (raw.fields.city.value as string) : query.city,
-          state: query.state,
+          // F14: preferir el estado CONFIRMADO del propio candidato, igual
+          // que city arriba -- antes de refinamiento geográfico query.state
+          // siempre coincidía con el estado real (un solo estado por plan),
+          // así que esta rama nunca se ejercitaba. Con refinamiento
+          // (rondas 3, estados vecinos) query.state pasa a ser el estado
+          // BUSCADO, no necesariamente el real del candidato -- sin esto,
+          // una empresa ya conocida en IL redescubierta vía una query
+          // ampliada a IN generaría una clave "...|chicago|in" que nunca
+          // matchea contra la Company real "...|chicago|il" ya existente,
+          // rompiendo el dedup silenciosamente.
+          state: raw.fields.state?.status === "CONFIRMED" ? (raw.fields.state.value as string) : query.state,
           sourceUrl: raw.sourceUrl,
         }),
       }));
@@ -658,6 +771,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
 
       for (const candidate of unique) {
         if (createdCompanyIds.length >= requestedCompanyCount) break;
+        // F14: cupo real de ESTA query específica agotado -- deja el
+        // resto de este mismo batch de resultados sin procesar, reserva
+        // el espacio real para las demás variantes específicas.
+        if (queryCap !== null && (acceptedByQueryKey.get(queryKey) ?? 0) >= queryCap) break;
 
         // Registrar la clave ya aceptada para que un candidato posterior
         // (misma query u otra) que coincida se trate como duplicado —
@@ -731,6 +848,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         createdCompanyIds.push(company.id);
         acceptedResults += 1;
         record.acceptedCount += 1;
+        if (queryCap !== null) acceptedByQueryKey.set(queryKey, (acceptedByQueryKey.get(queryKey) ?? 0) + 1);
 
         // F7.10 fix: los pasos F7.5/F7.6/F7.10 escriben cada uno su
         // propia clave en Company.discoveryMetadata -- `company` nunca
@@ -942,7 +1060,14 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     if (cancelled) break outer;
   }
 
-  if (createdCompanyIds.length >= requestedCompanyCount) stopReason = "limit_reached";
+  // F14: la cancelación real (abortSignal / proveedor pago cancelado a
+  // mitad de un candidato) siempre debe ganar sobre "limit_reached" --
+  // antes de bajar el target por defecto de este archivo de 5 a 1, esta
+  // condición nunca coincidía con `cancelled` en los fixtures de test,
+  // así que el orden nunca importaba. Con un target más chico es normal
+  // que "se canceló" y "se llegó al target" pasen en la misma query;
+  // reportar "limit_reached" ahí ocultaría la cancelación real.
+  if (!cancelled && createdCompanyIds.length >= requestedCompanyCount) stopReason = "limit_reached";
 
   const missionState: MissionExecutionState = cancelled
     ? "PARTIAL"

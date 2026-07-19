@@ -18,11 +18,42 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
   {
     key: "hospitality",
     label: "Hospitality (Hotels & Resorts)",
-    synonyms: ["hotel", "hoteles", "resort", "resorts", "lodging", "hospitality", "hospitalidad", "motel", "inn"],
+    // F14 (refinamiento de calidad, 2026-07-19): grupo semántico
+    // ampliado a pedido explícito del PO -- Hotel/Resort/Inn/Lodge/
+    // Suites/Motel/Bed & Breakfast/Boutique Hotel deben activar la
+    // MISMA entrada real, nunca quedar repartidos en matches parciales.
+    synonyms: [
+      "hotel",
+      "hoteles",
+      "resort",
+      "resorts",
+      "lodging",
+      "lodge",
+      "hospitality",
+      "hospitalidad",
+      "motel",
+      "motels",
+      "inn",
+      "suites",
+      "bed and breakfast",
+      "bed & breakfast",
+      "boutique hotel",
+    ],
     // F7.4 Parte A: "suites"/"hospitality property" agregados -- evidencia
     // de aceptacion explicita pedida por el PO para validar un candidato
     // real de hospitality (ver docs/F7.../PLAN.md §"Hoteles").
-    companyTypes: ["hotel", "resort", "lodging property", "motel", "inn", "suites", "hospitality property"],
+    companyTypes: [
+      "hotel",
+      "resort",
+      "lodging property",
+      "lodge",
+      "motel",
+      "inn",
+      "suites",
+      "hospitality property",
+      "bed and breakfast",
+      "boutique hotel",
+    ],
     // F13 (auditoría PO, 2026-07-19): antes null -- "Crear una Industry
     // real nueva... es una decision de F5/F6 territory, fuera de
     // alcance de F7.1" (ver nota de arriba). El PO ya autorizó
@@ -31,7 +62,17 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // seedIndustries() en packages/db/prisma/seed.ts la crea como
     // Industry real (isGlobal, mismo patrón que las otras 4).
     crmIndustryBucket: "Hospitality",
-    googleSearchPhrases: ["hotel", "resort", "lodging property", "hospitality group"],
+    // F14: orden específico-primero, mismo criterio que electrical.
+    googleSearchPhrases: [
+      "hotel",
+      "resort",
+      "boutique hotel",
+      "bed and breakfast",
+      "lodging property",
+      "inn",
+      "motel",
+      "hospitality group",
+    ],
     websitePhrases: ["rooms", "reservations", "check-in", "housekeeping", "hospitality"],
     jobTitles: [
       "Housekeeper",
@@ -51,7 +92,8 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "El sitio menciona reservas/habitaciones/check-in",
       "El nombre incluye Hotel/Resort/Inn/Motel o equivalente",
     ],
-    version: 1,
+    isGenericFallback: false,
+    version: 2,
   },
   {
     key: "manufacturing",
@@ -63,6 +105,14 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "manufacturero",
       "fabrica",
       "fabricas",
+      // F14 (validación real, 2026-07-19): "fabricante(s)" (manufacturer/s)
+      // faltaba -- hallazgo real de una misión real ("Busca 10 fabricantes
+      // reales en Illinois") que devolvía 0 search queries (matchedTaxonomyKeys
+      // vacío) porque containsWord exige coincidencia de palabra completa
+      // -- "fabrica" nunca matchea dentro de "fabricantes" (son palabras
+      // distintas, no un plural regular de la misma).
+      "fabricante",
+      "fabricantes",
       "planta industrial",
       "plantas industriales",
       "industrial plant",
@@ -87,6 +137,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "logistics only", "pure distribution", "consulting"],
     relatedIndustries: ["food_manufacturing", "beverage_manufacturing", "packaging", "industrial_automation"],
     validations: ["El sitio muestra evidencia real de producción/planta", "No es una oficina corporativa sin planta"],
+    isGenericFallback: true,
     version: 1,
   },
   {
@@ -115,6 +166,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["restaurant", "grocery store", "distributor only"],
     relatedIndustries: ["manufacturing", "beverage_manufacturing", "packaging"],
     validations: ["El sitio menciona producción/procesamiento de alimentos, no solo venta"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -138,6 +190,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["bar", "restaurant", "liquor store"],
     relatedIndustries: ["food_manufacturing", "manufacturing", "packaging"],
     validations: ["El sitio muestra evidencia de producción/embotellado, no solo venta al público"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -153,6 +206,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["shipping only", "retail packaging store"],
     relatedIndustries: ["manufacturing", "food_manufacturing", "beverage_manufacturing"],
     validations: ["El sitio muestra evidencia de fabricación de empaques, no solo distribución"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -171,6 +225,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["retail store", "office only"],
     relatedIndustries: ["distribution", "transportation", "manufacturing"],
     validations: ["El sitio muestra evidencia de operación de almacén/fulfillment"],
+    isGenericFallback: true,
     version: 1,
   },
   {
@@ -186,6 +241,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["pure manufacturing only"],
     relatedIndustries: ["warehousing", "transportation"],
     validations: ["El sitio muestra evidencia de operación de distribución/logística"],
+    isGenericFallback: true,
     version: 1,
   },
   {
@@ -207,6 +263,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "insurance company"],
     relatedIndustries: ["janitorial", "commercial_cleaning"],
     validations: ["El sitio muestra evidencia real de atención médica/paciente"],
+    isGenericFallback: true,
     version: 1,
   },
   {
@@ -227,6 +284,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "residential cleaning only"],
     relatedIndustries: ["commercial_cleaning", "hospitality", "healthcare"],
     validations: ["El sitio ofrece servicios de limpieza comercial reales, no es un cliente de limpieza"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -244,6 +302,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "residential cleaning only"],
     relatedIndustries: ["janitorial"],
     validations: ["El sitio ofrece servicios de limpieza comercial reales"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -259,6 +318,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "real estate agency"],
     relatedIndustries: ["roofing", "electrical", "industrial_automation"],
     validations: ["El sitio muestra proyectos reales de construcción"],
+    isGenericFallback: true,
     version: 1,
   },
   {
@@ -274,6 +334,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "real estate agency"],
     relatedIndustries: ["construction"],
     validations: ["El sitio ofrece servicios de techado reales"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -285,6 +346,11 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // sustantivo ("electricistas") -- el intérprete caía a la industria
     // genérica más cercana ("Construction") y buscaba "construction
     // company" en vez de contratistas eléctricos reales.
+    // F14 (refinamiento de calidad, 2026-07-19): vocabulario ampliado a
+    // pedido explícito del PO -- especializaciones reales del rubro
+    // (industrial/comercial/power systems/substation/alto y bajo
+    // voltaje/data center) para que el descubrimiento externo las
+    // reconozca como UNA sola industria, nunca fragmentadas.
     synonyms: [
       "electrical contractor",
       "electrical contractors",
@@ -292,21 +358,68 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "electricistas",
       "electrical company",
       "electrical services",
+      "electrical construction",
       "electrico",
       "electricos",
       "contratista electrico",
       "contratistas electricos",
+      "industrial electrical",
+      "commercial electrical",
+      "power systems contractor",
+      "substation contractor",
+      "high voltage contractor",
+      "low voltage contractor",
+      "data center electrical",
     ],
-    companyTypes: ["electrical contractor", "electrical services company"],
+    companyTypes: [
+      "electrical contractor",
+      "industrial electrical contractor",
+      "commercial electrical contractor",
+      "electrical services company",
+      "electrical construction company",
+      "power systems contractor",
+      "substation contractor",
+      "high voltage contractor",
+      "low voltage contractor",
+      "data center electrical contractor",
+    ],
     crmIndustryBucket: "Construction",
-    googleSearchPhrases: ["electrical contractor", "electrical services company"],
-    websitePhrases: ["electrical services", "licensed electrician", "electrical contractor"],
-    jobTitles: ["Electrician", "Electricista", "Apprentice Electrician", "Journeyman Electrician"],
+    // F14: orden específico-primero, pedido explícito del PO -- nunca
+    // debe correr una query genérica de "construction"/"industrial
+    // contractor" antes de agotar TODAS estas variantes reales de
+    // eléctrico. Ver buildSearchQueries en mission-planner.ts (ordena
+    // entradas no genéricas antes que genéricas) + el cupo por query en
+    // mission-executor.ts (ninguna query, ni siquiera la primera de
+    // esta lista, puede consumir sola todo el volumen pedido).
+    googleSearchPhrases: [
+      "electrical contractor",
+      "industrial electrical contractor",
+      "commercial electrical contractor",
+      "electrical services company",
+      "electrician company",
+      "electrical construction company",
+      "power systems contractor",
+      "substation contractor",
+      "high voltage contractor",
+      "low voltage contractor",
+      "data center electrical contractor",
+    ],
+    websitePhrases: ["electrical services", "licensed electrician", "electrical contractor", "industrial electrical", "commercial electrical", "power systems", "substation", "high voltage", "low voltage"],
+    jobTitles: [
+      "Electrician",
+      "Electricista",
+      "Apprentice Electrician",
+      "Journeyman Electrician",
+      "Master Electrician",
+      "Industrial Electrician",
+      "Commercial Electrician",
+    ],
     decisionMakers: ["Owner", "President", "Operations Manager", "Project Manager", "HR Manager"],
     negativeKeywords: ["staffing agency", "electronics retail store"],
     relatedIndustries: ["construction", "industrial_automation", "data_centers"],
     validations: ["El sitio ofrece servicios eléctricos contratados reales"],
-    version: 1,
+    isGenericFallback: false,
+    version: 2,
   },
   {
     key: "industrial_automation",
@@ -326,6 +439,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "software company only"],
     relatedIndustries: ["manufacturing", "electrical", "data_centers"],
     validations: ["El sitio ofrece integración/automatización industrial real"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -341,6 +455,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "software/cloud company only (no physical facility)"],
     relatedIndustries: ["mission_critical", "electrical", "industrial_automation"],
     validations: ["El sitio muestra evidencia de una instalación física real de data center"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -356,6 +471,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency"],
     relatedIndustries: ["data_centers", "electrical", "industrial_automation"],
     validations: ["El sitio muestra evidencia real de instalaciones críticas/mission critical"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -371,6 +487,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "garden retail store"],
     relatedIndustries: ["construction"],
     validations: ["El sitio ofrece servicios de paisajismo/jardinería reales"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -386,6 +503,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "food manufacturer", "grocery store"],
     relatedIndustries: ["food_manufacturing"],
     validations: ["El sitio muestra un menú/servicio de comida real al público"],
+    isGenericFallback: false,
     version: 1,
   },
   {
@@ -401,6 +519,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "wholesale distributor only"],
     relatedIndustries: ["distribution"],
     validations: ["El sitio muestra tiendas/ubicaciones de venta al público reales"],
+    isGenericFallback: true,
     version: 1,
   },
   {
@@ -416,6 +535,7 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     negativeKeywords: ["staffing agency", "car dealership"],
     relatedIndustries: ["warehousing", "distribution"],
     validations: ["El sitio muestra evidencia real de flota/operación de transporte"],
+    isGenericFallback: true,
     version: 1,
   },
 ];

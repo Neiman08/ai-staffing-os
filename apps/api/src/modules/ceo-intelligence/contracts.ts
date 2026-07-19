@@ -52,6 +52,17 @@ export const businessTaxonomyEntrySchema = z.object({
   // Reglas humanas de validación (evidencia esperada) — insumo de F7.6,
   // texto descriptivo, no código ejecutable.
   validations: z.array(z.string().min(1)).min(1),
+  // F14 (refinamiento de calidad, 2026-07-19): true para categorías
+  // "paraguas" genéricas (Construction, Manufacturing, Warehousing,
+  // Distribution, Healthcare, Retail, Transportation) que casi siempre
+  // matchean JUNTO a una entrada más específica de la misma familia
+  // (ej. "electrical"/"roofing" junto a "construction"). El planner
+  // (mission-planner.ts) usa esto para ordenar: TODAS las entradas
+  // específicas primero, las genéricas solo al final, como último
+  // recurso -- nunca al revés (hallazgo real: "contratistas eléctricos
+  // en Texas" devolvía constructoras generales porque "construction
+  // company" corría antes que "electrical contractor").
+  isGenericFallback: z.boolean(),
   version: z.number().int().positive(),
 });
 export type BusinessTaxonomyEntry = z.infer<typeof businessTaxonomyEntrySchema>;

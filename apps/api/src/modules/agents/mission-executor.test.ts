@@ -92,7 +92,15 @@ function candidateFixture(overrides: Partial<ProviderCandidate> = {}): ProviderC
 function manufacturingPlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
   return {
     schemaVersion: 1,
-    objective: { type: "find_companies", targetCompanyCount: 5, rawText: "5 empresas de manufactura" },
+    // F14: target por defecto bajado de 5 a 1 -- con el refinamiento
+    // geográfico progresivo (mission-executor.ts, buildRefinementQueries),
+    // cualquier fixture que pida más de lo que el proveedor fake devuelve
+    // en ronda 1 ahora dispara rondas adicionales contra los estados
+    // vecinos de IL (IN/WI/IA/MO). La mayoría de los tests de este
+    // archivo no son sobre refinamiento -- bajar el default evita que lo
+    // disparen por accidente. Los tests que sí ejercitan refinamiento a
+    // propósito sobreescriben stopConditions/objective explícitamente.
+    objective: { type: "find_companies", targetCompanyCount: 1, rawText: "1 empresa de manufactura" },
     searchQueries: [{ searchTerm: "manufacturing company", crmIndustryBucket: "Manufacturing", taxonomyKey: "manufacturing" }],
     exclusions: [],
     cities: [],
@@ -100,7 +108,7 @@ function manufacturingPlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
     steps: ["discover_companies"],
     requiredSteps: ["discover_companies"],
     optionalSteps: [],
-    stopConditions: { maxCompanies: 5, maxCostUsd: 3, maxDurationMinutes: 60 },
+    stopConditions: { maxCompanies: 1, maxCostUsd: 3, maxDurationMinutes: 60 },
     dedupStrategy: ["providerPlaceId", "canonicalDomain", "normalizedPhone", "normalizedNameCityState"],
     fallbackStrategy: [{ provider: "Google Places", whenUnavailable: "Usar Overpass." }],
     restrictions: DEFAULT_MISSION_RESTRICTIONS,
@@ -191,7 +199,33 @@ test("query ejecutada una sola vez: 1 query planificada -> 1 queryExecution, cue
   assert.equal(report.rawResults, 1);
   assert.equal(report.acceptedResults, 1);
   assert.equal(report.companiesCreated, 1);
-  assert.equal(report.missionState, "PARTIAL"); // 1 de 5 pedidas
+  assert.equal(report.missionState, "COMPLETED"); // 1 de 1 pedida (target por defecto del fixture)
+});
+
+test("F14: refinamiento geográfico -- objetivo no cubierto en ronda 1 dispara los estados vecinos soportados, y termina PARTIAL si ninguno aporta empresas nuevas", async () => {
+  const tenantId = await setupTenant("refinement-neighbors-exhausted");
+  // Mismo candidato fijo para cualquier query -- simula honestamente el
+  // caso real donde solo existe 1 empresa relevante y ampliar a estados
+  // vecinos no encuentra nada nuevo (degradación honesta, no un bug).
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const plan = manufacturingPlan({
+    objective: { type: "find_companies", targetCompanyCount: 5, rawText: "5 empresas de manufactura" },
+    stopConditions: { maxCompanies: 5, maxCostUsd: 3, maxDurationMinutes: 60 },
+  });
+  const report = await run(tenantId, plan, providers);
+
+  // IL (estado del plan) tiene 4 vecinos soportados en NEARBY_SUPPORTED_
+  // STATES (IN, WI, IA, MO) -- ronda 1 (1 query) + ronda 3 (4 queries, una
+  // por vecino) = 5 ejecuciones. plan.cities está vacío, así que la ronda
+  // 2 (mismos términos, sin ciudad) no aporta queries nuevas.
+  assert.equal(report.queriesExecuted, 5);
+  assert.equal(report.rawResults, 5);
+  assert.equal(report.acceptedResults, 1);
+  assert.equal(report.companiesCreated, 1);
+  // El mismo candidato fijo vuelve a aparecer en las 4 queries de
+  // refinamiento y se deduplica contra la Company ya creada en ronda 1.
+  assert.equal(report.duplicatesWithinMission, 4);
+  assert.equal(report.missionState, "PARTIAL"); // 1 de 5 pedidas, refinamiento agotado sin encontrar más
 });
 
 test("limite global: pide 2, el proveedor devuelve 5 -> solo se crean 2, stopReason limit_reached, missionState COMPLETED", async () => {
@@ -270,7 +304,11 @@ test("dedup: candidato coincide con una Company ya existente en el CRM (mismo do
   const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
   const report = await run(tenantId, manufacturingPlan(), providers);
   assert.equal(report.companiesCreated, 0);
-  assert.equal(report.duplicatesAlreadyInCrm, 1);
+  // F14: como ninguna empresa NUEVA se crea nunca (el único candidato
+  // siempre matchea el dominio ya existente), el objetivo (1) nunca se
+  // cubre y el refinamiento agota los 4 estados vecinos de IL -- el mismo
+  // duplicado se detecta 5 veces (ronda 1 + 4 vecinas), nunca solo 1.
+  assert.equal(report.duplicatesAlreadyInCrm, 5);
 });
 
 test("Prairie Manufacturing Co. (DEMO_SEED) nunca se re-crea como descubrimiento nuevo", async () => {
@@ -288,7 +326,12 @@ test("Prairie Manufacturing Co. (DEMO_SEED) nunca se re-crea como descubrimiento
   });
   const report = await run(tenantId, manufacturingPlan(), providers);
   assert.equal(report.companiesCreated, 0, "un candidato con el mismo nombre+ciudad+estado que un DEMO_SEED nunca debe crearse como nuevo");
-  assert.equal(report.duplicatesAlreadyInCrm, 1);
+  // F14: el objetivo (1) nunca se cubre (0 creadas) así que el
+  // refinamiento agota los 4 estados vecinos de IL -- prueba además que
+  // el fix de identity (state confirmado del candidato, no el de la
+  // query) sigue detectando el mismo DEMO_SEED aunque la query de
+  // refinamiento haya buscado en un estado vecino distinto de IL.
+  assert.equal(report.duplicatesAlreadyInCrm, 5);
 });
 
 test("Discovery en F7.3 crea Company, pero nunca Lead/Opportunity/Campaign/Contact/CompanyContactPoint", async () => {
@@ -328,8 +371,18 @@ test("categoria sin bucket de Industry real (hospitality): se ejecuta la query p
   const report = await run(tenantId, hotelPlan, providers);
 
   assert.equal(report.companiesCreated, 0);
-  assert.equal(report.queriesExecuted, 1, "la query se ejecuta igual, por honestidad de costo/conteo");
+  // F14: como ninguna empresa se crea nunca (siempre rechazada por falta
+  // de bucket), el objetivo (1) nunca se cubre y el refinamiento agota
+  // los 4 estados vecinos de IL -- 5 ejecuciones en total (honestidad de
+  // costo/conteo), pero el candidato solo se RECHAZA una vez: aunque
+  // nunca se persiste como Company, sus claves de identidad igual se
+  // registran (unique dentro de deduplicateDiscoveryCandidates) al
+  // pasar por el candidate loop en ronda 1 -- las 4 reapariciones en
+  // ronda 3 se reconocen como el mismo candidato ya visto (duplicado),
+  // nunca se re-rechaza 5 veces por la misma razón.
+  assert.equal(report.queriesExecuted, 5);
   assert.equal(report.rejectedResults, 1);
+  assert.equal(report.duplicatesWithinMission, 4);
   assert.ok(report.rejectedCandidates[0]!.reason.includes("bucket"));
 });
 

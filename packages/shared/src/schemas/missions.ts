@@ -373,6 +373,13 @@ export const discoveryQueryExecutionSchema = z.object({
   rejectedCount: z.number(),
   duplicateCount: z.number(),
   error: z.string().nullable(),
+  // F14 (refinamiento de calidad, 2026-07-19): cupo real asignado a esta
+  // query específica (null para queries genéricas/de refinamiento, sin
+  // cupo individual) y a qué ronda de refinamiento geográfico
+  // pertenece (1 = ciudad+estado interpretados, 2 = estado completo,
+  // 3 = estado vecino soportado) -- ver mission-executor.ts.
+  queryCap: z.number().nullable(),
+  refinementRound: z.union([z.literal(1), z.literal(2), z.literal(3)]),
 });
 export type DiscoveryQueryExecution = z.infer<typeof discoveryQueryExecutionSchema>;
 

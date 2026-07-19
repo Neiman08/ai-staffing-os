@@ -721,7 +721,16 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
 
   return (
     <Drawer open={!!missionId} onClose={onClose} title="Detalle de la misión">
-      {detail && (
+      {detail && (() => {
+        // F14 (refinamiento de calidad, 2026-07-19): discoveryFallback
+        // (mission-orchestrator.ts's runAutoExternalDiscoveryFallback,
+        // el flujo POR DEFECTO cuando el CRM no alcanza) tiene EXACTAMENTE
+        // el mismo shape que discoveryExecution (el desvío explícito
+        // useExternalDiscovery=true) -- una misión real nunca tiene
+        // ambos a la vez, así que mostrar el que esté presente reutiliza
+        // las 3 secciones de abajo sin duplicar ningún componente.
+        const discoveryReport = detail.discoveryExecution ?? detail.discoveryFallback;
+        return (
         <div className="space-y-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Instrucción original</p>
@@ -736,8 +745,8 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           {detail.missionPlan && (
             <MissionPlanSection plan={detail.missionPlan} warnings={detail.ceoIntentMeta?.warnings ?? []} />
           )}
-          {detail.discoveryExecution && <DiscoveryExecutionSection report={detail.discoveryExecution} />}
-          {detail.discoveryExecution && <BusinessValidationSection report={detail.discoveryExecution} />}
+          {discoveryReport && <DiscoveryExecutionSection report={discoveryReport} />}
+          {discoveryReport && <BusinessValidationSection report={discoveryReport} />}
           {detail.unrecognizedTerms.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Términos no reconocidos</p>
@@ -819,7 +828,7 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               )}
             </div>
           </div>
-          {detail.discoveryExecution && <OrganizationalEmailsSection report={detail.discoveryExecution} />}
+          {discoveryReport && <OrganizationalEmailsSection report={discoveryReport} />}
           <div>
             <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Contact Intelligence</p>
             {/* F7.7: para una misión ejecutada por el nuevo ejecutor
@@ -830,7 +839,7 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
                 candidatos evaluados / contactos creados / empresas con
                 contacto) -- este bloque de abajo es exclusivo del flujo
                 CLÁSICO (mission-orchestrator sin ejecutor dinámico). */}
-            {detail.discoveryExecution ? (
+            {discoveryReport ? (
               <p className="rounded-md border border-border p-2 text-xs text-muted-foreground">
                 Ver contactos personales encontrados en la sección "Validación" arriba.
               </p>
@@ -945,7 +954,8 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           </>
           )}
         </div>
-      )}
+        );
+      })()}
     </Drawer>
   );
 }
