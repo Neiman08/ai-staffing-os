@@ -17,6 +17,8 @@ import {
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { AppError } from "../../../core/errors";
 import type { UsageAccumulator } from "../usage";
+import { interpretBusinessIntent } from "../../ceo-intelligence/intent-interpreter";
+import { normalizeText } from "../../ceo-intelligence/text-normalize";
 
 function tryParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
   try {
@@ -204,6 +206,49 @@ export async function computeContactCoverage(missionTaskId: string): Promise<Mis
 }
 
 /**
+ * F14 (hallazgo real: "Industrial", "Commercial", "data centers",
+ * "infraestructura eléctrica" reportados como unrecognizedTerms pese a
+ * haber generado búsquedas reales). El LLM de arriba corre dos
+ * evaluaciones del mismo término EN LA MISMA RESPUESTA: puede convertirlo
+ * en una frase de externalSearchTerms (según sus propias instrucciones
+ * del prompt) Y SEPARADAMENTE listarlo en unrecognizedTerms si no
+ * coincide con el vocabulario cerrado de industryNames/categoryNames
+ * (que son solo los 5 buckets reales del CRM) — el prompt le pide no
+ * hacer esto, pero un LLM no es 100% consistente con sus propias reglas.
+ * "Unrecognized" para el usuario final debería significar "el sistema
+ * no entendió esto en absoluto", no "no coincide con el nombre exacto
+ * de una Industry del CRM" — un término que SÍ generó una query real
+ * (vía externalSearchTerms) o que el intérprete determinista de
+ * taxonomía (misma fuente de verdad que building/mission-planner.ts
+ * usa para las queries reales, ver intent-interpreter.ts) reconoce por
+ * separado, nunca debe aparecer acá. Mismo criterio de "defensa en
+ * profundidad, nunca confiar ciegamente en el LLM" que ya usa este
+ * archivo para industryNames/categoryNames arriba.
+ */
+export function filterActuallyUnrecognizedTerms(unrecognizedTerms: string[], externalSearchTerms: string[]): string[] {
+  const normalizedSearchPhrases = externalSearchTerms.map((t) => normalizeText(t));
+  return unrecognizedTerms.filter((term) => {
+    const normalizedTerm = normalizeText(term);
+    if (!normalizedTerm) return false;
+    // (a) el propio LLM ya lo convirtió en una frase de búsqueda real —
+    // aparece como substring de alguna, en cualquier dirección (el
+    // término del usuario puede ser más corto o más largo que la frase
+    // en inglés generada, ej. "industrial" vs "industrial automation").
+    const coveredBySearchTerm = normalizedSearchPhrases.some(
+      (phrase) => phrase.includes(normalizedTerm) || normalizedTerm.includes(phrase),
+    );
+    if (coveredBySearchTerm) return false;
+    // (b) el intérprete determinista de taxonomía (fuente de verdad real
+    // de qué sectores el sistema sabe buscar) lo reconoce por su cuenta,
+    // evaluado en el contexto de la instrucción completa de arriba nunca
+    // pasa acá — evaluado aislado, exactamente como lo reportaría un
+    // humano leyendo solo esa palabra suelta.
+    const recognizedByTaxonomy = interpretBusinessIntent(term).matchedTaxonomyKeys.length > 0;
+    return !recognizedByTaxonomy;
+  });
+}
+
+/**
  * F4: los dos únicos tools del CEO Agent. Ambos corren DIRECTAMENTE
  * contra la misión raíz (vía runCeoToolDirectly en task-executor.ts), no
  * como tareas hijas — ver F4_AUTONOMOUS_OUTREACH_PLAN.md, addendum
@@ -306,7 +351,10 @@ Regla crítica sobre missionRestrictions: estos 4 flags son SIEMPRE true salvo q
           categoryNames: validCategoryNames,
           desiredVolume: parsed.desiredVolume,
           businessObjective: { ...parsed.businessObjective, unit: parsed.businessObjective.unit ?? "empresas" },
-          unrecognizedTerms: [...parsed.unrecognizedTerms, ...droppedTerms],
+          unrecognizedTerms: filterActuallyUnrecognizedTerms(
+            [...parsed.unrecognizedTerms, ...droppedTerms],
+            parsed.externalSearchTerms ?? [],
+          ),
           useExternalDiscovery: parsed.useExternalDiscovery ?? false,
           externalSearchTerms: parsed.externalSearchTerms ?? [],
           // Corrección estructural: el AND del detector determinista con lo

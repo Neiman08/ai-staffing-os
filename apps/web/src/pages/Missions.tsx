@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { MissionDetail, MissionListItem } from "@ai-staffing-os/shared";
+import type { MissionDetail, MissionListItem, CompanyValidationRecord, MissionCompany } from "@ai-staffing-os/shared";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -12,7 +12,7 @@ import { Drawer } from "@/components/ui/drawer";
 import { Textarea } from "@/components/ui/textarea";
 import { formatStatusLabel } from "@/lib/status";
 import { timeAgo } from "@/lib/agentTaskStats";
-import { Sparkles } from "lucide-react";
+import { Sparkles, Check, X, ChevronDown, ChevronUp } from "lucide-react";
 import { CompanyOriginBadge } from "@/components/shared/CompanyOriginBadge";
 
 const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral" | "info"> = {
@@ -437,6 +437,39 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
         </div>
       )}
 
+      {/* F14: agregados reales de conversión "descubrimiento -> acción
+          comercial" -- guardia explícita (leadsCreated != null) porque
+          una misión anterior a F14 nunca tiene estos campos en el JSON
+          congelado de AgentTask.output. */}
+      {report.leadsCreated != null && (
+        <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
+          <div>
+            <p className="text-base font-semibold tabular-nums">{report.leadsCreated}</p>
+            <p className="text-muted-foreground">Leads creados</p>
+          </div>
+          <div>
+            <p className="text-base font-semibold tabular-nums">{report.opportunitiesCreated}</p>
+            <p className="text-muted-foreground">Opportunities creadas</p>
+          </div>
+          {report.opportunitiesBlockedByRestriction > 0 && (
+            <div>
+              <p className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">{report.opportunitiesBlockedByRestriction}</p>
+              <p className="text-muted-foreground">Opportunities bloqueadas</p>
+            </div>
+          )}
+          <div>
+            <p className="text-base font-semibold tabular-nums">{report.draftsCreated}</p>
+            <p className="text-muted-foreground">Borradores generados</p>
+          </div>
+          {report.draftsBlockedByRestriction > 0 && (
+            <div>
+              <p className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">{report.draftsBlockedByRestriction}</p>
+              <p className="text-muted-foreground">Borradores bloqueados</p>
+            </div>
+          )}
+        </div>
+      )}
+
       <TagList label="Proveedores usados" items={report.providersUsed} variant="info" />
       <TagList label="Proveedores omitidos" items={report.providersOmitted} variant="warning" />
 
@@ -508,6 +541,223 @@ const OPPORTUNITY_RECOMMENDATION_VARIANTS: Record<string, "success" | "warning" 
   ARCHIVE: "danger",
 };
 
+// F14: la regla determinista real que decidió si esta Company se
+// convirtió en Lead/Opportunity -- espejo de ConversionRule
+// (conversion-policy.ts). Cada label explica la regla en una frase
+// legible, nunca solo el nombre técnico de la constante.
+const CONVERSION_RULE_LABELS: Record<string, string> = {
+  BLOCKED_OR_DUBIOUS_IDENTITY: "Identidad bloqueada o dudosa — nunca se crea Lead ni Opportunity",
+  NO_MINIMUM_EVIDENCE: "Sin ningún canal de contacto real — evidencia insuficiente",
+  EXACT_CONFIRMED_OR_LIKELY_HIRING: "Validación EXACT + contratación confirmada/probable — revisión estándar",
+  EXACT_POSSIBLE_HIRING_WITH_EVIDENCE: "Validación EXACT + señal posible con evidencia concreta — revisión requerida",
+  APPROXIMATE_SIGNAL_WITH_EVIDENCE: "Validación aproximada + señal de contratación — Lead de investigación",
+  NO_SIGNAL_LEAD_ONLY: "Sin señal de contratación — Lead de investigación, nunca Opportunity automática",
+  INSUFFICIENT_EVIDENCE: "Combinación de evidencia insuficiente para actuar",
+};
+
+// F14: badges de resumen del outcome comercial -- construidos a partir
+// de campos ya existentes (ConvertDiscoveredCompanyResult), nunca un
+// estado nuevo inventado en el frontend. Jerarquía pedida por el PO:
+// "Lead creado, Opportunity creada, Draft pendiente, Sin acción,
+// Bloqueado, Revisión requerida" -- estas son etiquetas de PRESENTACIÓN
+// sobre decision.rule/createLead/createOpportunity/draftCreated, que ya
+// existen en el backend (conversion-policy.ts).
+type BadgeVariant = "success" | "warning" | "danger" | "neutral" | "info";
+function getOutcomeBadges(conversion: NonNullable<CompanyValidationRecord["conversion"]>): Array<{ label: string; variant: BadgeVariant }> {
+  const { decision } = conversion;
+  const badges: Array<{ label: string; variant: BadgeVariant }> = [];
+
+  if (decision.rule === "BLOCKED_OR_DUBIOUS_IDENTITY") {
+    badges.push({ label: "Bloqueado", variant: "danger" });
+    return badges;
+  }
+  if (!decision.createLead) {
+    badges.push({ label: "Sin acción", variant: "neutral" });
+    return badges;
+  }
+
+  badges.push({ label: "Lead creado", variant: "success" });
+  if (decision.createOpportunity) {
+    badges.push({ label: "Opportunity creada", variant: decision.opportunityReviewRequired ? "warning" : "success" });
+    if (decision.opportunityReviewRequired) badges.push({ label: "Revisión requerida", variant: "warning" });
+  } else {
+    badges.push({ label: "Sin Opportunity", variant: "neutral" });
+  }
+  if (conversion.opportunityBlockedByRestriction) badges.push({ label: "Opportunity bloqueada", variant: "warning" });
+  if (conversion.draftCreated) badges.push({ label: "Draft pendiente", variant: "success" });
+  else if (conversion.draftBlockedByRestriction) badges.push({ label: "Draft bloqueado", variant: "warning" });
+
+  return badges;
+}
+
+// F14: "canales disponibles" -- deriva de datos YA reunidos por la
+// misión (MissionCompany.website/phone del listado de empresas
+// seleccionadas, y los conteos de emailsVerified/contactsFound del
+// propio companyValidations) -- nunca un campo nuevo, solo la misma
+// evidencia que ya usó conversion-policy.ts para decidir.
+interface ChannelAvailability {
+  website: boolean;
+  phone: boolean;
+  verifiedEmail: boolean;
+  realContact: boolean;
+}
+function ChannelIndicator({ label, available }: { label: string; available: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${available ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400" : "border-border text-muted-foreground"}`}>
+      {available ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+      {label}
+    </span>
+  );
+}
+function ChannelsRow({ channels }: { channels: ChannelAvailability }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <ChannelIndicator label="Website" available={channels.website} />
+      <ChannelIndicator label="Teléfono" available={channels.phone} />
+      <ChannelIndicator label="Email verificado" available={channels.verifiedEmail} />
+      <ChannelIndicator label="Contacto real" available={channels.realContact} />
+    </div>
+  );
+}
+
+/**
+ * F14: tarjeta auditable por Company -- resumen SIEMPRE visible
+ * (nombre, clasificación de negocio, señal de contratación, badges de
+ * outcome) + detalle expandible (canales, evidencia, riesgos, regla y
+ * motivo exactos). `conversion` es null cuando la misión no activó
+ * convertToCommercialActions (ej. el flujo de fallback interno, donde
+ * el pipeline clásico crea Lead/Opportunity aparte) -- en ese caso
+ * nunca se muestran badges de outcome, para no insinuar una decisión
+ * que en realidad tomó otro camino.
+ */
+function CompanyConversionCard({ v, company }: { v: CompanyValidationRecord; company: MissionCompany | undefined }) {
+  const [expanded, setExpanded] = useState(false);
+  const outcomeBadges = v.conversion ? getOutcomeBadges(v.conversion) : [];
+  const channels: ChannelAvailability = {
+    website: !!company?.website,
+    phone: !!company?.phone,
+    verifiedEmail: v.emailsVerified > 0,
+    realContact: v.contactsFound > 0,
+  };
+
+  return (
+    <div className="rounded-md border border-border p-2 text-xs">
+      {/* Resumen -- legible sin expandir nada. */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Link to={`/companies/${v.companyId}`} className="truncate font-medium hover:underline" title={v.name}>
+            {v.name}
+          </Link>
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            <Badge variant="neutral" title="Company creada por esta misión">
+              Company creada
+            </Badge>
+            <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"} title="Clasificación de negocio">
+              {v.businessConfidence}
+            </Badge>
+            {v.hiringStatus && (
+              <Badge variant={HIRING_STATUS_VARIANTS[v.hiringStatus] ?? "neutral"} title="Señal de contratación">
+                {formatStatusLabel(v.hiringStatus)}
+              </Badge>
+            )}
+            {outcomeBadges.map((b, i) => (
+              <Badge key={i} variant={b.variant}>
+                {b.label}
+              </Badge>
+            ))}
+          </div>
+        </div>
+        <Button size="sm" variant="ghost" className="shrink-0 gap-1" onClick={() => setExpanded((e) => !e)}>
+          {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          {expanded ? "Ocultar" : "Detalle"}
+        </Button>
+      </div>
+
+      {expanded && (
+        <div className="mt-2 space-y-2 border-t border-border pt-2">
+          <ChannelsRow channels={channels} />
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+            {v.detectedBusinessType && <span>Tipo: {v.detectedBusinessType}</span>}
+            {v.detectedSector && <span>Sector: {v.detectedSector}</span>}
+            <span>CompanyContactPoint creados: {v.companyContactPointsCreated}</span>
+            {!v.hasValidEmail && <span className="text-amber-600 dark:text-amber-400">Sin email organizacional válido</span>}
+          </div>
+          {v.matchedEvidence.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">Evidencia: {v.matchedEvidence.join(", ")}</p>
+          )}
+          {v.missingEvidence.length > 0 && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">Falta confirmar: {v.missingEvidence.join(", ")}</p>
+          )}
+          {(v.targetTitlesMatched?.length ?? 0) > 0 && (
+            <p className="text-[11px] text-muted-foreground">Puestos detectados: {v.targetTitlesMatched.join(", ")}</p>
+          )}
+          {v.rolePlan && v.rolePlan.targetRoles.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Roles a buscar: {v.rolePlan.targetRoles.map((r) => r.role).join(", ")}
+            </p>
+          )}
+          {v.contactsFound > 0 && (
+            <p className="text-[11px] text-emerald-600 dark:text-emerald-400">Contactos personales encontrados: {v.contactsFound}</p>
+          )}
+          {(v.rolesWithoutContact?.length ?? 0) > 0 && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">Sin contacto identificado: {v.rolesWithoutContact.join(", ")}</p>
+          )}
+          {/* F7.11 hallazgo de compatibilidad histórica: discoveryExecution
+              se lee del JSON congelado en AgentTask.output al momento en
+              que corrió la misión -- una misión anterior a F7.10 nunca
+              tendrá opportunityRecommendation. Guardia explícita, nunca
+              un crash ni un dato inventado para rellenar. */}
+          {v.opportunityRecommendation && (
+            <div>
+              <div className="flex items-center gap-2">
+                <Badge variant={OPPORTUNITY_RECOMMENDATION_VARIANTS[v.opportunityRecommendation.recommendation] ?? "neutral"}>
+                  {formatStatusLabel(v.opportunityRecommendation.recommendation)}
+                </Badge>
+                <span className="text-[11px] text-muted-foreground">{v.opportunityRecommendation.nextBestAction}</span>
+              </div>
+              {v.opportunityRecommendation.risks.length > 0 && (
+                <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Riesgos: {v.opportunityRecommendation.risks.join(" ")}</p>
+              )}
+            </div>
+          )}
+          {/* F14: regla determinista exacta + motivo textual completo --
+              espejo de ConvertDiscoveredCompanyResult.decision
+              (discovery-conversion.ts). `null` cuando la misión no
+              activó convertToCommercialActions. */}
+          {v.conversion && (
+            <div className="space-y-1 rounded-md border border-border bg-muted/30 p-2">
+              <p className="font-medium text-foreground">{CONVERSION_RULE_LABELS[v.conversion.decision.rule] ?? v.conversion.decision.rule}</p>
+              <p className="text-[11px] text-muted-foreground">{v.conversion.decision.reason}</p>
+              {v.conversion.decision.createOpportunity &&
+                !v.conversion.draftCreated &&
+                !v.conversion.draftBlockedByRestriction &&
+                v.conversion.draftEligibility && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">Sin borrador: {v.conversion.draftEligibility.reason}</p>
+                )}
+            </div>
+          )}
+          {/* F7.11: Mission Review and Approval -- acciones futuras
+              deshabilitadas a propósito. Ninguna de estas ejecuta nada
+              todavía: solo anticipan el flujo de aprobación MANUAL del
+              CEO para casos que la política determinista de F14 no
+              resolvió automáticamente, nunca una creación/archivo real. */}
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" disabled title="Revisión manual explícita del CEO — todavía no implementada">
+              Crear Opportunity
+            </Button>
+            <Button size="sm" variant="outline" disabled title="Requiere aprobación explícita del CEO">
+              Archivar
+            </Button>
+            <Button size="sm" variant="outline" disabled title="Requiere aprobación explícita del CEO">
+              Marcar para revisión manual
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * F7.4: "Validación" — Business Validation (Parte A) + Email Trust
  * (Parte B) por cada Company realmente creada por esta misión. Presente
@@ -518,93 +768,25 @@ const OPPORTUNITY_RECOMMENDATION_VARIANTS: Record<string, "success" | "warning" 
  * utilizable — solo aparece acá para transparencia de por qué se
  * descartó.
  */
-function BusinessValidationSection({ report }: { report: NonNullable<MissionDetail["discoveryExecution"]> }) {
+function BusinessValidationSection({
+  report,
+  selectedCompanies,
+}: {
+  report: NonNullable<MissionDetail["discoveryExecution"]>;
+  selectedCompanies: MissionCompany[];
+}) {
   if (report.companyValidations.length === 0) return null;
+  // F14: website/phone de cada Company (para "canales disponibles") no
+  // viven en companyValidations -- se cruzan por companyId contra
+  // selectedCompanies (mismo dato ya expuesto en "Empresas
+  // seleccionadas", nunca un fetch nuevo).
+  const companiesById = new Map(selectedCompanies.map((c) => [c.companyId, c]));
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Validación</p>
       <div className="space-y-2">
         {report.companyValidations.map((v) => (
-          <div key={v.companyId} className="rounded-md border border-border p-2 text-xs">
-            <div className="flex items-center justify-between gap-2">
-              <Link to={`/companies/${v.companyId}`} className="min-w-0 truncate font-medium hover:underline" title={v.name}>
-                {v.name}
-              </Link>
-              <div className="flex shrink-0 items-center gap-1">
-                {v.hiringStatus && (
-                  <Badge variant={HIRING_STATUS_VARIANTS[v.hiringStatus] ?? "neutral"} title="Hiring Signal">
-                    {formatStatusLabel(v.hiringStatus)}
-                  </Badge>
-                )}
-                <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"}>{v.businessConfidence}</Badge>
-              </div>
-            </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-              {v.detectedBusinessType && <span>Tipo: {v.detectedBusinessType}</span>}
-              {v.detectedSector && <span>Sector: {v.detectedSector}</span>}
-              {!v.hasValidEmail && <span className="text-amber-600 dark:text-amber-400">Sin email organizacional válido</span>}
-            </div>
-            {v.matchedEvidence.length > 0 && (
-              <p className="mt-1 text-[11px] text-muted-foreground">Evidencia: {v.matchedEvidence.join(", ")}</p>
-            )}
-            {v.missingEvidence.length > 0 && (
-              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Falta confirmar: {v.missingEvidence.join(", ")}</p>
-            )}
-            {(v.targetTitlesMatched?.length ?? 0) > 0 && (
-              <p className="mt-1 text-[11px] text-muted-foreground">Puestos detectados: {v.targetTitlesMatched.join(", ")}</p>
-            )}
-            {v.rolePlan && v.rolePlan.targetRoles.length > 0 && (
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Roles a buscar: {v.rolePlan.targetRoles.map((r) => r.role).join(", ")}
-              </p>
-            )}
-            {v.contactsFound > 0 && (
-              <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">Contactos personales encontrados: {v.contactsFound}</p>
-            )}
-            {(v.rolesWithoutContact?.length ?? 0) > 0 && (
-              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Sin contacto identificado: {v.rolesWithoutContact.join(", ")}</p>
-            )}
-            {/* F7.11 hallazgo de compatibilidad histórica: discoveryExecution
-                se lee del JSON congelado en AgentTask.output al momento en
-                que corrió la misión -- una misión anterior a F7.10 nunca
-                tendrá opportunityRecommendation. Guardia explícita, nunca
-                un crash ni un dato inventado para rellenar. */}
-            {v.opportunityRecommendation && (
-              <>
-                <div className="mt-1.5 flex items-center gap-2">
-                  <Badge variant={OPPORTUNITY_RECOMMENDATION_VARIANTS[v.opportunityRecommendation.recommendation] ?? "neutral"}>
-                    {formatStatusLabel(v.opportunityRecommendation.recommendation)}
-                  </Badge>
-                  <span className="text-[11px] text-muted-foreground">
-                    {v.opportunityRecommendation.nextBestAction}
-                  </span>
-                </div>
-                {v.opportunityRecommendation.risks.length > 0 && (
-                  <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Riesgos: {v.opportunityRecommendation.risks.join(" ")}</p>
-                )}
-              </>
-            )}
-            {/* F7.11: Mission Review and Approval -- acciones futuras
-                deshabilitadas a propósito. Ninguna de estas ejecuta
-                nada todavía: solo anticipan el flujo de aprobación
-                explícita del CEO, nunca una creación/archivo real. */}
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled
-                title="Requiere aprobación explícita del CEO — creación real de Opportunity todavía no implementada"
-              >
-                Crear Opportunity
-              </Button>
-              <Button size="sm" variant="outline" disabled title="Requiere aprobación explícita del CEO">
-                Archivar
-              </Button>
-              <Button size="sm" variant="outline" disabled title="Requiere aprobación explícita del CEO">
-                Marcar para revisión manual
-              </Button>
-            </div>
-          </div>
+          <CompanyConversionCard key={v.companyId} v={v} company={companiesById.get(v.companyId)} />
         ))}
       </div>
       {report.hiringSignalsChecked > 0 && (
@@ -733,8 +915,19 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
         return (
         <div className="space-y-4">
           <div>
+            {/* F14: MIS-YYYYMMDD-NNNN + quién/cuándo/cuánto duró -- alias
+                legible, nunca reemplaza detail.id (sigue siendo la clave
+                real de la URL/API de esta misma vista). launchedByName
+                queda null en cualquier misión lanzada antes de este fix. */}
+            <p className="font-mono text-xs text-muted-foreground">{detail.missionCode}</p>
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Instrucción original</p>
             <p className="text-sm">{detail.rawInstruction}</p>
+            <p className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+              <span>Inicio: {new Date(detail.createdAt).toLocaleString()}</span>
+              {detail.completedAt && <span>Fin: {new Date(detail.completedAt).toLocaleString()}</span>}
+              {detail.durationMs != null && <span>Duración: {formatDuration(detail.durationMs)}</span>}
+              {detail.launchedByName && <span>Lanzada por: {detail.launchedByName}{detail.launchedByEmail ? ` (${detail.launchedByEmail})` : ""}</span>}
+            </p>
           </div>
           {detail.missionPhase === "PLANNED" && (
             <Badge variant="info" className="w-fit">
@@ -746,7 +939,7 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
             <MissionPlanSection plan={detail.missionPlan} warnings={detail.ceoIntentMeta?.warnings ?? []} />
           )}
           {discoveryReport && <DiscoveryExecutionSection report={discoveryReport} />}
-          {discoveryReport && <BusinessValidationSection report={discoveryReport} />}
+          {discoveryReport && <BusinessValidationSection report={discoveryReport} selectedCompanies={detail.selectedCompanies} />}
           {detail.unrecognizedTerms.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Términos no reconocidos</p>
@@ -960,18 +1153,41 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
   );
 }
 
+// F14: HH:MM:SS legible para una duración total en ms -- nunca "3 horas
+// atrás" (eso es timeAgo, para instantes) sino un lapso, formato fijo
+// sin redondeo aproximado engañoso.
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}h ${pad(m)}m` : m > 0 ? `${m}m ${pad(s)}s` : `${s}s`;
+}
+
 function MissionCard({ mission, onOpenDetail }: { mission: MissionListItem; onOpenDetail: () => void }) {
   return (
     <Card className="card-hover space-y-3 p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium" title={mission.rawInstruction}>
-            {mission.rawInstruction}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {/* F14: MIS-YYYYMMDD-NNNN -- alias legible, nunca reemplaza
+                el id interno (mission.id sigue siendo la clave real de
+                todas las rutas/onOpenDetail). */}
+            <span className="font-mono text-[11px] text-muted-foreground">{mission.missionCode}</span>
+            <p className="truncate text-sm font-medium" title={mission.rawInstruction}>
+              {mission.rawInstruction}
+            </p>
+          </div>
           <p className="text-xs text-muted-foreground">
             {mission.industryNames.join(", ") || "Cualquier industria"}
             {mission.state ? ` · ${mission.state}` : ""}
             {mission.categoryNames.length ? ` · ${mission.categoryNames.join(", ")}` : ""}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {timeAgo(mission.createdAt)}
+            {mission.launchedByName ? ` · lanzada por ${mission.launchedByName}` : ""}
+            {mission.durationMs != null ? ` · duración ${formatDuration(mission.durationMs)}` : ""}
           </p>
         </div>
         <Badge variant={MISSION_STATE_VARIANTS[mission.missionState] ?? "neutral"}>

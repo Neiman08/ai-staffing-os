@@ -5,7 +5,35 @@ import { applyMissionAction, launchMission } from "../agents/mission-orchestrato
 import { planMissionOnly } from "../agents/mission-planning";
 import { toAgentTaskDetail } from "../agents/task-executor";
 
-function toListItem(task: AgentTaskDetail): MissionListItem {
+// F14: ID legible humano MIS-YYYYMMDD-NNNN -- NUNCA reemplaza el id
+// interno (cuid, sigue siendo la clave real para todas las rutas/FKs),
+// solo un alias legible para mostrar en UI/reportes. NNNN es el rango
+// 1-based de esta misión entre las lanzadas ese mismo día calendario
+// (UTC) para este tenant.
+function formatMissionCode(createdAtIso: string, rank: number): string {
+  const compact = createdAtIso.slice(0, 10).replace(/-/g, "");
+  return `MIS-${compact}-${String(rank).padStart(4, "0")}`;
+}
+
+// F14: resuelve userId -> {name, email} en lote -- nunca N+1 queries
+// para una lista de misiones. Ids ausentes (misión lanzada antes de
+// este fix, o usuario borrado) simplemente no aparecen en el mapa.
+async function resolveLaunchedByMap(userIds: string[]): Promise<Map<string, { name: string; email: string }>> {
+  const uniqueIds = Array.from(new Set(userIds));
+  if (uniqueIds.length === 0) return new Map();
+  const users = await scopedDb.user.findMany({ where: { id: { in: uniqueIds } } });
+  return new Map(users.map((u) => [u.id, { name: `${u.firstName} ${u.lastName}`.trim(), email: u.email }]));
+}
+
+interface MissionMetadata {
+  missionCode: string;
+  durationMs: number | null;
+  launchedByUserId: string | null;
+  launchedByName: string | null;
+  launchedByEmail: string | null;
+}
+
+function toListItem(task: AgentTaskDetail, meta: MissionMetadata): MissionListItem {
   const input = task.input as {
     rawInstruction: string;
     industryNames?: string[];
@@ -18,6 +46,11 @@ function toListItem(task: AgentTaskDetail): MissionListItem {
   const output = (task.output ?? {}) as Partial<MissionListItem> & { missionState?: string };
 
   return {
+    missionCode: meta.missionCode,
+    durationMs: meta.durationMs,
+    launchedByUserId: meta.launchedByUserId,
+    launchedByName: meta.launchedByName,
+    launchedByEmail: meta.launchedByEmail,
     id: task.id,
     rawInstruction: input.rawInstruction,
     industryNames: input.industryNames ?? [],
@@ -62,10 +95,32 @@ function toListItem(task: AgentTaskDetail): MissionListItem {
   };
 }
 
+// F14: metadata de UNA misión (rango del día vía COUNT real, launchedBy
+// vía lookup único) -- usado por createMission/createMissionPlan/
+// getMissionDetail, donde no vale la pena el batching de listMissions.
+async function computeMissionMetadata(task: AgentTaskDetail): Promise<MissionMetadata> {
+  const createdAt = new Date(task.createdAt);
+  const completedAt = task.completedAt ? new Date(task.completedAt) : null;
+  const dayStart = new Date(Date.UTC(createdAt.getUTCFullYear(), createdAt.getUTCMonth(), createdAt.getUTCDate()));
+  const rank = await scopedDb.agentTask.count({
+    where: { type: "daily_revenue_mission", createdAt: { gte: dayStart, lte: createdAt } },
+  });
+  const launchedByUserId = (task.input as { launchedByUserId?: string | null }).launchedByUserId ?? null;
+  const launchedByMap = await resolveLaunchedByMap(launchedByUserId ? [launchedByUserId] : []);
+  const launchedBy = launchedByUserId ? launchedByMap.get(launchedByUserId) : undefined;
+  return {
+    missionCode: formatMissionCode(task.createdAt, rank),
+    durationMs: completedAt ? completedAt.getTime() - createdAt.getTime() : null,
+    launchedByUserId,
+    launchedByName: launchedBy?.name ?? null,
+    launchedByEmail: launchedBy?.email ?? null,
+  };
+}
+
 /** POST /missions — lanza una Daily Revenue Mission a partir de una instrucción en lenguaje natural. */
 export async function createMission(instruction: string): Promise<MissionListItem> {
   const task = await launchMission(instruction);
-  return toListItem(task);
+  return toListItem(task, await computeMissionMetadata(task));
 }
 
 /**
@@ -76,7 +131,7 @@ export async function createMission(instruction: string): Promise<MissionListIte
  */
 export async function createMissionPlan(instruction: string): Promise<MissionListItem> {
   const task = await planMissionOnly(instruction);
-  return toListItem(task);
+  return toListItem(task, await computeMissionMetadata(task));
 }
 
 export async function listMissions(): Promise<MissionListItem[]> {
@@ -89,7 +144,44 @@ export async function listMissions(): Promise<MissionListItem[]> {
     take: 30,
   });
   const details = await Promise.all(tasks.map((t) => toAgentTaskDetail(t)));
-  return details.map(toListItem);
+
+  // F14: rango 1-based por día calendario (UTC), calculado SOLO entre
+  // las misiones visibles acá (las 30 más recientes) -- evita N+1
+  // queries de COUNT. Aproximación documentada: dado que este sistema
+  // ya fuerza como mucho una Daily Revenue Mission activa por día
+  // (launchMission, arriba), en la práctica esto siempre coincide con
+  // el rango real; solo podría divergir si algún día tuvo más misiones
+  // que las que entran en esta ventana de 30, algo que hoy no ocurre.
+  const ascByCreatedAt = [...details].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const missionCodes = new Map<string, string>();
+  let currentDayKey = "";
+  let rank = 0;
+  for (const t of ascByCreatedAt) {
+    const dayKey = t.createdAt.slice(0, 10);
+    if (dayKey !== currentDayKey) {
+      currentDayKey = dayKey;
+      rank = 0;
+    }
+    rank += 1;
+    missionCodes.set(t.id, formatMissionCode(t.createdAt, rank));
+  }
+
+  const launchedByUserIds = details
+    .map((t) => (t.input as { launchedByUserId?: string | null }).launchedByUserId)
+    .filter((id): id is string => !!id);
+  const launchedByMap = await resolveLaunchedByMap(launchedByUserIds);
+
+  return details.map((t) => {
+    const launchedByUserId = (t.input as { launchedByUserId?: string | null }).launchedByUserId ?? null;
+    const launchedBy = launchedByUserId ? launchedByMap.get(launchedByUserId) : undefined;
+    return toListItem(t, {
+      missionCode: missionCodes.get(t.id)!,
+      durationMs: t.completedAt ? new Date(t.completedAt).getTime() - new Date(t.createdAt).getTime() : null,
+      launchedByUserId,
+      launchedByName: launchedBy?.name ?? null,
+      launchedByEmail: launchedBy?.email ?? null,
+    });
+  });
 }
 
 export async function getMissionDetail(id: string): Promise<MissionDetail> {
@@ -101,7 +193,7 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     scopedDb.agentTask.findMany({ where: { parentTaskId: id }, orderBy: { createdAt: "asc" } }),
   ]);
 
-  const listItem = toListItem(detail);
+  const listItem = toListItem(detail, await computeMissionMetadata(detail));
   const output = (detail.output ?? {}) as {
     report?: string | null;
     contactCoverage?: MissionDetail["contactCoverage"];
@@ -271,5 +363,5 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
 
 export async function decideMissionAction(id: string, input: MissionActionInput): Promise<MissionListItem> {
   const task = await applyMissionAction(id, input.action);
-  return toListItem(task);
+  return toListItem(task, await computeMissionMetadata(task));
 }

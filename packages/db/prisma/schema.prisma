@@ -775,6 +775,18 @@ model Opportunity {
   ownerId              String?
   pricingScenarios     PricingScenario[]
   createdByAgentTaskId String? // F3: mismo patrón que Lead.createdByAgentTaskId (F2)
+  // F14: producidas por la política de conversión determinista de
+  // ceo-intelligence/conversion-policy.ts -- null/false para toda
+  // Opportunity creada por el flujo clásico (F1-F4), que no usa esta
+  // política. reviewRequired=true marca evidencia suficiente pero no la
+  // más fuerte (ver conversion-policy.ts reglas 4/5) -- nunca cambia si
+  // la Opportunity requiere aprobación humana (eso ya es SIEMPRE cierto
+  // para toda Opportunity de este sistema), solo si debe destacarse en
+  // la UI como pendiente de revisión antes de avanzarla. conversionRule
+  // guarda el código exacto de la regla aplicada (trazabilidad real,
+  // nunca "se decidió sola").
+  reviewRequired       Boolean           @default(false)
+  conversionRule       String?
   createdAt            DateTime          @default(now())
   updatedAt            DateTime          @updatedAt
 

@@ -686,6 +686,11 @@ async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction:
     businessActivities: intent.businessActivities,
     targetJobTitles: intent.targetJobTitles,
     decisionRoles: intent.decisionRoles,
+    // F14: este es el llamador terminal real (useExternalDiscovery=true
+    // nunca vuelve a pasar por el pipeline clásico, ver el comentario en
+    // ExecuteDiscoveryPlanParams) — es el único lugar donde conviene
+    // convertir el descubrimiento en Lead/Opportunity/borrador reales.
+    convertToCommercialActions: true,
   });
 
   const now = new Date();
@@ -700,10 +705,13 @@ async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction:
         missionState: report.missionState,
         missionPhase: "EXECUTING",
         companiesTargeted: report.companiesCreated,
-        leadsCreated: 0,
-        opportunitiesCreated: 0,
+        leadsCreated: report.leadsCreated,
+        opportunitiesCreated: report.opportunitiesCreated,
+        // F14: esta fase nunca planifica secuencias de campaña (eso solo
+        // existe en el pipeline clásico de Campaign) — se mantiene en 0
+        // deliberadamente, no es un valor pendiente de implementar.
         sequencesPlanned: 0,
-        draftsAwaitingApproval: 0,
+        draftsAwaitingApproval: report.draftsCreated,
         costUsdSoFar: report.costUsd,
         objectiveProgress: {
           type: "companies_found",
@@ -798,7 +806,12 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
   const task = await createQueuedTask({
     agentKey: "ceo",
     type: "daily_revenue_mission",
-    input: { rawInstruction: instruction },
+    // F14: quién lanzó la misión -- aditivo en `input` (nunca requiere
+    // migración, AgentTask no tiene una columna dedicada para esto).
+    // null en cualquier misión lanzada antes de este fix -- service.ts
+    // lo resuelve a email/nombre real solo cuando está presente, nunca
+    // inventa un "lanzado por" para misiones viejas.
+    input: { rawInstruction: instruction, launchedByUserId: ctx.userId },
     triggeredBy: "USER",
   });
   await scopedDb.agentTask.update({ where: { id: task.id }, data: { status: "RUNNING" } });
@@ -835,7 +848,13 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
     await scopedDb.agentTask.update({
       where: { id: task.id },
       data: {
-        input: { rawInstruction: instruction, ...interpreted } as never,
+        // F14: launchedByUserId se setea en el input inicial de
+        // createQueuedTask (arriba) -- este update pisa TODO el input
+        // con el resultado de interpretDailyDirective, así que hay que
+        // reinyectarlo explícitamente o se pierde para siempre (bug real
+        // encontrado al preparar la validación e2e: launchedByName
+        // quedaba null en cada misión real, nunca solo en las viejas).
+        input: { rawInstruction: instruction, launchedByUserId: ctx.userId, ...interpreted } as never,
         output: {
           missionState: "RUNNING",
           companiesTargeted: 0,

@@ -260,8 +260,22 @@ export const missionListItemSchema = z.object({
   draftsAwaitingApproval: z.number(),
   costUsdSoFar: z.number(),
   objectiveProgress: objectiveProgressSchema,
+  // F14: ID legible humano (MIS-YYYYMMDD-NNNN), NUNCA reemplaza el id
+  // interno (cuid, sigue siendo la clave real para todas las rutas) --
+  // NNNN es el rango 1-based de esta misión entre las lanzadas ese mismo
+  // día calendario para este tenant, calculado en service.ts.
+  missionCode: z.string(),
   createdAt: z.string(),
   completedAt: z.string().nullable(),
+  // F14: duración total real -- null mientras la misión sigue
+  // RUNNING/PAUSED_* (todavía no tiene completedAt), nunca un estimado.
+  durationMs: z.number().nullable(),
+  // F14: quién lanzó la misión -- todos null en cualquier misión
+  // lanzada antes de este fix (el input JSON congelado no tenía
+  // launchedByUserId todavía) — nunca se inventa un usuario.
+  launchedByUserId: z.string().nullable(),
+  launchedByName: z.string().nullable(),
+  launchedByEmail: z.string().nullable(),
   // bugfix de ciclo de vida: heartbeat — se actualiza en cada paso real
   // del pipeline; el watchdog del scheduler compara esto contra "ahora"
   // para distinguir una misión activa de una atascada sin inventar un
@@ -471,6 +485,39 @@ export const companyValidationRecordSchema = z.object({
     requiresApproval: z.literal(true),
     recommendationVersion: z.number(),
   }),
+  // F14: resultado real de convertir esta Company en Lead/Opportunity/
+  // borrador -- espejo de ConvertDiscoveredCompanyResult (apps/api/
+  // .../agents/discovery-conversion.ts). null cuando la misión no activó
+  // convertToCommercialActions (ej. el flujo de fallback interno, que
+  // deja que el pipeline clásico maneje Lead/Opportunity aparte, para
+  // nunca duplicar la creación).
+  conversion: z
+    .object({
+      decision: z.object({
+        createLead: z.boolean(),
+        createOpportunity: z.boolean(),
+        opportunityReviewRequired: z.boolean(),
+        rule: z.enum([
+          "BLOCKED_OR_DUBIOUS_IDENTITY",
+          "NO_MINIMUM_EVIDENCE",
+          "EXACT_CONFIRMED_OR_LIKELY_HIRING",
+          "EXACT_POSSIBLE_HIRING_WITH_EVIDENCE",
+          "APPROXIMATE_SIGNAL_WITH_EVIDENCE",
+          "NO_SIGNAL_LEAD_ONLY",
+          "INSUFFICIENT_EVIDENCE",
+        ]),
+        reason: z.string(),
+        hasAnyChannel: z.boolean(),
+      }),
+      leadId: z.string().nullable(),
+      opportunityId: z.string().nullable(),
+      opportunityBlockedByRestriction: z.boolean(),
+      draftEligibility: z.object({ eligible: z.boolean(), reason: z.string() }).nullable(),
+      draftCreated: z.boolean(),
+      draftBlockedByRestriction: z.boolean(),
+      approvalRequestId: z.string().nullable(),
+    })
+    .nullable(),
 });
 export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
@@ -528,6 +575,14 @@ export const discoveryExecutionReportSchema = z.object({
   companiesRecommendedToInvestigate: z.number(),
   companiesRecommendedToArchive: z.number(),
   companiesRecommendedForManualReview: z.number(),
+  // F14: agregados reales de conversión "descubrimiento -> acción
+  // comercial" -- 0 en cualquier reporte generado antes de F14, o donde
+  // convertToCommercialActions no se activó (ver discovery-conversion.ts).
+  leadsCreated: z.number(),
+  opportunitiesCreated: z.number(),
+  opportunitiesBlockedByRestriction: z.number(),
+  draftsCreated: z.number(),
+  draftsBlockedByRestriction: z.number(),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

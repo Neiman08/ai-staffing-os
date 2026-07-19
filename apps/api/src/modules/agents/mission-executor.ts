@@ -29,6 +29,7 @@ import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intellige
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { enrichCompanyWithDecisionContacts, type ContactProviderPort } from "./contact-enrichment";
 import { recommendOpportunityAction, type OpportunityRecommendationResult, type BestContactRankingTier } from "../ceo-intelligence/opportunity-recommendation";
+import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from "./discovery-conversion";
 
 /**
  * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
@@ -48,12 +49,15 @@ import { recommendOpportunityAction, type OpportunityRecommendationResult, type 
  * F7.4 Parte B); (10) persistir CompanyContactPoint; (11) reporte
  * (DiscoveryExecutionReport).
  *
- * Nunca crea Lead/Opportunity/Campaign/Contact — solo Company,
- * CompanyContactPoint (únicamente emails VERIFIED/RISKY, nunca INVALID)
- * y un AgentTask hijo de trazabilidad mínima (tipo "discover_companies",
- * igual que el flujo clásico, para que participe del mismo guardia de
- * presupuesto de datos en data-provider-budget.ts). Contact Intelligence
- * (contactos personales nombrados) sigue sin ejecutarse en esta fase.
+ * Nunca crea Campaign en este flujo. Sí crea Company, CompanyContactPoint
+ * (únicamente emails VERIFIED/RISKY, nunca INVALID), Contact (F7.7,
+ * People Data Labs, nunca inventado), y desde F14 también Lead/
+ * Opportunity/borrador de outreach cuando la política determinista de
+ * conversion-policy.ts lo autoriza (ver discovery-conversion.ts) — toda
+ * Opportunity sigue requiriendo revisión humana, ningún mensaje se
+ * envía automáticamente. Un AgentTask hijo de trazabilidad mínima
+ * (tipo "discover_companies", igual que el flujo clásico) participa del
+ * mismo guardia de presupuesto de datos en data-provider-budget.ts.
  */
 
 const PROVIDER_KEY_GOOGLE_PLACES = "google_places_text_search";
@@ -98,6 +102,19 @@ export interface ExecuteDiscoveryPlanParams {
   // Default: el módulo real.
   contactProvider?: ContactProviderPort;
   peopleDataLabsApiKey?: string;
+  // F14: opt-in explícito -- true SOLO para el llamador que sabe que
+  // este es el punto TERMINAL de la misión para estas Companies (hoy:
+  // runDynamicDiscoveryMission, useExternalDiscovery=true explícito,
+  // que nunca cae después en el loop clásico). Default false: mantiene
+  // el comportamiento exacto de runAutoExternalDiscoveryFallback (F13),
+  // cuyas Companies SÍ siguen hacia el loop clásico (select_target_
+  // companies -> create_lead/create_opportunity/draft_outreach) -- ese
+  // loop ya crea Lead/Opportunity real sin ningún chequeo de "¿ya existe
+  // uno para esta Company?" (ver sales-tools.impl.ts), así que activar
+  // la conversión ACÁ TAMBIÉN para ese llamador duplicaría Lead/
+  // Opportunity por cada Company. Nunca activar sin confirmar primero
+  // que el llamador es realmente terminal.
+  convertToCommercialActions?: boolean;
 }
 
 export interface QueryExecutionRecord {
@@ -180,6 +197,15 @@ export interface CompanyValidationRecord {
   // -- NUNCA crea una Opportunity automáticamente, solo la prepara para
   // que el CEO (humano) decida (requiresApproval siempre true).
   opportunityRecommendation: OpportunityRecommendationResult;
+  // F14: acción comercial REAL tomada (o no) para esta Company, y la
+  // regla exacta aplicada -- ver conversion-policy.ts/discovery-
+  // conversion.ts. A diferencia de opportunityRecommendation (arriba,
+  // solo una sugerencia), esto refleja Lead/Opportunity/borrador que
+  // realmente se crearon (o el motivo exacto por el que no). `null`
+  // cuando el llamador no activó convertToCommercialActions (ver
+  // ExecuteDiscoveryPlanParams) -- esta Company sigue hacia el loop
+  // clásico, que decide su Lead/Opportunity por su cuenta.
+  conversion: ConvertDiscoveredCompanyResult | null;
 }
 
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
@@ -258,6 +284,16 @@ export interface DiscoveryExecutionReport {
   companiesRecommendedToInvestigate: number;
   companiesRecommendedToArchive: number;
   companiesRecommendedForManualReview: number;
+  // F14: acciones comerciales REALES tomadas por la política de
+  // conversión determinista (conversion-policy.ts) -- a diferencia de
+  // companiesRecommendedForOpportunity (arriba, solo una sugerencia),
+  // estos son conteos de Lead/Opportunity/borrador que efectivamente se
+  // crearon en esta misión.
+  leadsCreated: number;
+  opportunitiesCreated: number;
+  opportunitiesBlockedByRestriction: number;
+  draftsCreated: number;
+  draftsBlockedByRestriction: number;
 }
 
 interface FinalQuery {
@@ -459,10 +495,13 @@ function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActi
 /**
  * Ejecuta el paso discover_companies de un MissionPlan ya validado —
  * único punto de entrada real que llama a los proveedores externos
- * (Google Places/Overpass). Nunca crea Lead/Opportunity/Campaign/Contact/
- * CompanyContactPoint — solo Company + un AgentTask hijo mínimo
- * (type: "discover_companies", igual nombre que el flujo clásico para
- * compartir el mismo guardia de presupuesto de datos).
+ * (Google Places/Overpass). Nunca crea Campaign en este flujo. Sí crea
+ * Company, CompanyContactPoint, Contact (F7.7) y, desde F14, Lead/
+ * Opportunity/borrador reales cuando la evidencia y las restricciones de
+ * la misión lo autorizan (ver discovery-conversion.ts) — más un
+ * AgentTask hijo mínimo (type: "discover_companies", igual nombre que
+ * el flujo clásico para compartir el mismo guardia de presupuesto de
+ * datos).
  */
 export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): Promise<DiscoveryExecutionReport> {
   const ctx = getTenancyContext();
@@ -520,6 +559,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesRecommendedToInvestigate: 0,
     companiesRecommendedToArchive: 0,
     companiesRecommendedForManualReview: 0,
+    leadsCreated: 0,
+    opportunitiesCreated: 0,
+    opportunitiesBlockedByRestriction: 0,
+    draftsCreated: 0,
+    draftsBlockedByRestriction: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -617,6 +661,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let companiesRecommendedToInvestigateTotal = 0;
   let companiesRecommendedToArchiveTotal = 0;
   let companiesRecommendedForManualReviewTotal = 0;
+  // F14: política de conversión determinista (conversion-policy.ts) --
+  // convierte evidencia ya reunida (validación de negocio, señal de
+  // contratación, emails organizacionales, contactos reales) en Lead/
+  // Opportunity/borrador real, nunca solo una recomendación. Ver
+  // discovery-conversion.ts.
+  let leadsCreatedTotal = 0;
+  let opportunitiesCreatedTotal = 0;
+  let opportunitiesBlockedByRestrictionTotal = 0;
+  let draftsCreatedTotal = 0;
+  let draftsBlockedByRestrictionTotal = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -950,6 +1004,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         let contactsFoundForCompany = 0;
         let rolesWithoutContactForCompany: string[] = [];
         let bestContactRankingTierForCompany: BestContactRankingTier = null;
+        // F14: id del mejor contacto real (HIGH/MEDIUM_CONFIDENCE) para
+        // esta Company -- usado más abajo para conversión a Lead/
+        // Opportunity/borrador. Nunca un nombre inventado: viene de un
+        // Contact ya persistido por Contact Intelligence (F7.7, PDL).
+        let bestContactIdForCompany: string | null = null;
         if (!cancelled && rolePlan && rolePlan.targetRoles.length > 0) {
           const contactEnrichment = await enrichCompanyWithDecisionContacts({
             taskId: childTask.id,
@@ -986,6 +1045,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             else if (created.rankingTier === "REJECTED") contactsRejectedTotal += 1;
             if (bestContactRankingTierForCompany === null || tierRank[created.rankingTier] > tierRank[bestContactRankingTierForCompany]) {
               bestContactRankingTierForCompany = created.rankingTier;
+              bestContactIdForCompany = created.contactId;
             }
           }
           for (const failure of contactEnrichment.patternsFailed) validationWarnings.add(failure);
@@ -1024,6 +1084,54 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           data: { discoveryMetadata: currentDiscoveryMetadata as never },
         });
 
+        // F14: convierte la evidencia ya reunida arriba (nunca datos
+        // nuevos) en Lead/Opportunity/borrador reales, según la política
+        // determinista de conversion-policy.ts -- reemplaza el límite
+        // documentado hasta esta fase ("nunca crea Lead/Opportunity").
+        // El registro parcial ya reunido se usa igual aunque `cancelled`
+        // ya sea true (mismo criterio que el resto de este loop: nunca
+        // se descarta evidencia real ya juntada). SOLO corre si el
+        // llamador activó convertToCommercialActions -- ver el
+        // comentario en ExecuteDiscoveryPlanParams (nunca duplicar la
+        // creación de Lead/Opportunity que ya hace el loop clásico para
+        // el llamador de fallback).
+        let conversion: ConvertDiscoveredCompanyResult | null = null;
+        if (params.convertToCommercialActions) {
+          const bestVerifiedOrgEmail = enrichment.emails.find((e) => e.status === "VERIFIED")?.email ?? null;
+          let bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null } | null = null;
+          if (bestContactIdForCompany && (bestContactRankingTierForCompany === "HIGH_CONFIDENCE" || bestContactRankingTierForCompany === "MEDIUM_CONFIDENCE")) {
+            const contactRow = await scopedDb.contact.findUnique({
+              where: { id: bestContactIdForCompany },
+              select: { id: true, firstName: true, lastName: true, email: true },
+            });
+            if (contactRow) {
+              bestRealContact = { contactId: contactRow.id, firstName: contactRow.firstName, lastName: contactRow.lastName, email: contactRow.email };
+            }
+          }
+          conversion = await convertDiscoveredCompany({
+            taskId: childTask.id,
+            company: { id: company.id, name: candidate.raw.name!, industryId: industry.id },
+            restrictions: params.restrictions,
+            evidence: {
+              businessConfidence: validation.confidence,
+              hiringStatus: hiringSignal?.hiringStatus ?? null,
+              hiringEvidenceConcrete: (hiringSignal?.targetTitlesMatched.length ?? 0) > 0,
+              hasVerifiedOrgEmail: !!bestVerifiedOrgEmail,
+              hasRiskyOrgEmail: enrichment.emailsRisky > 0,
+              hasConfirmedPhone: !!company.phone,
+              hasConfirmedWebsite: !!company.website,
+              hasRealPersonContact: !!bestRealContact,
+            },
+            bestVerifiedOrgEmail,
+            bestRealContact,
+          });
+          if (conversion.leadId) leadsCreatedTotal += 1;
+          if (conversion.opportunityId) opportunitiesCreatedTotal += 1;
+          if (conversion.opportunityBlockedByRestriction) opportunitiesBlockedByRestrictionTotal += 1;
+          if (conversion.draftCreated) draftsCreatedTotal += 1;
+          if (conversion.draftBlockedByRestriction) draftsBlockedByRestrictionTotal += 1;
+        }
+
         companyValidations.push({
           companyId: company.id,
           name: candidate.raw.name!,
@@ -1046,6 +1154,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           contactsFound: contactsFoundForCompany,
           rolesWithoutContact: rolesWithoutContactForCompany,
           opportunityRecommendation,
+          conversion,
         });
         // F7.9: cortar el loop de candidatos de ESTA query inmediatamente
         // al detectar cancelación -- sin este break, el resto de
@@ -1145,6 +1254,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesRecommendedToInvestigate: companiesRecommendedToInvestigateTotal,
     companiesRecommendedToArchive: companiesRecommendedToArchiveTotal,
     companiesRecommendedForManualReview: companiesRecommendedForManualReviewTotal,
+    leadsCreated: leadsCreatedTotal,
+    opportunitiesCreated: opportunitiesCreatedTotal,
+    opportunitiesBlockedByRestriction: opportunitiesBlockedByRestrictionTotal,
+    draftsCreated: draftsCreatedTotal,
+    draftsBlockedByRestriction: draftsBlockedByRestrictionTotal,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -1156,10 +1270,21 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   };
 }
 
+// F14 (corrección de causa raíz): antes esta función SIEMPRE agregaba
+// "No se crea ninguna Lead/Opportunity/Campaign/Contact en este flujo"
+// como primera nota, sin importar lo que restrictions realmente
+// autorizara -- una misión que autorizaba campañas/oportunidades/
+// outreach/mensajes igual mostraba esa nota como si fuera una
+// restricción real de la instrucción, cuando en realidad era un límite
+// del CÓDIGO (F7.3, antes de esta fase) que ya no existe: esta función
+// ahora solo reporta restricciones REALES (lo que la instrucción pidió
+// explícitamente), nunca una limitación de implementación disfrazada de
+// decisión del usuario. "Campaign" nunca se crea en este flujo
+// (deliberado, ver discovery-conversion.ts) -- sí se nota si la
+// instrucción lo prohibió, para trazabilidad, pero no como afirmación
+// de que Lead/Opportunity/Contact tampoco se crean (ahora sí se crean).
 function buildRestrictionsApplied(restrictions: MissionRestrictions): string[] {
-  const notes: string[] = [
-    "No se crea ninguna Lead/Opportunity/Campaign/Contact en este flujo — solo Company, CompanyContactPoint (emails organizacionales verificados) y trazabilidad mínima de misión.",
-  ];
+  const notes: string[] = [];
   if (!restrictions.allowCampaignCreation) notes.push("No se creó ninguna Campaign — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOpportunityCreation) notes.push("No se crearon Opportunities — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOutreach) notes.push("No se planificó ningún outreach — la instrucción lo prohibió explícitamente.");

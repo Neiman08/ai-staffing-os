@@ -84,6 +84,10 @@ export async function planMissionOnly(rawInstruction: string): Promise<AgentTask
     type: "daily_revenue_mission",
     input: {
       rawInstruction,
+      // F14: mismo campo que launchMission (mission-orchestrator.ts) --
+      // ver el comentario ahí sobre por qué vive en `input` en vez de
+      // una columna dedicada.
+      launchedByUserId: ctx.userId,
       // Campos heredados del shape viejo (interpretDailyDirective) —
       // derivados del StructuredIntent nuevo para que el Mission
       // list/detail existente (missions/service.ts's toListItem, sin
