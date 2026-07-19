@@ -5,6 +5,7 @@ import { RouterProvider } from "react-router-dom";
 import { ClerkProvider } from "@clerk/clerk-react";
 import { ThemeProvider } from "@/lib/theme";
 import { ToastProvider } from "@/components/ui/toast";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { CLERK_CONFIGURED, CLERK_PUBLISHABLE_KEY } from "@/lib/auth-config";
 import { router } from "./router";
 import "./index.css";
@@ -33,8 +34,14 @@ const app = (
 // <ClerkProvider> — RequireAuth.tsx ya elige la variante que no
 // depende de sus hooks en ese caso. Nunca se monta ClerkProvider con
 // una key vacía (lanzaría en runtime).
+//
+// F12.10: ErrorBoundary como el nodo MÁS externo -- antes, un error de
+// render en cualquier punto del árbol (incluido dentro de ClerkProvider)
+// tumbaba toda la app a una pantalla en blanco sin ningún mensaje.
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {CLERK_CONFIGURED ? <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY!}>{app}</ClerkProvider> : app}
+    <ErrorBoundary>
+      {CLERK_CONFIGURED ? <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY!}>{app}</ClerkProvider> : app}
+    </ErrorBoundary>
   </React.StrictMode>,
 );

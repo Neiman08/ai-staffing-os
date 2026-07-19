@@ -69,6 +69,7 @@ import CandidateProfilePage from "./pages/portal/candidate/Profile";
 import CandidateApplicationsPage from "./pages/portal/candidate/Applications";
 import CandidateOnboardingPage from "./pages/portal/candidate/Onboarding";
 import CandidateDocumentsPage from "./pages/portal/candidate/Documents";
+import NotFound from "./pages/NotFound";
 
 export const router = createBrowserRouter([
   // F4.9: /sign-in y /sign-up viven FUERA de RequireAuth a propósito —
@@ -195,4 +196,10 @@ export const router = createBrowserRouter([
       { path: "audit-log", element: <AuditTrail endpoint="/portal/candidate/audit-log" description="Tu propio historial de acciones." /> },
     ],
   },
+  // F12.10: catch-all real -- antes, cualquier URL que no matcheara
+  // ninguna rama de arriba (typo, link viejo, id borrado en la barra de
+  // direcciones) no renderizaba nada. Fuera de RequireAuth a propósito:
+  // debe mostrarse aunque no haya sesión, nunca depender de resolver
+  // identidad primero.
+  { path: "*", element: <NotFound /> },
 ]);
