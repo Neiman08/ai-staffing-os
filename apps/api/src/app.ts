@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { clerkMiddleware } from "@clerk/express";
 import { prisma } from "@ai-staffing-os/db";
 import { env } from "./core/env";
@@ -44,6 +45,25 @@ import { analyticsRouter } from "./modules/analytics/router";
 export function createApp() {
   const app = express();
 
+  // F12.4: headers de seguridad estándar (X-Content-Type-Options,
+  // X-Frame-Options, Strict-Transport-Security, sin X-Powered-By, etc.)
+  // -- primero en la cadena, antes que CORS, para que apliquen a
+  // absolutamente toda respuesta, incluida la de un origen rechazado.
+  // contentSecurityPolicy desactivada a propósito: esto es una API JSON
+  // pura, nunca sirve HTML/JS al navegador -- una CSP pensada para HTML
+  // no protege nada acá y solo agregaría un header sin efecto real.
+  // crossOriginResourcePolicy en "cross-origin": el default de helmet
+  // ("same-origin") bloquearía las respuestas ante el fetch/XHR real del
+  // frontend en Render (origen distinto por diseño, ver APP_ORIGIN) --
+  // el control de origen real ya lo hace el allowlist de CORS de abajo,
+  // no duplicarlo de forma más estricta acá.
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    }),
+  );
+
   // F4.9: reemplaza el cors() abierto de F0-F4.8 — allowlist explícito
   // armado desde env (nunca hardcodea dominios acá, ver core/env.ts
   // APP_ORIGIN/MARKETING_ORIGIN). Sin `credentials: true` a propósito:
@@ -76,7 +96,13 @@ export function createApp() {
   // Tenant/User por clerkId/clerkOrganizationId dentro del handler.
   app.use("/api/v1/auth", authWebhookRouter);
 
-  app.use(express.json());
+  // F12.4: límite explícito en vez del default silencioso de Express
+  // (100kb) -- mismo valor, pero ahora es una decisión documentada, no
+  // un default que nadie eligió a propósito. Ningún endpoint real de
+  // este proyecto necesita un body más grande (los uploads de
+  // documentos son URLs vía DocumentStorageAdapter, nunca bytes crudos
+  // en el body JSON).
+  app.use(express.json({ limit: "100kb" }));
 
   app.get("/api/v1/health", async (_req, res) => {
     try {

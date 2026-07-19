@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { inviteUserInputSchema, setUserStatusInputSchema, changeUserRoleInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { userInviteLimiter } from "../../core/rate-limiters";
 import * as authService from "./service";
 
 export const authRouter = Router();
@@ -34,7 +35,7 @@ authRouter.get("/users/:id", requirePermission("users.manage"), async (req, res,
 // cuando AUTH_MODE=clerk (ver service.ts inviteUser). Queda funcional y
 // gateado por users.manage; su uso real en producción es una decisión
 // separada del PO, no algo que este código pueda impedir por sí solo.
-authRouter.post("/users/invite", requirePermission("users.manage"), async (req, res, next) => {
+authRouter.post("/users/invite", userInviteLimiter, requirePermission("users.manage"), async (req, res, next) => {
   try {
     const input = inviteUserInputSchema.parse(req.body);
     res.status(201).json(await authService.inviteUser(input));

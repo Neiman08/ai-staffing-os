@@ -40,6 +40,18 @@ test("POST /users/invite sin permiso (Sales) → 403", async () => {
   assert.equal(res.status, 403);
 });
 
+// F12.4: prueba de "wiring" -- userInviteLimiter corre antes que
+// requirePermission en la cadena real, así que el header ya está
+// puesto aunque este request específico termine en 403.
+test("F12.4: POST /users/invite expone RateLimit-Limit real (userInviteLimiter montado)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/auth/users/invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-dev-user": "sales@titan.dev" },
+    body: JSON.stringify({ email: "nope@example.com", roleId: "irrelevant" }),
+  });
+  assert.equal(res.headers.get("ratelimit-limit"), "30");
+});
+
 test("POST /users/invite: roleId inválido/de otro tenant → 400, no crea nada", async () => {
   const res = await adminFetch("/users/invite", {
     method: "POST",

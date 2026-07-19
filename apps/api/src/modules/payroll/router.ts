@@ -13,6 +13,7 @@ import {
   updateTimeEntryInputSchema,
 } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { exportLimiter } from "../../core/rate-limiters";
 import * as payrollService from "./service";
 
 export const payrollRouter = Router();
@@ -193,7 +194,7 @@ payrollRouter.post("/payroll/runs/:id/mark-paid", requirePermission("payroll.app
   }
 });
 
-payrollRouter.post("/payroll/runs/:id/export", requirePermission("payroll.approve"), async (req, res, next) => {
+payrollRouter.post("/payroll/runs/:id/export", exportLimiter, requirePermission("payroll.approve"), async (req, res, next) => {
   try {
     const { csv, filename } = await payrollService.exportPayrollRun(req.params.id!);
     res.status(200).header("Content-Disposition", `attachment; filename="${filename}"`).type("text/csv").send(csv);

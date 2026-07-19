@@ -1,11 +1,16 @@
 import { Router } from "express";
 import { launchMissionInputSchema, missionActionInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { missionLaunchLimiter } from "../../core/rate-limiters";
 import * as missionsService from "./service";
 
 export const missionsRouter = Router();
 
-missionsRouter.post("/missions", requirePermission("missions.create"), async (req, res, next) => {
+// F12.4: cada misión real gasta OpenAI real (y potencialmente
+// discovery/contact/email externo) -- rate limit obligatorio, mismo
+// criterio que modules/public/router.ts (F4.8). El plan-only (abajo) no
+// lo necesita: nunca ejecuta ni gasta nada.
+missionsRouter.post("/missions", missionLaunchLimiter, requirePermission("missions.create"), async (req, res, next) => {
   try {
     const input = launchMissionInputSchema.parse(req.body);
     res.status(201).json(await missionsService.createMission(input.instruction));

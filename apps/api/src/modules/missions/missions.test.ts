@@ -123,6 +123,19 @@ test("POST /missions as compliance@titan.dev returns 403 (no missions.create)", 
   assert.equal(res.status, 403);
 });
 
+// F12.4: prueba de "wiring" real -- confirma que missionLaunchLimiter
+// está montado en la ruta de producción (nunca dispara una misión real,
+// el 403 por permiso ocurre DESPUÉS del limiter en la cadena de
+// middleware, así que el header ya está puesto).
+test("F12.4: POST /missions expone RateLimit-Limit real (missionLaunchLimiter montado)", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/missions`, {
+    method: "POST",
+    headers: COMPLIANCE_HEADERS,
+    body: JSON.stringify({ instruction: "Busca empresas de construcción." }),
+  });
+  assert.equal(res.headers.get("ratelimit-limit"), "20");
+});
+
 test("launchMission interprets a real instruction, runs the fixed pipeline, and always ends in an ApprovalRequest (real OpenAI calls)", async () => {
   const res = await fetch(`${baseUrl}/api/v1/missions`, {
     method: "POST",

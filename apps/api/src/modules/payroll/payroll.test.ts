@@ -503,6 +503,8 @@ test("full lifecycle: DRAFT -> PENDING_APPROVAL -> APPROVED -> PAID -> EXPORTED,
   });
   assert.equal(exportRes.status, 200);
   assert.equal(exportRes.headers.get("content-type")?.includes("text/csv"), true);
+  // F12.4: exportLimiter montado en esta ruta real.
+  assert.equal(exportRes.headers.get("ratelimit-limit"), "30");
   const csv = await exportRes.text();
   assert.match(csv, /"Worker","Job Order"/);
 

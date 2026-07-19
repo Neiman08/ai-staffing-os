@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { analyticsPeriodQuerySchema } from "@ai-staffing-os/shared";
 import { requireInternalIdentity } from "../../core/rbac/require-permission";
+import { exportLimiter } from "../../core/rate-limiters";
 import * as analyticsService from "./service";
 import * as recruitingService from "./recruiting.service";
 import * as commercialService from "./commercial.service";
@@ -54,7 +55,7 @@ analyticsRouter.get("/analytics/financial", requireInternalIdentity(), async (re
 // respuesta, sin storage. Mismos filtros from/to que la versión JSON, y
 // mismo criterio de RBAC de campo (nunca 403 -- un caller sin permiso
 // descarga un CSV con solo el header).
-analyticsRouter.get("/analytics/recruiting/export", requireInternalIdentity(), async (req, res, next) => {
+analyticsRouter.get("/analytics/recruiting/export", exportLimiter, requireInternalIdentity(), async (req, res, next) => {
   try {
     const query = analyticsPeriodQuerySchema.parse(req.query);
     const { csv, filename } = await recruitingService.exportRecruitingMetricsCsv(query);
@@ -64,7 +65,7 @@ analyticsRouter.get("/analytics/recruiting/export", requireInternalIdentity(), a
   }
 });
 
-analyticsRouter.get("/analytics/commercial/export", requireInternalIdentity(), async (req, res, next) => {
+analyticsRouter.get("/analytics/commercial/export", exportLimiter, requireInternalIdentity(), async (req, res, next) => {
   try {
     const query = analyticsPeriodQuerySchema.parse(req.query);
     const { csv, filename } = await commercialService.exportCommercialMetricsCsv(query);
@@ -74,7 +75,7 @@ analyticsRouter.get("/analytics/commercial/export", requireInternalIdentity(), a
   }
 });
 
-analyticsRouter.get("/analytics/financial/export", requireInternalIdentity(), async (req, res, next) => {
+analyticsRouter.get("/analytics/financial/export", exportLimiter, requireInternalIdentity(), async (req, res, next) => {
   try {
     const query = analyticsPeriodQuerySchema.parse(req.query);
     const { csv, filename } = await financialService.exportFinancialMetricsCsv(query);

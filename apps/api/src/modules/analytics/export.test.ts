@@ -80,3 +80,10 @@ test("financial export: includes marginTrend as a separate Date,Hours,Margin sec
     assert.ok(headerIndex > 0);
   }
 });
+
+test("F12.4: the three export endpoints expose a real RateLimit-Limit header (exportLimiter mounted)", async () => {
+  for (const path of ["/analytics/recruiting/export", "/analytics/commercial/export", "/analytics/financial/export"]) {
+    const res = await fetch(`${baseUrl}/api/v1${path}`, { headers: { "x-dev-user": "recruiter@titan.dev" } });
+    assert.equal(res.headers.get("ratelimit-limit"), "30", `${path} should have exportLimiter mounted`);
+  }
+});
