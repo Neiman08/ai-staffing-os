@@ -94,5 +94,20 @@ export async function resolveIdentityFromClerkSession(auth: ClerkSessionIdentity
     permissions: user.role.permissions.map((rp) => rp.permission.key),
     mfaVerified: auth.mfaVerified,
     mfaEnforced: isMfaEnforced(tenant),
+    // F12.3 (bugfix real, encontrado en la verificación de Clerk): faltaba
+    // acá -- dev-bypass.provider.ts ya poblaba estos 3 campos desde F10.1,
+    // pero este resolver nunca los leyó del mismo User que ya tenía en
+    // memoria. Sin esto, CUALQUIER identidad de portal (Client/Worker/
+    // Candidate) autenticada por Clerk real quedaba indistinguible de un
+    // usuario interno: requireInternalIdentity() (agregado en la
+    // auditoría pre-F11 para bloquear exactamente /dashboard/audit-log,
+    // /revenue/*, /analytics/*) solo revisa
+    // ctx.companyId/workerId/candidateId -- con los tres en undefined,
+    // un CLIENT_ADMIN/WORKER/CANDIDATE real habría pasado esa gate como
+    // si fuera personal interno. Nunca se detectó antes porque dev-bypass
+    // (el único camino ejercitado en tests hasta ahora) sí los poblaba.
+    companyId: user.companyId ?? undefined,
+    workerId: user.workerId ?? undefined,
+    candidateId: user.candidateId ?? undefined,
   };
 }

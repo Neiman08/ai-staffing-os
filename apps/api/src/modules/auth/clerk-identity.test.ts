@@ -12,10 +12,12 @@ const CLERK_ORG_ID = "org_test_f49_clerk_identity";
 const CLERK_USER_ID = "user_test_f49_clerk_identity";
 const CLERK_USER_ID_DISABLED = "user_test_f49_clerk_identity_disabled";
 const CLERK_USER_ID_OTHER_TENANT = "user_test_f49_clerk_identity_other_tenant";
+const CLERK_USER_ID_WORKER_PORTAL = "user_test_f49_clerk_identity_worker_portal";
 
 let tenantId: string;
 let otherTenantId: string;
 let roleId: string;
+let workerId: string;
 
 before(async () => {
   const tenant = await prisma.tenant.create({
@@ -79,12 +81,46 @@ before(async () => {
       isActive: true,
     },
   });
+
+  // F12.3: fixture para el bug real encontrado en esta fase --
+  // resolveIdentityFromClerkSession nunca leía companyId/workerId/
+  // candidateId del User, a diferencia de dev-bypass.provider.ts (que sí
+  // lo hace desde F10.1). Se reutiliza un Worker como caso representativo
+  // (misma lógica de paso de campo que companyId/candidateId).
+  const globalIndustry = await prisma.industry.findFirstOrThrow({ where: { isGlobal: true } });
+  const company = await prisma.company.create({
+    data: { tenantId, name: "F4.9 Test Portal Company", industryId: globalIndustry.id },
+  });
+  const candidate = await prisma.candidate.create({
+    data: { tenantId, firstName: "Portal", lastName: "Worker", status: "PLACED" },
+  });
+  const worker = await prisma.worker.create({
+    data: { tenantId, candidateId: candidate.id, defaultPayRate: 20 },
+  });
+  workerId = worker.id;
+  const portalRole = await prisma.role.create({ data: { tenantId, name: "F4.9 Test Worker Portal Role" } });
+  await prisma.user.create({
+    data: {
+      tenantId,
+      clerkId: CLERK_USER_ID_WORKER_PORTAL,
+      email: "f49-clerk-identity-worker-portal@example.com",
+      firstName: "Worker",
+      lastName: "Portal",
+      roleId: portalRole.id,
+      isActive: true,
+      workerId: worker.id,
+      companyId: company.id, // solo para probar que companyId/workerId pueden coexistir en el fixture; el service no valida exclusividad
+    },
+  });
 });
 
 after(async () => {
   await prisma.auditLog.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } });
   await prisma.user.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } });
   await prisma.role.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } });
+  await prisma.worker.deleteMany({ where: { tenantId } });
+  await prisma.candidate.deleteMany({ where: { tenantId } });
+  await prisma.company.deleteMany({ where: { tenantId } });
   await prisma.tenant.deleteMany({ where: { id: { in: [tenantId, otherTenantId] } } });
 });
 
@@ -172,4 +208,23 @@ test("Tenant.settings.security.mfaEnforced=true se refleja en la identidad resue
   } finally {
     await prisma.tenant.update({ where: { id: tenantId }, data: { settings: {} } });
   }
+});
+
+// F12.3: regresión real del bug de esta fase.
+test("un usuario interno (sin companyId/workerId/candidateId en la DB) resuelve los 3 campos como undefined, nunca null ni un valor inventado", async () => {
+  const identity = await resolveIdentityFromClerkSession({ userId: CLERK_USER_ID, orgId: CLERK_ORG_ID, mfaVerified: false });
+  assert.equal(identity.companyId, undefined);
+  assert.equal(identity.workerId, undefined);
+  assert.equal(identity.candidateId, undefined);
+});
+
+test("un usuario de portal real (workerId poblado en la DB) resuelve companyId/workerId reales -- antes de este fix, quedaban undefined y requireInternalIdentity() lo habría tratado como personal interno", async () => {
+  const identity = await resolveIdentityFromClerkSession({
+    userId: CLERK_USER_ID_WORKER_PORTAL,
+    orgId: CLERK_ORG_ID,
+    mfaVerified: false,
+  });
+  assert.equal(identity.workerId, workerId);
+  assert.notEqual(identity.companyId, undefined);
+  assert.equal(identity.candidateId, undefined);
 });
