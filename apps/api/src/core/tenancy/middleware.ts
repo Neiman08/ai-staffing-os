@@ -20,6 +20,12 @@ const authProvider = resolveAuthProvider();
 export async function tenancyMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
     const identity = await authProvider.resolveIdentity(req);
+    // F12.7: copia simple sobre `req` (misma referencia durante todo el
+    // ciclo de vida del request) para que requestLoggingMiddleware pueda
+    // leerla en res.on("finish"), que dispara fuera de la continuación
+    // async donde vive runWithTenancyContext -- ver request-logging.ts.
+    req.resolvedTenantId = identity.tenantId;
+    req.resolvedUserId = identity.userId;
     runWithTenancyContext(identity, () => next());
   } catch (err) {
     if (err instanceof AppError) {

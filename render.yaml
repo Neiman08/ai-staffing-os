@@ -47,7 +47,13 @@ services:
     # de "start": en Render no existe un archivo .env, las variables ya
     # llegan inyectadas en process.env por la plataforma.
     startCommand: pnpm --filter @ai-staffing-os/api run start:deploy
-    healthCheckPath: /api/v1/health
+    # F12.7: /health/ready (no el /health original) -- verifica DB real +
+    # migraciones aplicadas + el modo de auth activo bien configurado,
+    # exactamente lo que Render necesita saber para decidir si esta
+    # instancia puede recibir tráfico real. /health se mantiene sin
+    # tocar para el banner de dev-bypass del frontend (ver app.ts) y
+    # como liveness manual; Render usa /health/ready específicamente.
+    healthCheckPath: /api/v1/health/ready
     envVars:
       - key: NODE_ENV
         value: development # ver "DECISIÓN PENDIENTE" arriba

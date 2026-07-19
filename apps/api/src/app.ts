@@ -5,6 +5,7 @@ import { clerkMiddleware } from "@clerk/express";
 import { prisma } from "@ai-staffing-os/db";
 import { env } from "./core/env";
 import { errorHandler, notFoundHandler } from "./core/errors";
+import { requestLoggingMiddleware } from "./core/request-logging";
 import { tenancyMiddleware } from "./core/tenancy/middleware";
 import { authRouter } from "./modules/auth/router";
 import { dashboardRouter } from "./modules/dashboard/router";
@@ -44,6 +45,12 @@ import { analyticsRouter } from "./modules/analytics/router";
 
 export function createApp() {
   const app = express();
+
+  // F12.7: primero de todo -- request ID + log estructurado por
+  // request, para que absolutamente ninguna respuesta (incluida una
+  // rechazada por CORS o por el rate limiter) quede sin su ID de
+  // correlación ni sin su línea de log.
+  app.use(requestLoggingMiddleware);
 
   // F12.4: headers de seguridad estándar (X-Content-Type-Options,
   // X-Frame-Options, Strict-Transport-Security, sin X-Powered-By, etc.)
@@ -114,6 +121,40 @@ export function createApp() {
       res.json({ status: "ok", db: true, authMode: env.AUTH_MODE });
     } catch {
       res.status(503).json({ status: "degraded", db: false });
+    }
+  });
+
+  // F12.7: liveness -- "el proceso sigue respondiendo", nunca toca la
+  // DB. Un healthCheck de liveness que dependiera de la DB podría hacer
+  // que la plataforma reinicie el proceso API por un problema que es de
+  // la base, no del proceso -- exactamente lo que liveness NO debe
+  // hacer (esa es la responsabilidad de readiness).
+  app.get("/api/v1/health/live", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  // F12.7: readiness -- "puedo aceptar tráfico real ahora mismo".
+  // Verifica DB real + que las migraciones esperadas ya se aplicaron
+  // (_prisma_migrations con al menos una fila -- un valor real, no un
+  // secreto ni información interna) + que el modo de auth activo tiene
+  // lo que necesita para funcionar (AUTH_MODE=clerk sin sus claves ya
+  // es fatal al arrancar por el guard de env.ts, así que llegar hasta
+  // acá con AUTH_MODE=clerk ya implica que están configuradas -- este
+  // chequeo lo confirma en vivo, no solo al arrancar).
+  app.get("/api/v1/health/ready", async (_req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      const migrations = await prisma.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) as count FROM "_prisma_migrations"`;
+      const migrationsApplied = Number(migrations[0]?.count ?? 0) > 0;
+      const authConfigured = env.AUTH_MODE === "dev-bypass" || Boolean(env.CLERK_SECRET_KEY && env.CLERK_PUBLISHABLE_KEY);
+
+      if (!migrationsApplied || !authConfigured) {
+        res.status(503).json({ status: "not_ready", db: true, migrationsApplied, authConfigured });
+        return;
+      }
+      res.json({ status: "ok", db: true, migrationsApplied, authConfigured });
+    } catch {
+      res.status(503).json({ status: "not_ready", db: false });
     }
   });
 

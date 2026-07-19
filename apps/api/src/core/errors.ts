@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
+import { logger } from "./logger";
 
 export class AppError extends Error {
   status: number;
@@ -62,7 +63,21 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
     return;
   }
 
-  console.error(err);
+  // F12.7: logging estructurado con requestId real (X-Request-Id, ya en
+  // la respuesta vía requestLoggingMiddleware) para poder correlacionar
+  // un error de servidor con su request exacto sin cambiar la forma del
+  // body que el cliente recibe -- muchos tests existentes ya verifican
+  // ese body exacto, esto solo enriquece el log server-side.
+  const message = err instanceof Error ? err.message : "Unknown error";
+  const stack = err instanceof Error ? err.stack : undefined;
+  logger.error("unhandled_error", {
+    requestId: req.id,
+    method: req.method,
+    path: req.path,
+    errorCategory: err instanceof Error ? err.constructor.name : typeof err,
+    message,
+    stack,
+  });
   res.status(500).json({
     error: { code: "INTERNAL_ERROR", message: "Something went wrong" },
   });
