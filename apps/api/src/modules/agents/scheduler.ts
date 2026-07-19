@@ -259,8 +259,19 @@ export async function runMissionCloseSweep(tenantId: string): Promise<MissionClo
     });
     const stuckToday = runningToday.filter((m) => {
       const output = m.output as { missionState?: string; progressUpdatedAt?: string } | null;
-      if (output?.missionState !== "RUNNING") return false; // PAUSED_*/CANCELLED/COMPLETED/FAILED no son "atascadas"
-      const lastProgress = output.progressUpdatedAt ? new Date(output.progressUpdatedAt) : m.createdAt;
+      // F12.5: output=null (nunca se llegó a escribir NINGÚN output, ver
+      // el bugfix real de F12.3 en launchMission -- una excepción en la
+      // ventana síncrona entre status="RUNNING" y el primer
+      // syncMissionOutput dejaba exactamente esta forma) cuenta como
+      // atascada igual que missionState="RUNNING" -- antes, `undefined
+      // !== "RUNNING"` hacía que este caso nunca calificara para el
+      // watchdog, la única red de seguridad que existía para una misión
+      // sin actividad. PAUSED_*/CANCELLED/COMPLETED/FAILED (un
+      // missionState real y distinto de "RUNNING") siguen sin ser
+      // "atascadas" -- esas SÍ tienen output, solo que en un estado
+      // terminal/pausado legítimo.
+      if (output !== null && output?.missionState !== "RUNNING") return false;
+      const lastProgress = output?.progressUpdatedAt ? new Date(output.progressUpdatedAt) : m.createdAt;
       return lastProgress < staleThreshold;
     });
     for (const mission of stuckToday) {
