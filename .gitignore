@@ -21,3 +21,9 @@ apps/marketing/public/sitemap.xml
 # se commitea, se regenera en cada corrida.
 apps/web/test-results/
 apps/web/playwright-report/
+
+# F12.6: dumps reales de backup -- nunca se commitean (contienen datos
+# reales de negocio), ver scripts/db-backup.sh y
+# docs/BACKUP_AND_RECOVERY_RUNBOOK.md.
+backups/
+*.dump
