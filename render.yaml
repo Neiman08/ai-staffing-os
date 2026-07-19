@@ -226,3 +226,16 @@ services:
       # del servicio ai-staffing-os-api de arriba, nunca hardcodeado acá.
       - key: BUSINESS_DOMAIN
         sync: false
+      # F14: destino real del botón "Login" y de cualquier otro enlace de
+      # acceso al software (apps/marketing/src/lib/app-url.ts) — nunca
+      # hardcodeado, y deliberadamente independiente de APP_DOMAIN del
+      # backend (ese apunta al dominio propio, app.dreistaff.com, que
+      # todavía no está conectado a ningún deploy real). Completar en el
+      # dashboard: HOY (mientras no haya dominio propio conectado) debe
+      # ser "https://ai-staffing-os-web.onrender.com" — el CRM real ya
+      # desplegado; más adelante, cuando app.dreistaff.com esté
+      # conectado, cambiar el valor acá a "https://app.dreistaff.com" y
+      # redeployar SOLO este servicio (VITE_* se hornea en build-time,
+      # nunca en runtime) — cero cambios de código en ningún caso.
+      - key: VITE_APP_URL
+        sync: false

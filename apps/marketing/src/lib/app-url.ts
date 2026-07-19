@@ -1,11 +1,13 @@
-// F4.9: el botón Login construye la URL del portal privado a partir de
-// branding.appDomain (nunca hardcodeado — viene de GET /public/branding,
-// que a su vez lee APP_DOMAIN). En producción appDomain es
-// "app.dreistaff.com" → https. En local, si se configura
-// APP_DOMAIN=localhost:5173 para probar el flujo completo, "https://localhost:5173"
-// no existe — localhost siempre sirve por http.
-export function resolveAppUrl(appDomain: string | undefined): string | undefined {
-  if (!appDomain) return undefined;
-  const protocol = appDomain.startsWith("localhost") ? "http" : "https";
-  return `${protocol}://${appDomain}`;
-}
+// F14: la URL del software real (botón Login y cualquier otro enlace de
+// acceso) viene de VITE_APP_URL -- variable pública de build-time, mismo
+// patrón que VITE_API_URL en lib/api.ts. Nunca hardcodeada. Reemplaza al
+// mecanismo anterior (F4.9, derivar la URL de branding.appDomain en
+// runtime vía GET /public/branding) porque ese dependía de APP_DOMAIN
+// del backend, que por default apunta al dominio propio
+// (app.dreistaff.com) -- un dominio que todavía no está conectado a
+// ningún deploy real. Con VITE_APP_URL configurable directamente en el
+// dashboard de Render, el botón puede apuntar al deploy real que exista
+// hoy (ej. https://ai-staffing-os-web.onrender.com) y cambiar más
+// adelante a app.dreistaff.com sin tocar código ni depender de que el
+// backend/branding esté sincronizado.
+export const APP_URL = import.meta.env.VITE_APP_URL as string | undefined;

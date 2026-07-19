@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import { usePublicBranding } from "@/lib/branding";
-import { resolveAppUrl } from "@/lib/app-url";
+import { APP_URL } from "@/lib/app-url";
 import { ButtonLink } from "@/components/ui/Button";
 import { Container } from "@/components/ui/Container";
 import { cn } from "@/lib/utils";
@@ -18,10 +18,6 @@ const NAV_LINKS = [
 export function Header() {
   const branding = usePublicBranding();
   const [open, setOpen] = useState(false);
-  // F4.8/F4.9: "El botón Login debe dirigir a https://app.dreistaff.com
-  // (o http://localhost:5173 en local)" — nunca hardcodeado, viene del
-  // mismo branding real que todo lo demás. Ver lib/app-url.ts.
-  const appUrl = resolveAppUrl(branding?.appDomain);
 
   return (
     <header className="sticky top-0 z-50 border-b border-white/10 bg-ink/85 text-ink-foreground backdrop-blur-md transition-colors">
@@ -59,7 +55,7 @@ export function Header() {
           >
             Request Talent
           </ButtonLink>
-          <ButtonLink to={appUrl ?? "#"} external={!!appUrl} size="md" variant="primary" aria-disabled={!appUrl}>
+          <ButtonLink to={APP_URL ?? "#"} external={!!APP_URL} size="md" variant="primary" aria-disabled={!APP_URL}>
             Login
           </ButtonLink>
         </div>
@@ -95,7 +91,7 @@ export function Header() {
               >
                 Request Talent
               </ButtonLink>
-              <ButtonLink to={appUrl ?? "#"} external={!!appUrl} variant="primary" aria-disabled={!appUrl}>
+              <ButtonLink to={APP_URL ?? "#"} external={!!APP_URL} variant="primary" aria-disabled={!APP_URL}>
                 Login
               </ButtonLink>
             </div>
