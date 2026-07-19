@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { createApp } from "../../app";
+import { env } from "../../core/env";
 
 let server: Server;
 let baseUrl: string;
@@ -304,4 +305,76 @@ test("pause stops further delegation and resume continues it", async () => {
   });
   const cancelled = (await cancelRes.json()) as { missionState: string };
   assert.equal(cancelled.missionState, "CANCELLED");
+});
+
+/**
+ * Regresión: bug real encontrado en producción -- una misión cuya
+ * llamada síncrona a interpretDailyDirective (OpenAI, dentro de
+ * launchMission, ANTES de que exista runMissionPipelineAsync) fallaba
+ * quedaba huérfana en AgentTask.status="RUNNING" para siempre, con 0
+ * companies/leads/opportunities/costo, bloqueando además cualquier
+ * misión nueva ese día (el guard de "una misión activa por día" la
+ * seguía contando como activa). Se reproduce el fallo real de forma
+ * determinista forzando MissingApiKeyProvider (apagando OPENAI_API_KEY
+ * por la duración de este test) en vez de depender de una falla de red
+ * no determinista -- el resto del código (AgentRuntime.run(), que nunca
+ * atrapa nada) es el mismo camino real que un rate-limit o un timeout
+ * real recorrerían.
+ */
+test("una misión cuyo interpretDailyDirective falla NUNCA queda atascada en RUNNING -- termina en FAILED con el error visible, y no bloquea la próxima misión", async () => {
+  const originalKey = env.OPENAI_API_KEY;
+  env.OPENAI_API_KEY = undefined;
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/missions`, {
+      method: "POST",
+      headers: SALES_HEADERS,
+      body: JSON.stringify({ instruction: "Busca empresas de manufactura en Illinois." }),
+    });
+    // launchMission re-lanza la excepción después de marcar la misión
+    // FAILED -- el cliente sigue viendo un error real, nunca un 201 falso.
+    assert.notEqual(res.status, 201);
+    const errorBody = (await res.json()) as { error?: { code?: string } };
+    assert.equal(errorBody.error?.code, "AI_NOT_CONFIGURED");
+  } finally {
+    env.OPENAI_API_KEY = originalKey;
+  }
+
+  const stuck = await prisma.agentTask.findFirst({
+    where: { type: "daily_revenue_mission", status: "RUNNING" },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.equal(stuck, null, "no debe quedar ninguna misión huérfana en RUNNING");
+
+  const failed = await prisma.agentTask.findFirst({
+    where: { type: "daily_revenue_mission", status: "FAILED" },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.ok(failed, "debe existir la misión marcada FAILED");
+  createdMissionIds.push(failed!.id);
+  assert.match(failed!.errorMessage ?? "", /OPENAI_API_KEY|AI_NOT_CONFIGURED/i);
+  const output = failed!.output as { missionState?: string; companiesTargeted?: number; costUsdSoFar?: number } | null;
+  assert.equal(output?.missionState, "FAILED");
+  assert.equal(output?.companiesTargeted, 0);
+
+  // Prueba directa de la regresión reportada: con la misión anterior ya
+  // en FAILED (terminal), lanzar una misión nueva el mismo día debe
+  // funcionar -- antes de este fix, la misión huérfana en RUNNING
+  // bloqueaba esto indefinidamente.
+  const secondRes = await fetch(`${baseUrl}/api/v1/missions`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ instruction: "Busca 1 empresa de manufactura en Illinois." }),
+  });
+  assert.equal(secondRes.status, 201);
+  const secondBody = (await secondRes.json()) as { id: string };
+  createdMissionIds.push(secondBody.id);
+
+  // Se cancela antes de que el test termine (en vez de dejar que corra
+  // en background) para que su pipeline asíncrono no siga escribiendo
+  // sobre la fila mientras el hook after() de este archivo ya la borró.
+  await fetch(`${baseUrl}/api/v1/missions/${secondBody.id}`, {
+    method: "PATCH",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ action: "cancel" }),
+  });
 });

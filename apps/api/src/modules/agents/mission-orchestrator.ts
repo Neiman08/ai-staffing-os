@@ -653,45 +653,70 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
   });
   await scopedDb.agentTask.update({ where: { id: task.id }, data: { status: "RUNNING" } });
 
-  const interpreted = (await runCeoToolDirectly(task.id, "interpretDailyDirective", {
-    rawInstruction: instruction,
-  })) as InterpretDailyDirectiveResult;
+  // Bugfix real (misión atascada en RUNNING para siempre, 0 companies/
+  // leads/opportunities/costo): interpretDailyDirective es una llamada
+  // real a OpenAI (AgentRuntime.run() -> tool.execute(), que nunca
+  // atrapa nada) awaited de forma SÍNCRONA acá, ANTES de que exista
+  // runMissionPipelineAsync() -- la única función que tenía un .catch()
+  // que marca la misión FAILED. Si esta llamada falla (API key
+  // ausente/inválida, rate limit, timeout de red, o una respuesta del
+  // LLM que no pasa el Zod.parse de interpretBusinessIntent), la
+  // excepción subía sin capturar hasta el router, que solo devolvía un
+  // error HTTP al cliente -- pero el AgentTask ya había quedado en
+  // status=RUNNING en la línea de arriba, y como runMissionPipelineAsync()
+  // nunca llegaba a dispararse, quedaba huérfano para siempre, bloqueando
+  // además "una misión por día" (líneas 638-646) hasta una corrección manual
+  // en la base. Mismo criterio de failMission() que runMissionPipelineAsync
+  // ya usa para sus propios errores -- acá se aplica también a esta
+  // ventana síncrona, la única que faltaba cubrir.
+  try {
+    const interpreted = (await runCeoToolDirectly(task.id, "interpretDailyDirective", {
+      rawInstruction: instruction,
+    })) as InterpretDailyDirectiveResult;
 
-  // Corrección estructural: se calculan acá también (no solo dentro de
-  // runMissionPipeline, que corre async) para que la respuesta síncrona
-  // de POST /missions ya las muestre — sin esto, un cliente que lea la
-  // respuesta inmediata del POST vería appliedRestrictions=null aunque
-  // la instrucción sí las haya pedido.
-  const initialRestrictions = interpreted.missionRestrictions ?? DEFAULT_MISSION_RESTRICTIONS;
-  const initialRestrictionNotes = buildRestrictionNotes(initialRestrictions);
+    // Corrección estructural: se calculan acá también (no solo dentro de
+    // runMissionPipeline, que corre async) para que la respuesta síncrona
+    // de POST /missions ya las muestre — sin esto, un cliente que lea la
+    // respuesta inmediata del POST vería appliedRestrictions=null aunque
+    // la instrucción sí las haya pedido.
+    const initialRestrictions = interpreted.missionRestrictions ?? DEFAULT_MISSION_RESTRICTIONS;
+    const initialRestrictionNotes = buildRestrictionNotes(initialRestrictions);
 
-  await scopedDb.agentTask.update({
-    where: { id: task.id },
-    data: {
-      input: { rawInstruction: instruction, ...interpreted } as never,
-      output: {
-        missionState: "RUNNING",
-        companiesTargeted: 0,
-        leadsCreated: 0,
-        opportunitiesCreated: 0,
-        sequencesPlanned: 0,
-        draftsAwaitingApproval: 0,
-        costUsdSoFar: Number((await scopedDb.agentTask.findUniqueOrThrow({ where: { id: task.id } })).costUsd ?? 0),
-        objectiveProgress: {
-          type: interpreted.businessObjective.type,
-          target: interpreted.businessObjective.target,
-          unit: interpreted.businessObjective.unit,
-          current: 0,
-          percentComplete: interpreted.businessObjective.target ? 0 : null,
-          rawText: interpreted.businessObjective.rawText,
-        },
-        progressUpdatedAt: new Date().toISOString(),
-        error: null,
-        appliedRestrictions: initialRestrictions,
-        restrictionNotes: initialRestrictionNotes,
-      } as never,
-    },
-  });
+    await scopedDb.agentTask.update({
+      where: { id: task.id },
+      data: {
+        input: { rawInstruction: instruction, ...interpreted } as never,
+        output: {
+          missionState: "RUNNING",
+          companiesTargeted: 0,
+          leadsCreated: 0,
+          opportunitiesCreated: 0,
+          sequencesPlanned: 0,
+          draftsAwaitingApproval: 0,
+          costUsdSoFar: Number((await scopedDb.agentTask.findUniqueOrThrow({ where: { id: task.id } })).costUsd ?? 0),
+          objectiveProgress: {
+            type: interpreted.businessObjective.type,
+            target: interpreted.businessObjective.target,
+            unit: interpreted.businessObjective.unit,
+            current: 0,
+            percentComplete: interpreted.businessObjective.target ? 0 : null,
+            rawText: interpreted.businessObjective.rawText,
+          },
+          progressUpdatedAt: new Date().toISOString(),
+          error: null,
+          appliedRestrictions: initialRestrictions,
+          restrictionNotes: initialRestrictionNotes,
+        } as never,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error desconocido interpretando la instrucción de la misión";
+    log(task.id, "mission failed before pipeline start", { error: message });
+    await failMission(task.id, message).catch((failErr) => {
+      console.error(`[mission-orchestrator] could not even mark mission ${task.id} as FAILED:`, failErr);
+    });
+    throw err;
+  }
 
   runMissionPipelineAsync(task.id, ctx.tenantId, ctx.userId);
 
