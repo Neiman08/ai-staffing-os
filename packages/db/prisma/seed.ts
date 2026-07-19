@@ -504,6 +504,13 @@ const INDUSTRIES = [
   { id: "industry-warehouse-logistics", name: "Warehouse/Logistics" },
   { id: "industry-manufacturing", name: "Manufacturing" },
   { id: "industry-general-labor", name: "General Labor" },
+  // F13 (auditoría PO, 2026-07-19): antes el CEO Agent no podía
+  // encontrar hoteles ni internamente ni externamente -- el interprete
+  // (LLM) nunca podía elegir "Hospitality" (no existía como Industry
+  // real) y taxonomy.ts la tenía con crmIndustryBucket: null, así que
+  // cualquier candidato real de Google Places se rechazaba al persistir
+  // ("Sin bucket de Industry real aprobado"). Ver taxonomy.ts.
+  { id: "industry-hospitality", name: "Hospitality" },
 ];
 
 async function seedIndustries() {

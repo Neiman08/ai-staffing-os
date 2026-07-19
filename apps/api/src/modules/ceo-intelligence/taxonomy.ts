@@ -7,12 +7,13 @@ import type { BusinessTaxonomyEntry } from "./contracts";
 // propio vocabulario embebido.
 //
 // crmIndustryBucket es null quando ninguna Industry real del CRM (hoy:
-// Construction, Warehouse/Logistics, Manufacturing, General Labor --
-// ver docs/F7_CEO_INTELLIGENCE_AND_AUTONOMOUS_CLIENT_ACQUISITION_PLAN.md
-// §1.7) es un match razonable. Crear una Industry real nueva
-// (Hospitality, Healthcare, etc.) es una decision de F5/F6 territory,
-// fuera de alcance de F7.1 (ver plan §9.4) -- null es la interpretacion
-// conservadora, nunca una industria inventada.
+// Construction, Warehouse/Logistics, Manufacturing, General Labor,
+// Hospitality -- ver docs/F7_CEO_INTELLIGENCE_AND_AUTONOMOUS_CLIENT_
+// ACQUISITION_PLAN.md §1.7 y la auditoría de descubrimiento real del
+// 2026-07-19, F13) es un match razonable. Crear una Industry real nueva
+// para el resto (Healthcare, Retail, etc.) sigue fuera de alcance --
+// null sigue siendo la interpretacion conservadora ahí, nunca una
+// industria inventada.
 export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
   {
     key: "hospitality",
@@ -22,7 +23,14 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // de aceptacion explicita pedida por el PO para validar un candidato
     // real de hospitality (ver docs/F7.../PLAN.md §"Hoteles").
     companyTypes: ["hotel", "resort", "lodging property", "motel", "inn", "suites", "hospitality property"],
-    crmIndustryBucket: null,
+    // F13 (auditoría PO, 2026-07-19): antes null -- "Crear una Industry
+    // real nueva... es una decision de F5/F6 territory, fuera de
+    // alcance de F7.1" (ver nota de arriba). El PO ya autorizó
+    // explícitamente esta Industry en la auditoría de descubrimiento
+    // real (Fase 4: "Asegura soporte mínimo para Hospitality/Hotels") --
+    // seedIndustries() en packages/db/prisma/seed.ts la crea como
+    // Industry real (isGlobal, mismo patrón que las otras 4).
+    crmIndustryBucket: "Hospitality",
     googleSearchPhrases: ["hotel", "resort", "lodging property", "hospitality group"],
     websitePhrases: ["rooms", "reservations", "check-in", "housekeeping", "hospitality"],
     jobTitles: [
@@ -271,7 +279,24 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
   {
     key: "electrical",
     label: "Electrical Contractors",
-    synonyms: ["electrical contractor", "electricians", "electricistas", "electrical company", "electrical services"],
+    // F13 (auditoría PO, 2026-07-19): hallazgo real durante la
+    // validación -- "contratistas electricos" (adjetivo, la forma real
+    // que usó el PO) NUNCA matcheaba porque solo estaba la forma
+    // sustantivo ("electricistas") -- el intérprete caía a la industria
+    // genérica más cercana ("Construction") y buscaba "construction
+    // company" en vez de contratistas eléctricos reales.
+    synonyms: [
+      "electrical contractor",
+      "electrical contractors",
+      "electricians",
+      "electricistas",
+      "electrical company",
+      "electrical services",
+      "electrico",
+      "electricos",
+      "contratista electrico",
+      "contratistas electricos",
+    ],
     companyTypes: ["electrical contractor", "electrical services company"],
     crmIndustryBucket: "Construction",
     googleSearchPhrases: ["electrical contractor", "electrical services company"],

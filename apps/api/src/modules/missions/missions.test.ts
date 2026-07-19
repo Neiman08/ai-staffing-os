@@ -163,9 +163,21 @@ test("launchMission interprets a real instruction, runs the fixed pipeline, and 
   assert.equal(body.businessObjective.type, "companies_found");
 
   // interpretDailyDirective ya corrió síncrono al crear la misión — el
-  // resto de la secuencia (create_campaign, select_target_companies,
-  // plan_sequence, personalize_message) corre async.
-  await waitForMissionChildren(body.id, 4, 45_000);
+  // resto de la secuencia corre async. F13 (auditoría PO, 2026-07-19):
+  // hallazgo real al validar contra una base de datos genuinamente
+  // fresca -- la empresa seleccionada (company-05, Prairie Manufacturing
+  // Co.) nunca tuvo un Lead real en el seed (solo una Opportunity de
+  // demo sin Lead asociado), así que el pipeline SIEMPRE crea 6 hijos
+  // reales acá (create_campaign, select_target_companies, create_lead,
+  // create_opportunity, plan_sequence, personalize_message), nunca 4.
+  // Contra la base de dev persistente esto quedaba enmascarado por
+  // corridas anteriores de este mismo test, que ya le habían creado un
+  // Lead a esa empresa (create_lead se saltea si ya existe) -- ahí el
+  // conteo SÍ daba 4, por casualidad de estado acumulado, no por diseño.
+  // Esperar solo 4 dejaba pasar el chequeo antes de que
+  // personalize_message (el que de verdad importa acá) hubiera
+  // terminado de verdad.
+  await waitForMissionChildren(body.id, 6, 45_000);
 
   const detailRes = await fetch(`${baseUrl}/api/v1/missions/${body.id}`, { headers: SALES_HEADERS });
   const detail = (await detailRes.json()) as {

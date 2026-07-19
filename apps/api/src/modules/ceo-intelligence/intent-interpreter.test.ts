@@ -21,13 +21,16 @@ test("hoteles: 'Busca hoteles que necesiten housekeeping.'", () => {
   const intent = interpret("Busca hoteles que necesiten housekeeping.");
   assert.ok(intent.companyTypes.includes("hotel"));
   assert.ok(intent.matchedTaxonomyKeys.includes("hospitality"));
-  assert.equal(intent.industries.length, 0, "Hospitality no tiene Industry real hoy — interpretación conservadora");
+  // F13 (auditoría PO, 2026-07-19): Hospitality ahora SÍ tiene Industry
+  // real en el CRM (antes esperaba 0 acá, con crmIndustryBucket=null) --
+  // ver taxonomy.test.ts.
+  assert.deepEqual(intent.industries, ["Hospitality"]);
   assert.ok(intent.hiringSignals.includes("Housekeeper"));
   assert.ok(intent.targetJobTitles.includes("Housekeeping"));
   assert.ok(intent.decisionRoles.includes("HR Manager"));
   assert.ok(intent.plannedSteps.includes("discover_companies"));
   assert.ok(intent.plannedSteps.includes("find_hiring_signals"));
-  assert.ok(intent.ambiguities.some((a) => a.includes("crmIndustryBucket")));
+  assert.ok(!intent.ambiguities.some((a) => a.includes("crmIndustryBucket")), "ya no debería haber ambigüedad de crmIndustryBucket para hospitality");
   assert.equal(intent.objective.type, "find_companies");
 });
 
@@ -84,6 +87,27 @@ test("roofing: 'Busca roofing contractors.'", () => {
   const intent = interpret("Busca roofing contractors.");
   assert.ok(intent.matchedTaxonomyKeys.includes("roofing"));
   assert.deepEqual(intent.industries, ["Construction"]);
+});
+
+// F13 (auditoría PO, 2026-07-19): "contratistas eléctricos" (adjetivo)
+// es la frase real que usó el PO al validar el descubrimiento externo --
+// antes solo estaba la forma sustantivo ("electricistas") en los
+// sinónimos, así que esta instrucción exacta nunca activaba "electrical"
+// y caía al match genérico "construction" (buscaba "construction
+// company" en vez de contratistas eléctricos reales, hallazgo real
+// documentado en el commit de este fix).
+test("electrical: 'Busca contratistas eléctricos reales en Texas.' (adjetivo en español, la frase real que reportó el PO)", () => {
+  const intent = interpret("Busca contratistas eléctricos reales en Texas.");
+  assert.ok(intent.matchedTaxonomyKeys.includes("electrical"), "debería matchear 'electrical' con la forma adjetivo en español");
+  assert.deepEqual(intent.industries, ["Construction"]);
+  assert.deepEqual(intent.states, ["TX"]);
+});
+
+test("electrical: 'Busca electrical contractors en Houston.' (inglés + ciudad de Texas sin nombrar el estado)", () => {
+  const intent = interpret("Busca electrical contractors en Houston.");
+  assert.ok(intent.matchedTaxonomyKeys.includes("electrical"));
+  assert.deepEqual(intent.preferredCities, ["Houston"]);
+  assert.deepEqual(intent.states, ["TX"]);
 });
 
 test("restaurants: 'Busca restaurantes que necesiten Dishwashers.' (plural)", () => {

@@ -554,5 +554,11 @@ export const missionDetailSchema = missionListItemSchema.extend({
   // contacts/contactStats quedando vacíos — nunca se muestra "0 emails"
   // como si Contact Intelligence hubiera corrido.
   discoveryExecution: discoveryExecutionReportSchema.nullable(),
+  // F13 (auditoría PO, 2026-07-19): reporte del mismo ejecutor cuando lo
+  // disparó automáticamente el flujo interno de siempre (nunca
+  // useExternalDiscovery explícito) porque el CRM no tenía suficiente
+  // oferta real para lo pedido — null en cualquier misión que encontró
+  // suficiente oferta interna sin necesitar descubrimiento externo.
+  discoveryFallback: discoveryExecutionReportSchema.nullable(),
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;

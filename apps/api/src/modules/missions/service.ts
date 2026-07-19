@@ -109,6 +109,7 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     missionPlan?: MissionDetail["missionPlan"];
     ceoIntentMeta?: MissionDetail["ceoIntentMeta"];
     discoveryExecution?: MissionDetail["discoveryExecution"];
+    discoveryFallback?: MissionDetail["discoveryFallback"];
   };
   const input = detail.input as { unrecognizedTerms?: string[] };
 
@@ -157,6 +158,12 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
   // — se suman acá para que "Empresas seleccionadas" también las
   // muestre, reusando la misma sección en vez de inventar una nueva.
   for (const companyId of output.discoveryExecution?.createdCompanyIds ?? []) {
+    companyIdsFromChildTasks.add(companyId);
+  }
+  // F13: mismo motivo -- el fallback automático (mission-orchestrator.ts,
+  // runAutoExternalDiscoveryFallback) también persiste createdCompanyIds
+  // en su propio discoveryFallback, no solo en discoveryExecution.
+  for (const companyId of output.discoveryFallback?.createdCompanyIds ?? []) {
     companyIdsFromChildTasks.add(companyId);
   }
   const campaignCompanyIds = new Set(campaignCompanies.map((cc) => cc.companyId));
@@ -256,6 +263,9 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     // F7.3: null en toda misión que no ejecutó el nuevo ejecutor dinámico
     // de descubrimiento (legacy, planned-only, o internal-CRM-search).
     discoveryExecution: output.discoveryExecution ?? null,
+    // F13: null en toda misión que encontró suficiente oferta interna sin
+    // necesitar el fallback automático de descubrimiento externo.
+    discoveryFallback: output.discoveryFallback ?? null,
   };
 }
 

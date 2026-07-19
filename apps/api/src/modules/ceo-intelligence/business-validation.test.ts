@@ -27,7 +27,10 @@ test("hotel válido: nombre contiene 'Hotel' -> EXACT, aceptado", () => {
   assert.equal(result.accepted, true);
   assert.equal(result.confidence, "EXACT");
   assert.ok(result.matchedEvidence.includes("hotel"));
-  assert.equal(result.detectedSector, null);
+  // F13 (auditoría PO, 2026-07-19): Hospitality ahora tiene Industry real
+  // (crmIndustryBucket="Hospitality", antes null) -- detectedSector la
+  // refleja directamente (business-validation.ts:216).
+  assert.equal(result.detectedSector, "Hospitality");
 });
 
 test("hotel inválido: 'ABC Property Management' -> rechazado por evidencia negativa", () => {

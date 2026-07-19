@@ -27,6 +27,11 @@ export const SUPPORTED_STATE_CODES: Record<string, string> = {
   MI: "Michigan",
   OH: "Ohio",
   MO: "Missouri",
+  // F13 (auditoría PO, 2026-07-19): Texas, agregado con evidencia real
+  // (misión real de contratistas eléctricos en Houston, TX, requerida en
+  // la validación de descubrimiento externo) -- mismo criterio que el
+  // resto de esta lista, cambio de datos, no de arquitectura.
+  TX: "Texas",
 };
 
 interface KnownCity {
@@ -67,6 +72,13 @@ const KNOWN_CITIES: KnownCity[] = [
   { name: "Council Bluffs", stateCode: "IA" },
   { name: "Davenport", stateCode: "IA" },
   { name: "Iowa City", stateCode: "IA" },
+  // Texas -- F13 (auditoría PO, 2026-07-19), ver SUPPORTED_STATE_CODES arriba.
+  { name: "Houston", stateCode: "TX" },
+  { name: "Dallas", stateCode: "TX" },
+  { name: "Austin", stateCode: "TX" },
+  { name: "San Antonio", stateCode: "TX" },
+  { name: "Fort Worth", stateCode: "TX" },
+  { name: "El Paso", stateCode: "TX" },
 ];
 
 export interface GeoMatch {

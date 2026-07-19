@@ -10,7 +10,8 @@ import { computeMissionProgress, computeContactCoverage } from "./tools/ceo-tool
 import { abortTask } from "./cancellation";
 import { interpretBusinessIntent } from "../ceo-intelligence/intent-interpreter";
 import { buildMissionPlan } from "../ceo-intelligence/mission-planner";
-import { executeDiscoveryPlan } from "./mission-executor";
+import type { MissionPlan } from "../ceo-intelligence/contracts";
+import { executeDiscoveryPlan, type DiscoveryExecutionReport } from "./mission-executor";
 
 // F4 addendum: tope general por misión, independiente del desiredVolume
 // interpretado — mismo espíritu que el tope de 15/corrida de F3 y el de
@@ -53,6 +54,14 @@ interface MissionOutput {
     companiesWithoutContactPoint: number;
     providersOmitted: string[];
   } | null;
+  // F13 (auditoría PO, 2026-07-19): reporte real de descubrimiento
+  // externo cuando la oferta interna del CRM no alcanzó lo pedido y se
+  // corrió runAutoExternalDiscoveryFallback -- undefined en cualquier
+  // misión que encontró suficiente oferta interna (comportamiento sin
+  // cambios). Diferencia encontradas/nuevas/reutilizadas/descartadas/
+  // enriquecidas/sin-contacto, igual que discoveryExecution del flujo
+  // useExternalDiscovery=true explícito.
+  discoveryFallback?: DiscoveryExecutionReport | null;
 }
 
 function log(missionTaskId: string, event: string, data?: Record<string, unknown>): void {
@@ -156,6 +165,7 @@ async function syncMissionOutput(
     error: null,
     appliedRestrictions: restrictionInfo?.appliedRestrictions ?? existingOutput.appliedRestrictions,
     restrictionNotes: restrictionInfo?.restrictionNotes ?? existingOutput.restrictionNotes,
+    discoveryFallback: existingOutput.discoveryFallback,
   };
   await scopedDb.agentTask.update({ where: { id: missionTaskId }, data: { output: output as never } });
 }
@@ -186,6 +196,7 @@ async function failMission(missionTaskId: string, errorMessage: string): Promise
     error: errorMessage,
     appliedRestrictions: existingOutput.appliedRestrictions,
     restrictionNotes: existingOutput.restrictionNotes,
+    discoveryFallback: existingOutput.discoveryFallback,
   };
   await scopedDb.agentTask.update({
     where: { id: missionTaskId },
@@ -212,12 +223,93 @@ async function markMissionCancelled(missionTaskId: string): Promise<void> {
     error: null,
     appliedRestrictions: existingOutput.appliedRestrictions,
     restrictionNotes: existingOutput.restrictionNotes,
+    discoveryFallback: existingOutput.discoveryFallback,
   };
   await scopedDb.agentTask.update({
     where: { id: missionTaskId },
     data: { status: "DONE", completedAt: new Date(), output: output as never },
   });
   log(missionTaskId, "mission cancelled");
+}
+
+/** F13: persiste el reporte real de runAutoExternalDiscoveryFallback sin pisar el resto del output ya escrito (mismo patrón de lectura-antes-de-escribir que syncMissionOutput/closeMission). */
+async function persistDiscoveryFallbackReport(missionTaskId: string, report: DiscoveryExecutionReport): Promise<void> {
+  const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } });
+  const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
+  await scopedDb.agentTask.update({
+    where: { id: missionTaskId },
+    data: { output: { ...existingOutput, discoveryFallback: report } as never },
+  });
+}
+
+/**
+ * F13 (auditoría PO, 2026-07-19): antes, una misión "Busca 10 hoteles en
+ * Illinois" (sin frases mágicas tipo "fuera del CRM") solo consultaba
+ * Company ya existentes en el CRM -- nunca llamaba a Google Places, y
+ * si la industria pedida ni existía en el CRM (ej. Hospitality antes de
+ * este fix), el filtro quedaba vacío y el código devolvía CUALQUIER
+ * empresa del estado sin relación con lo pedido (bug real: la misión de
+ * hoteles le redactó outreach a una empresa de logística). Este helper
+ * corre descubrimiento externo REAL -- mismo intérprete/planner/
+ * ejecutor deterministas que ya usa el desvío useExternalDiscovery
+ * explícito (interpretBusinessIntent/buildMissionPlan/executeDiscoveryPlan,
+ * ninguno de los tres modificado) -- ANTES de que el loop de siempre
+ * lea el CRM. Las Company reales que persiste quedan ahí mismo, así que
+ * el loop de abajo (sin ningún cambio) las encuentra con su propia
+ * query normal. Nunca crea Lead/Opportunity/Campaign acá -- eso sigue
+ * siendo exclusivo del loop de siempre, ahora alimentado también con
+ * las empresas recién descubiertas.
+ */
+async function runAutoExternalDiscoveryFallback(
+  missionTaskId: string,
+  plan: MissionPlan,
+  restrictions: MissionRestrictions,
+  businessActivities: string[],
+  targetJobTitles: string[],
+  decisionRoles: string[],
+  categoryIds: string[],
+): Promise<void> {
+  log(missionTaskId, "auto external discovery fallback started", {
+    reason: "internal CRM supply insufficient for the requested volume",
+    searchQueries: plan.searchQueries.length,
+  });
+
+  const report = await executeDiscoveryPlan({
+    missionTaskId,
+    plan,
+    restrictions,
+    businessActivities,
+    targetJobTitles,
+    decisionRoles,
+  });
+
+  // F13: hallazgo real durante la validación -- persistAcceptedCandidate
+  // (mission-executor.ts, sin tocar) nunca setea possibleCategories (no
+  // conoce las JobCategory reales de la misión, solo taxonomía). Sin
+  // esto, selectTargetCompanies (campaign-tools.impl.ts, sin tocar)
+  // exige `possibleCategories: { some: { id: { in: targetCategoryIds } } }`
+  // cuando la Campaign tiene categorías -- toda empresa recién
+  // descubierta quedaba con 0 posibilidad de matchear, así que
+  // addedCount siempre daba 0 pese a haber descubierto empresas reales.
+  if (categoryIds.length > 0 && report.createdCompanyIds.length > 0) {
+    for (const companyId of report.createdCompanyIds) {
+      await scopedDb.company.update({
+        where: { id: companyId },
+        data: { possibleCategories: { connect: categoryIds.map((id) => ({ id })) } },
+      });
+    }
+  }
+
+  await persistDiscoveryFallbackReport(missionTaskId, report);
+
+  log(missionTaskId, "auto external discovery fallback finished", {
+    companiesCreated: report.companiesCreated,
+    acceptedResults: report.acceptedResults,
+    rejectedResults: report.rejectedResults,
+    duplicatesAlreadyInCrm: report.duplicatesAlreadyInCrm,
+    stopReason: report.stopReason,
+    categoriesAttached: categoryIds.length > 0 ? categoryIds.length : 0,
+  });
 }
 
 /**
@@ -258,6 +350,20 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     return;
   }
 
+  // F13 (auditoría PO, 2026-07-19): intérprete/planner deterministas
+  // (F7.1, sin LLM, gratis) calculados siempre acá -- señal real de qué
+  // sector pidió la instrucción, independiente de si el CRM ya tiene una
+  // Industry para él. Se usan abajo para (a) decidir si hace falta
+  // descubrimiento externo real cuando el CRM no alcanza, y (b) para no
+  // confundir "no se pidió ninguna industria" (sí corresponde no
+  // filtrar) con "se pidió una industria real que el CRM todavía no
+  // tiene" (nunca debe devolver empresas sin relación -- bug real
+  // reportado por el PO: una misión de hoteles le mandó outreach a una
+  // empresa de logística porque el filtro vacío caía a "cualquier
+  // empresa del estado").
+  const externalIntent = interpretBusinessIntent(interpreted.rawInstruction);
+  const externalPlan = buildMissionPlan(externalIntent);
+
   const industries = interpreted.industryNames?.length
     ? await scopedDb.industry.findMany({ where: { name: { in: interpreted.industryNames } } })
     : [];
@@ -266,7 +372,8 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     : [];
   const categoryIds = categories.map((c) => c.id);
 
-  const industryTargets: Array<{ id: string; name: string } | null> = industries.length > 0 ? industries : [null];
+  const industryTargets: Array<{ id: string; name: string } | null> =
+    industries.length > 0 ? industries : externalPlan.searchQueries.length > 0 ? [] : [null];
   const perCampaignVolume = Math.min(interpreted.desiredVolume ?? MAX_COMPANIES_PER_MISSION, MAX_COMPANIES_PER_MISSION);
 
   // Corrección estructural (misión Iowa, 2026-07-13): antes, "no crear
@@ -318,6 +425,49 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
     }
 
     return "continue";
+  }
+
+  // F13: si el CRM no tiene suficiente oferta real para lo pedido (o
+  // directamente no tiene la industria todavía), corre descubrimiento
+  // externo real UNA VEZ antes del loop de siempre -- ver
+  // runAutoExternalDiscoveryFallback más arriba. Las Company reales que
+  // persiste quedan disponibles para que el loop de abajo las encuentre
+  // con su propia query normal, sin ningún cambio a esa lógica.
+  //
+  // Hallazgo real de la validación: cuando la instrucción NO pide un
+  // número explícito, perCampaignVolume cae al tope general (50) -- eso
+  // volvía "obligatorio" el descubrimiento externo real (con costo real
+  // de Google Places + website intelligence) para CUALQUIER industria
+  // con menos de 50 empresas ya en el CRM, incluso para una instrucción
+  // vaga tipo "busca empresas de manufactura" que antes se conformaba
+  // con lo que ya hubiera. Se vuelve a exigir un volumen EXPLÍCITO para
+  // ese caso (respeta el comportamiento barato de siempre) -- la única
+  // excepción real es cuando el CRM no tiene NINGUNA empresa de esa
+  // industria (industries.length===0): ahí no hay nada interno de lo
+  // que "conformarse" pase lo que pase, así que el fallback corre
+  // igual, con o sin número explícito (el caso real que reportó el PO:
+  // Hospitality antes de esta fase).
+  const explicitVolumeInsufficient = interpreted.desiredVolume != null;
+  if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0)) {
+    const internalSupply =
+      industries.length > 0
+        ? await scopedDb.company.count({
+            where: { industryId: { in: industries.map((i) => i.id) }, state: interpreted.state ?? undefined, city: interpreted.city ?? undefined },
+          })
+        : 0;
+    if (internalSupply < perCampaignVolume) {
+      if ((await checkForStop()) === "stop") return;
+      await runAutoExternalDiscoveryFallback(
+        missionTaskId,
+        externalPlan,
+        externalIntent.restrictions,
+        externalIntent.businessActivities,
+        externalIntent.targetJobTitles,
+        externalIntent.decisionRoles,
+        categoryIds,
+      );
+      await syncMissionOutput(missionTaskId, "RUNNING", { appliedRestrictions: restrictions, restrictionNotes });
+    }
   }
 
   for (const industry of industryTargets) {
@@ -851,6 +1001,7 @@ export async function closeMission(missionTaskId: string): Promise<void> {
     appliedRestrictions: existingOutput.appliedRestrictions,
     restrictionNotes: existingOutput.restrictionNotes,
     contactCoverage,
+    discoveryFallback: existingOutput.discoveryFallback,
   };
 
   await scopedDb.agentTask.update({
