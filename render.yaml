@@ -26,6 +26,18 @@
 # ai-staffing-os-api (ver apps/api/src/index.ts) -- no existe un
 # proceso/servicio de worker separado en este repo, así que no se
 # inventa uno acá.
+#
+# F14 (fix de importación real, 2026-07-19): Render rechazó el primer
+# intento de importar este Blueprint -- "static sites cannot have a
+# region" para ai-staffing-os-web y ai-staffing-os-marketing. Un sitio
+# estático se sirve desde la CDN global de Render, no desde una región
+# específica, así que `region` ya no es un campo válido para
+# `runtime: static` en la versión actual de Render (sí lo era, o el
+# validador era más laxo, cuando este archivo se escribió originalmente
+# en F12.11). `region: oregon` se mantiene en ai-staffing-os-db y
+# ai-staffing-os-api (Postgres gestionado y el proceso Node sí corren
+# en una región real) -- se quitó únicamente de los dos servicios
+# estáticos.
 
 databases:
   - name: ai-staffing-os-db
@@ -124,7 +136,6 @@ services:
   - type: web
     name: ai-staffing-os-web
     runtime: static
-    region: oregon
     branch: main
     buildCommand: >-
       corepack enable &&
@@ -155,7 +166,6 @@ services:
   - type: web
     name: ai-staffing-os-marketing
     runtime: static
-    region: oregon
     branch: main
     buildCommand: >-
       corepack enable &&
