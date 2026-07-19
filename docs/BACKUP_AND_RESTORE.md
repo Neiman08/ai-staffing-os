@@ -6,7 +6,7 @@ F12.6 (renombrado en F14 de `BACKUP_AND_RECOVERY_RUNBOOK.md`, contenido sin camb
 
 Dos capas independientes, no una sola:
 
-1. **Backups gestionados por Render** (producción) — Render Postgres en el plan `starter` (el que usa `render.yaml`) incluye backups diarios automáticos con retención de 7 días, gestionados por la plataforma, sin script propio. Esta es la red de seguridad principal en producción.
+1. **Backups gestionados por Render** (producción) — Render Postgres en el plan `basic-256mb` (el que usa `render.yaml` — F14: reemplaza al plan legacy `starter`, ya no disponible para bases nuevas) incluye backups diarios automáticos con retención de 7 días, gestionados por la plataforma, sin script propio. Esta es la red de seguridad principal en producción.
 2. **Backups manuales/scriptables de este repo** (`scripts/db-backup.sh`) — para: (a) un snapshot inmediato antes de una migración riesgosa o una operación irreversible, (b) copias fuera de Render (portabilidad real, no depender de un solo proveedor), (c) pruebas de restauración reales como la de este documento.
 
 Ninguna reemplaza a la otra. Producción real debe tener ambas.
@@ -18,7 +18,7 @@ Ninguna reemplaza a la otra. Producción real debe tener ambas.
 
 ## 3. Retención
 
-- Render: 7 días (plan starter) — verificar el plan real contratado antes de asumir esto en producción.
+- Render: 7 días de retención de backups lógicos — política de la plataforma, aplica independientemente del plan contratado (verificado en `render.com/docs/postgresql-backups`); el plan `basic-256mb` de este Blueprint da 3 días de recuperación punto-en-el-tiempo (PITR), los tiers `pro-*` dan 7 días de PITR — verificar el plan real contratado antes de asumir cuál ventana de PITR aplica en producción.
 - Manual: sin política automática de borrado — el operador decide cuánto conservar. Recomendación: mantener al menos el último backup manual antes de cada deploy, y no depender de backups manuales viejos como única fuente (Render es la fuente de verdad continua).
 
 ## 4. Cifrado

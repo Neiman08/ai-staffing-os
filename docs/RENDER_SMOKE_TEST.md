@@ -55,7 +55,7 @@ Marcar cada ítem con el resultado real observado, nunca asumir.
 
 ## 8. Backups y recuperación (verificar la config real, no re-ejecutar el ciclo completo en producción)
 
-- [ ] Confirmar en el dashboard de Render que el plan de la base de datos real incluye backups automáticos (plan `starter` o superior).
+- [ ] Confirmar en el dashboard de Render que el plan de la base de datos real (`basic-256mb` o superior — cualquier plan pago de Postgres incluye backups diarios automáticos con 7 días de retención, no depende del tier).
 - [ ] `./scripts/db-backup.sh "postgresql://<URL real de producción>"` corre exitosamente al menos una vez desde que el entorno existe (backup manual de referencia).
 - [ ] El procedimiento de restore (`docs/BACKUP_AND_RESTORE.md` §7) fue probado contra una copia real de producción en una base aislada, no solo contra datos de desarrollo — repetir esa prueba específica contra un dump real de producción antes de confiar en ella para un incidente real.
 

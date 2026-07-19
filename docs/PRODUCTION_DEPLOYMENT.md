@@ -23,7 +23,7 @@ Monorepo `pnpm` (workspaces: `apps/*`, `packages/*`), sin Turborepo (los scripts
 
 Exactamente estos 4, ninguno más:
 
-1. **`ai-staffing-os-db`** (PostgreSQL 16, plan `starter`)
+1. **`ai-staffing-os-db`** (PostgreSQL 16, plan `basic-256mb` — F14: el plan legacy `starter` dejó de estar disponible para bases nuevas, ver §4)
 2. **`ai-staffing-os-api`** (Node Web Service, plan `starter`)
 3. **`ai-staffing-os-web`** (Static Site, sin costo de plan)
 4. **`ai-staffing-os-marketing`** (Static Site, sin costo de plan)
@@ -46,12 +46,12 @@ Resumen de lo que se completa a mano en el dashboard de Render (nunca en `render
 
 | Servicio | Plan | Costo | Por qué |
 |---|---|---|---|
-| `ai-staffing-os-db` | Starter | $7/mes | Backups diarios automáticos (7 días de retención) incluidos — suficiente para el volumen real de una agencia chica. Subir a Standard solo con evidencia real de necesitarlo (más conexiones concurrentes, más almacenamiento). |
+| `ai-staffing-os-db` | `basic-256mb` (F14: el legacy `starter` ya no está disponible para bases nuevas — ver `render.com/docs/postgresql-refresh`) | ~$7/mes | Backups diarios automáticos (7 días de retención) incluidos, sin depender del plan — suficiente para el volumen real de una agencia chica. Subir a un tier mayor (`basic-1gb`, `pro-4gb`, etc.) solo con evidencia real de necesitarlo (más conexiones concurrentes, más almacenamiento). |
 | `ai-staffing-os-api` | Starter | $7/mes | 512MB RAM — suficiente para el tráfico de una agencia chica sin colas pesadas (no hay worker separado, todo corre acá). Si el volumen de misiones/usuarios concurrentes crece notoriamente, subir a Standard ($25/mes, más RAM/CPU) — decisión basada en evidencia real (ver F12.8, mismo criterio de este proyecto: nunca optimizar sin medir primero). |
 | `ai-staffing-os-web` | Static | $0 | Render no cobra plan por sitios estáticos — banda ancha incluida, compresión gzip/brotli automática de la plataforma. |
 | `ai-staffing-os-marketing` | Static | $0 | Ídem. |
 
-**Infraestructura fija**: **$14/mes** (`db` + `api`, ambos Starter). Los costos variables (OpenAI, Google Places, Hunter, PDL) se estiman en §7 según volumen real de misiones.
+**Infraestructura fija**: **~$14/mes** (`db` en `basic-256mb` + `api` en `starter`). Los costos variables (OpenAI, Google Places, Hunter, PDL) se estiman en §7 según volumen real de misiones.
 
 ## 5. Clerk (autenticación de producción)
 
@@ -86,7 +86,7 @@ Resumen de lo que se completa a mano en el dashboard de Render (nunca en `render
 
 ## 8. Costo estimado mensual (agencia chica)
 
-**Infraestructura fija**: $14/mes (`ai-staffing-os-db` + `ai-staffing-os-api`, ambos Starter — ver §4). `web`/`marketing` sin costo de plan.
+**Infraestructura fija**: ~$14/mes (`ai-staffing-os-db` en `basic-256mb` + `ai-staffing-os-api` en `starter` — ver §4). `web`/`marketing` sin costo de plan.
 
 **Costo variable por misión** (evidencia real, no estimación teórica — medido en esta misma fase con 4 misiones reales de 10 empresas cada una, tenant aislado, providers reales): entre **$0.035** (una sola query, ej. bodegas) y **$0.13** (varias queries específicas + enriquecimiento, ej. hoteles) por misión de "10 empresas encontradas" que **necesita descubrimiento externo real** (Google Places, el costo dominante — $0.032 por query de hasta 20 resultados). Una misión cuyo sector/estado **ya tiene suficiente oferta en el CRM** (reutiliza empresas ya descubiertas antes) cuesta prácticamente $0 en proveedores externos — solo un par de llamadas chicas a OpenAI (interpretación + reporte).
 

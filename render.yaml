@@ -40,8 +40,23 @@
 # estáticos.
 
 databases:
+  # F14 (fix de importación real, 2026-07-19): Render rechazó el segundo
+  # intento de importar este Blueprint -- "Legacy Postgres plans,
+  # including 'starter', are no longer supported for new databases".
+  # Render introdujo planes flexibles de Postgres (octubre 2024, ver
+  # render.com/docs/postgresql-refresh) que separan cómputo/storage;
+  # "starter"/"standard"/"pro"/"pro plus" quedaron como legacy, válidos
+  # solo para bases YA existentes, nunca para crear una nueva. El
+  # reemplazo directo de menor costo es "basic-256mb" (256MB RAM, 1GB de
+  # storage incluido, ~mismo precio que el starter legacy -- ver
+  # docs/PRODUCTION_DEPLOYMENT.md §4/§8, sin cambio real de costo, solo
+  # de nombre) -- mismos backups diarios automáticos con 7 días de
+  # retención (política de Render, no depende del plan). Esto NO aplica
+  # a planes de Web Service (ai-staffing-os-api abajo sigue en
+  # "starter", que sigue siendo válido ahí) -- la deprecación fue
+  # específica de Postgres.
   - name: ai-staffing-os-db
-    plan: starter
+    plan: basic-256mb
     region: oregon
     postgresMajorVersion: "16"
 
