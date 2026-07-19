@@ -1,0 +1,142 @@
+name: CI
+
+# F12.11: pipeline real de verificación pre-merge -- audita, tipa, lintea,
+# corre la suite completa (unit/integration + e2e) y valida que todas las
+# migraciones aplican limpio desde una base de datos vacía, exactamente
+# igual a como se validó manualmente antes de escribir este archivo (ver
+# docs/F12_PRODUCTION_READINESS_BASELINE.md y docs/F12_FINAL_REPORT.md).
+#
+# Nunca ejecuta un deploy real -- eso queda fuera de este archivo por
+# diseño (ver docs/PRODUCTION_DEPLOYMENT_RUNBOOK.md, siempre manual).
+#
+# Costo real de OpenAI/PDL/Google Places/Hunter en cada corrida: este
+# proyecto prohíbe explícitamente introducir mocks en flujos que deben
+# ser reales (ver CLAUDE.md / instrucciones de F12), así que la suite de
+# apps/api llama a estos proveedores de verdad para las ~15 pruebas que
+# ejercitan integraciones de IA. Sin los 4 secrets de abajo configurados
+# en este repo, esas pruebas puntuales fallan de forma honesta (nunca en
+# silencio) -- no es un bug de este workflow, es el mismo tradeoff que ya
+# existe corriendo la suite en local. Configurarlos es una decisión
+# explícita del dueño del repo (Settings → Secrets and variables →
+# Actions), con el costo real que eso implica en CADA push/PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DATABASE_URL: postgresql://staffing:staffing@localhost:5433/ai_staffing_os
+  NODE_ENV: test
+  AUTH_MODE: dev-bypass
+  PORT: 4000
+  DEV_DEFAULT_USER_EMAIL: admin@titan.dev
+  APP_ORIGIN: http://localhost:5173
+  MARKETING_ORIGIN: http://localhost:5174
+  API_ORIGIN: http://localhost:4000
+  PUBLIC_TENANT_SLUG: titan
+  BUSINESS_LEGAL_NAME: "Data More LLC"
+  BUSINESS_BRAND_NAME: "DreiStaff"
+  # F4.5/F4.6/F4.7/F2: proveedores opcionales -- si el secret no existe
+  # en el repo, esto queda vacío y el sistema se degrada honestamente
+  # (mismo comportamiento que en local sin .env). Ver el comentario de
+  # costo real arriba.
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  PEOPLEDATALABS_API_KEY: ${{ secrets.PEOPLEDATALABS_API_KEY }}
+  GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+  HUNTER_API_KEY: ${{ secrets.HUNTER_API_KEY }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: staffing
+          POSTGRES_PASSWORD: staffing
+          POSTGRES_DB: ai_staffing_os
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U staffing -d ai_staffing_os"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # corepack lee "packageManager" de package.json (pnpm@9.15.9) --
+      # nunca una versión de pnpm distinta a la que usa el equipo en local.
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # F12.11: chequeo real de secretos -- nunca un archivo .env
+      # trackeado, nunca un literal con forma de API key/private key en
+      # el código fuente trackeado. No reemplaza revisión humana, pero
+      # atrapa el caso más común (un secret pegado por error).
+      - name: Secret scan
+        run: |
+          set -e
+          if git ls-files | grep -qx '\.env'; then
+            echo "FATAL: .env is tracked in git" >&2
+            exit 1
+          fi
+          if git grep -nIE '(sk-(proj-)?[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)' -- . ':!pnpm-lock.yaml'; then
+            echo "FATAL: possible secret literal found in tracked source (see matches above)" >&2
+            exit 1
+          fi
+          echo "No tracked .env and no obvious secret literals found."
+
+      - name: Prisma schema validate
+        run: pnpm --filter @ai-staffing-os/db exec prisma validate
+
+      - name: Prisma generate
+        run: pnpm --filter @ai-staffing-os/db run generate
+
+      # F12.11: esto ES la prueba de seguridad de migraciones -- una base
+      # de Postgres recién creada por el service container de arriba,
+      # cero estado previo. Si el historial completo de migraciones no
+      # aplica limpio acá, no aplica limpio en un despliegue real nuevo.
+      - name: Migrate deploy (fresh database)
+        run: pnpm --filter @ai-staffing-os/db exec prisma migrate deploy
+
+      - name: Seed baseline data (tenant-titan)
+        run: pnpm run db:seed
+
+      - name: Typecheck (all workspaces)
+        run: pnpm run typecheck
+
+      - name: Lint (all workspaces)
+        run: pnpm run lint
+
+      - name: Build (web + marketing)
+        run: pnpm run build
+
+      # F12.11: la suite real de apps/api -- ver el comentario de costo
+      # real arriba. NODE_ENV=test ya deshabilita los rate limiters
+      # productivos (ver core/rate-limiters.ts) para que no interfieran
+      # entre archivos de test.
+      - name: API test suite (unit + integration, real DB)
+        run: pnpm --filter @ai-staffing-os/api run test
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @ai-staffing-os/web exec playwright install --with-deps chromium
+
+      # F12.11: e2e real contra `pnpm dev` (api + web), levantado por el
+      # propio webServer de playwright.config.ts sobre la MISMA base ya
+      # migrada y sembrada arriba -- mismo comportamiento verificado a
+      # mano antes de escribir este archivo.
+      - name: E2E test suite (Playwright, real dev servers)
+        run: pnpm --filter @ai-staffing-os/web run test:e2e

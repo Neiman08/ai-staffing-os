@@ -15,9 +15,9 @@
 # "production" recién quedará habilitado cuando AUTH_MODE=clerk esté
 # realmente activo. Ver docs/F4_9_PRODUCTION_AUTH_PLAN.md.
 #
-# apps/web y apps/marketing (frontends estáticos) no están en este
-# blueprint todavía — este bloque cubre solo el API, tal como pidió el
-# PO ("preparación y despliegue del API en Render").
+# F12.11: apps/web ya está en este blueprint (abajo) como sitio
+# estático. apps/marketing sigue pendiente -- mismo patrón cuando el PO
+# decida agregarlo, no hay nada bloqueante distinto.
 
 databases:
   - name: ai-staffing-os-db
@@ -103,3 +103,37 @@ services:
       # Clerk — deliberadamente SIN entradas acá. Diferido (decisión del
       # PO, 2026-07-12); AUTH_MODE=dev-bypass no las necesita, y
       # agregarlas ahora sería revivir un trabajo explícitamente pausado.
+
+  # F12.11: apps/web como sitio estático separado (mismo patrón que
+  # cualquier deploy real de un SPA de Vite en Render) -- runtime:
+  # static nunca ejecuta un proceso Node en producción, solo sirve los
+  # archivos ya compilados en build. routes reescribe cualquier path a
+  # index.html: es un SPA con client-side routing (react-router), sin
+  # esto cualquier URL que no sea "/" devolvería 404 real del servidor
+  # estático en un refresh o un link directo (ver F12.10, NotFound.tsx —
+  # eso resuelve el 404 DENTRO de la app, esto asegura que la app llegue
+  # a cargar primero).
+  - type: web
+    name: ai-staffing-os-web
+    runtime: static
+    region: oregon
+    branch: main
+    buildCommand: >-
+      corepack enable &&
+      pnpm install --frozen-lockfile &&
+      pnpm --filter @ai-staffing-os/web run build
+    staticPublishPath: apps/web/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # URL absoluta del servicio ai-staffing-os-api de arriba una vez
+      # desplegado (ej. https://ai-staffing-os-api.onrender.com/api/v1)
+      # — completar en el dashboard, nunca hardcodeada acá (mismo
+      # criterio que APP_ORIGIN/API_ORIGIN del API).
+      - key: VITE_API_URL
+        sync: false
+      # Mismo estado diferido que CLERK_* del API — ver arriba.
+      - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
