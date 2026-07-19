@@ -4,6 +4,9 @@ import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { createApp } from "../../app";
 import { env } from "../../core/env";
+import { missionsRouter } from "./router";
+import { missionLaunchLimiter } from "../../core/rate-limiters";
+import { routeHasMiddleware } from "../../test-helpers/route-wiring";
 
 let server: Server;
 let baseUrl: string;
@@ -123,17 +126,14 @@ test("POST /missions as compliance@titan.dev returns 403 (no missions.create)", 
   assert.equal(res.status, 403);
 });
 
-// F12.4: prueba de "wiring" real -- confirma que missionLaunchLimiter
-// está montado en la ruta de producción (nunca dispara una misión real,
-// el 403 por permiso ocurre DESPUÉS del limiter en la cadena de
-// middleware, así que el header ya está puesto).
-test("F12.4: POST /missions expone RateLimit-Limit real (missionLaunchLimiter montado)", async () => {
-  const res = await fetch(`${baseUrl}/api/v1/missions`, {
-    method: "POST",
-    headers: COMPLIANCE_HEADERS,
-    body: JSON.stringify({ instruction: "Busca empresas de construcción." }),
-  });
-  assert.equal(res.headers.get("ratelimit-limit"), "20");
+// F12.4/F12.11: prueba de "wiring" real -- confirma que missionLaunchLimiter
+// está montado en la ruta de producción. Reescrita en F12.11 para
+// inspeccionar el stack real de Express en vez de disparar un request:
+// el limiter está deshabilitado bajo NODE_ENV=test (ver rate-limiters.ts)
+// para no compartir cupo entre archivos de test ajenos entre sí, así que
+// un request real ya no expondría el header de todos modos.
+test("F12.4: POST /missions tiene missionLaunchLimiter montado (real, mismo router de producción)", () => {
+  assert.ok(routeHasMiddleware(missionsRouter, "post", "/missions", missionLaunchLimiter));
 });
 
 test("launchMission interprets a real instruction, runs the fixed pipeline, and always ends in an ApprovalRequest (real OpenAI calls)", async () => {

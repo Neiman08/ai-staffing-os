@@ -4,6 +4,9 @@ import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { createApp } from "../../app";
+import { payrollRouter } from "./router";
+import { exportLimiter } from "../../core/rate-limiters";
+import { routeHasMiddleware } from "../../test-helpers/route-wiring";
 
 let server: Server;
 let baseUrl: string;
@@ -503,8 +506,6 @@ test("full lifecycle: DRAFT -> PENDING_APPROVAL -> APPROVED -> PAID -> EXPORTED,
   });
   assert.equal(exportRes.status, 200);
   assert.equal(exportRes.headers.get("content-type")?.includes("text/csv"), true);
-  // F12.4: exportLimiter montado en esta ruta real.
-  assert.equal(exportRes.headers.get("ratelimit-limit"), "30");
   const csv = await exportRes.text();
   assert.match(csv, /"Worker","Job Order"/);
 
@@ -966,4 +967,11 @@ test("GET /payroll/readiness for an unknown workerId returns 404", async () => {
     { headers: PAYROLL_HEADERS },
   );
   assert.equal(res.status, 404);
+});
+
+// F12.4/F12.11: reescrita en F12.11 para inspeccionar el stack real de
+// Express en vez de disparar un request (el limiter se deshabilita bajo
+// NODE_ENV=test, ver rate-limiters.ts).
+test("F12.4: POST /payroll/runs/:id/export tiene exportLimiter montado (real, mismo router de producción)", () => {
+  assert.ok(routeHasMiddleware(payrollRouter, "post", "/payroll/runs/:id/export", exportLimiter));
 });

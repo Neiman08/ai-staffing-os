@@ -77,8 +77,29 @@ test("GET /approvals as compliance@titan.dev returns 403 (no approvals.decide)",
 });
 
 test("budget guard: an exhausted monthly budget fails the task before calling OpenAI", async () => {
+  // F12.11: hallazgo real de la verificación de F12.11 -- este test
+  // dependía de que YA existiera gasto real acumulado este mes para
+  // tenant-titan (getMonthlyBudgetStatus suma AgentTask.costUsd desde el
+  // 1ro del mes) para superar un budget casi nulo de $0.0001. Eso es
+  // cierto por accidente contra la base de dev persistente (meses de uso
+  // real), pero falso contra una base aislada desde cero (F12.12) -- ahí
+  // el gasto acumulado real es $0 y el guard nunca se dispara. Se agrega
+  // un AgentTask sintético con costo real para garantizar el estado
+  // "presupuesto agotado" sin depender de historia ambiental.
+  const agentInstance = await prisma.agentInstance.findFirstOrThrow({ where: { tenantId: "tenant-titan" } });
+  const budgetSeedTask = await prisma.agentTask.create({
+    data: {
+      tenantId: "tenant-titan",
+      agentInstanceId: agentInstance.id,
+      type: "budget_guard_test_seed",
+      input: {},
+      status: "DONE",
+      triggeredBy: "USER",
+      costUsd: 999,
+    },
+  });
   // try/finally: un assert fallido acá nunca debe dejar el presupuesto
-  // atascado en $0.0001 para el resto de la suite.
+  // atascado en $0.0001 ni el AgentTask sintético para el resto de la suite.
   await prisma.$executeRaw`UPDATE "Tenant" SET settings = jsonb_set(settings, '{aiMonthlyBudgetUsd}', '0.0001') WHERE id = 'tenant-titan'`;
   try {
     const task = await invokeSalesTask({ type: "score_company", input: { companyId: "company-01" } });
@@ -89,6 +110,7 @@ test("budget guard: an exhausted monthly budget fails the task before calling Op
     assert.equal(settled.tokensUsed, null, "a budget-rejected task must never have called OpenAI");
   } finally {
     await prisma.$executeRaw`UPDATE "Tenant" SET settings = jsonb_set(settings, '{aiMonthlyBudgetUsd}', '50') WHERE id = 'tenant-titan'`;
+    await prisma.agentTask.delete({ where: { id: budgetSeedTask.id } });
   }
 });
 

@@ -645,6 +645,14 @@ test("contact intelligence: un contacto ya existente (mismo nombre+empresa) se d
       industryName: "Manufacturing",
       rolePlan: { companyId: report.createdCompanyIds[0]!, targetRoles: [{ role: "HR Manager", priority: 1, rationale: "test", source: "intent" }], excludedRoles: [], confidence: 0.9, taxonomySource: "test", hiringSignalSource: null, planVersion: 1 },
       contactProvider,
+      // F12.11: hallazgo real -- sin esto, el gate de apiKey caía en
+      // env.PEOPLEDATALABS_API_KEY (ambiental). Con una key real
+      // configurada localmente el test pasaba por accidente; sin ninguna
+      // key configurada (CI real, o cualquier entorno sin ese proveedor
+      // pago) devolvía emptyReport() antes de llegar siquiera al
+      // contactProvider fake, y duplicatesSkipped daba 0 en vez de 1.
+      // Mismo string que ya usa runWithHiring() más arriba en este archivo.
+      peopleDataLabsApiKey: "fake-pdl-key-for-tests",
     });
   });
   assert.equal(contactEnrichment.duplicatesSkipped, 1);

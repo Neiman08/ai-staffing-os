@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { createApp } from "../../app";
+import { authRouter } from "./router";
+import { userInviteLimiter } from "../../core/rate-limiters";
+import { routeHasMiddleware } from "../../test-helpers/route-wiring";
 
 let server: Server;
 let baseUrl: string;
@@ -40,16 +43,12 @@ test("POST /users/invite sin permiso (Sales) → 403", async () => {
   assert.equal(res.status, 403);
 });
 
-// F12.4: prueba de "wiring" -- userInviteLimiter corre antes que
-// requirePermission en la cadena real, así que el header ya está
-// puesto aunque este request específico termine en 403.
-test("F12.4: POST /users/invite expone RateLimit-Limit real (userInviteLimiter montado)", async () => {
-  const res = await fetch(`${baseUrl}/api/v1/auth/users/invite`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-dev-user": "sales@titan.dev" },
-    body: JSON.stringify({ email: "nope@example.com", roleId: "irrelevant" }),
-  });
-  assert.equal(res.headers.get("ratelimit-limit"), "30");
+// F12.4/F12.11: prueba de "wiring" -- userInviteLimiter está realmente
+// montado en la ruta de producción. Reescrita en F12.11 para inspeccionar
+// el stack real de Express en vez de disparar un request (el limiter se
+// deshabilita bajo NODE_ENV=test, ver rate-limiters.ts).
+test("F12.4: POST /users/invite tiene userInviteLimiter montado (real, mismo router de producción)", () => {
+  assert.ok(routeHasMiddleware(authRouter, "post", "/users/invite", userInviteLimiter));
 });
 
 test("POST /users/invite: roleId inválido/de otro tenant → 400, no crea nada", async () => {

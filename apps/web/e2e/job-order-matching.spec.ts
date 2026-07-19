@@ -52,7 +52,16 @@ test.describe("Matching con IA en Job Order Detail", () => {
     await expect(page.getByText(/elegible\(s\) · \d+ no elegible\(s\)/)).toBeVisible();
     await expect(page.getByText(/^v1 ·/)).toBeVisible();
 
-    expect(errors, `console errors: ${errors.join("\n")}`).toHaveLength(0);
+    // F12.11: hallazgo real al correr esta suite contra una base
+    // aislada desde cero (ningún matching corrido todavía para este Job
+    // Order) -- el primer 404 esperado de GET .../matching (antes de
+    // calcularlo la primera vez, mismo contrato documentado en
+    // talent/service.ts) es un log de red de Chromium, no un error real
+    // de JS/consola. Mismo patrón ya establecido en
+    // recruiting-mission.spec.ts y worker-operations.spec.ts -- cualquier
+    // OTRO error sigue fallando la prueba.
+    const unexpectedErrors = errors.filter((e) => !e.includes("404"));
+    expect(unexpectedErrors, `console errors: ${unexpectedErrors.join("\n")}`).toHaveLength(0);
   });
 
   test("Deterministic-only: llmStatus queda NOT_RUN y no se llama a ningún proveedor", async ({ page }) => {

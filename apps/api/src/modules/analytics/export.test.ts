@@ -6,6 +6,9 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { createApp } from "../../app";
+import { analyticsRouter } from "./router";
+import { exportLimiter } from "../../core/rate-limiters";
+import { routeHasMiddleware } from "../../test-helpers/route-wiring";
 
 let server: Server;
 let baseUrl: string;
@@ -81,9 +84,11 @@ test("financial export: includes marginTrend as a separate Date,Hours,Margin sec
   }
 });
 
-test("F12.4: the three export endpoints expose a real RateLimit-Limit header (exportLimiter mounted)", async () => {
+// F12.4/F12.11: reescrita en F12.11 para inspeccionar el stack real de
+// Express en vez de disparar requests (el limiter se deshabilita bajo
+// NODE_ENV=test, ver rate-limiters.ts).
+test("F12.4: the three export endpoints have exportLimiter mounted (real, same production router)", () => {
   for (const path of ["/analytics/recruiting/export", "/analytics/commercial/export", "/analytics/financial/export"]) {
-    const res = await fetch(`${baseUrl}/api/v1${path}`, { headers: { "x-dev-user": "recruiter@titan.dev" } });
-    assert.equal(res.headers.get("ratelimit-limit"), "30", `${path} should have exportLimiter mounted`);
+    assert.ok(routeHasMiddleware(analyticsRouter, "get", path, exportLimiter), `${path} should have exportLimiter mounted`);
   }
 });
