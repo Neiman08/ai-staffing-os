@@ -38,6 +38,23 @@
 # ai-staffing-os-api (Postgres gestionado y el proceso Node sí corren
 # en una región real) -- se quitó únicamente de los dos servicios
 # estáticos.
+#
+# F14 (fix de build real, 2026-07-19, tercer intento): con el Blueprint
+# ya importado, el build de los 3 servicios de Node/pnpm (api, web,
+# marketing) falló con "EROFS: read-only file system, unlink
+# '/usr/bin/pnpm'". Causa real: "corepack enable &&" al principio de
+# cada buildCommand intentaba reinstalar/sobreescribir el binario de
+# pnpm que la imagen de build de Render ya deja instalado (de solo
+# lectura) según "packageManager" de package.json -- Render activa
+# corepack y resuelve esa versión exacta de pnpm ANTES de correr
+# buildCommand, así que volver a correr "corepack enable" ahí es
+# redundante y en la imagen actual de Render directamente rompe el
+# build. Quitado de los 3 buildCommand -- ahora empiezan directo con
+# "pnpm install --frozen-lockfile". También se fijó
+# "engines": { "node": "22.x" } en el package.json raíz (antes ">=20",
+# que Render venía resolviendo a 26.5.0 -- una major mucho más nueva
+# que la que este proyecto probó) y se confirmó que "packageManager"
+# (pnpm@9.15.9) ya era una versión explícita, no un rango.
 
 databases:
   # F14 (fix de importación real, 2026-07-19): Render rechazó el segundo
@@ -67,14 +84,19 @@ services:
     plan: starter
     region: oregon
     branch: main
-    # corepack activa la versión de pnpm fijada en package.json
-    # ("packageManager"). --frozen-lockfile: nunca resuelve versiones
-    # nuevas en el deploy, usa exactamente el lockfile commiteado.
-    # prisma generate: el cliente de Prisma se genera en build, no en
-    # git. migrate:deploy: aplica migraciones pendientes de forma no
-    # interactiva (nunca "migrate dev", eso pediría confirmación).
+    # F14 (fix de build real, 2026-07-19): sin "corepack enable &&" al
+    # principio -- la imagen de build de Render ya activa corepack y
+    # resuelve pnpm a la versión fijada en "packageManager"
+    # (package.json raíz) ANTES de correr buildCommand; volver a correr
+    # "corepack enable" acá pisaba un pnpm ya instalado en una ruta de
+    # solo-lectura del sistema (`/usr/bin/pnpm`), fallando con "EROFS:
+    # read-only file system, unlink '/usr/bin/pnpm'". --frozen-lockfile:
+    # nunca resuelve versiones nuevas en el deploy, usa exactamente el
+    # lockfile commiteado. prisma generate: el cliente de Prisma se
+    # genera en build, no en git. migrate:deploy: aplica migraciones
+    # pendientes de forma no interactiva (nunca "migrate dev", eso
+    # pediría confirmación).
     buildCommand: >-
-      corepack enable &&
       pnpm install --frozen-lockfile &&
       pnpm --filter @ai-staffing-os/db run generate &&
       pnpm --filter @ai-staffing-os/db run migrate:deploy
@@ -153,7 +175,6 @@ services:
     runtime: static
     branch: main
     buildCommand: >-
-      corepack enable &&
       pnpm install --frozen-lockfile &&
       pnpm --filter @ai-staffing-os/web run build
     staticPublishPath: apps/web/dist
@@ -183,7 +204,6 @@ services:
     runtime: static
     branch: main
     buildCommand: >-
-      corepack enable &&
       pnpm install --frozen-lockfile &&
       pnpm --filter @ai-staffing-os/marketing run build
     staticPublishPath: apps/marketing/dist
