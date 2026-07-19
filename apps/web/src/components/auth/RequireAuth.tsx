@@ -9,6 +9,7 @@ import { Unauthorized } from "@/pages/auth/Unauthorized";
 import { Forbidden } from "@/pages/auth/Forbidden";
 import { AccountDisabled } from "@/pages/auth/AccountDisabled";
 import { InvitationPending } from "@/pages/auth/InvitationPending";
+import { ConnectionError } from "@/pages/auth/ConnectionError";
 import { AuthTokenBridge } from "./AuthTokenBridge";
 
 /**
@@ -18,21 +19,39 @@ import { AuthTokenBridge } from "./AuthTokenBridge";
  * isActive — antes de renderizar el portal. La diferencia entre
  * variantes es solo si además hay una sesión de Clerk que verificar
  * primero.
+ *
+ * F14 (hallazgo real, primer deploy a Render): "error instanceof
+ * ApiError" puede ser falso por dos motivos MUY distintos, que antes
+ * caían los dos en el mismo "Session required" genérico -- (1) fetch()
+ * mismo tiró (red/CORS bloqueado antes de cualquier respuesta), o (2)
+ * hubo una respuesta 200 pero no era el JSON de error esperado (ej.
+ * VITE_API_URL sin configurar en el build del frontend: un fetch
+ * relativo a "/api/v1/auth/me" le pega al propio sitio estático, que
+ * por la regla de rewrite de la SPA devuelve el index.html -- res.json()
+ * revienta con un SyntaxError). Ninguno de los dos es "no estás
+ * autorizado", así que ahora van a ConnectionError, nunca a Unauthorized/
+ * "sign in" (que además no tiene sentido mostrar en dev-bypass, donde
+ * no existe ningún flujo de sign-in). Un ApiError con code=UNAUTHORIZED
+ * (dev-bypass real, ej. "no active user found for email ...") ahora
+ * también pasa su `message` real a Unauthorized -- diagnóstico
+ * accionable en vez de una pantalla ambigua.
  */
 function renderByErrorCode(error: unknown): ReactNode {
-  const code = error instanceof ApiError ? error.code : undefined;
-  switch (code) {
+  if (!(error instanceof ApiError)) {
+    return <ConnectionError />;
+  }
+  switch (error.code) {
     case "USER_DISABLED":
       return <AccountDisabled />;
     case "USER_NOT_PROVISIONED":
       return <InvitationPending />;
     case "TENANT_INACTIVE":
-      return <Unauthorized />;
+      return <Unauthorized message={CLERK_CONFIGURED ? undefined : error.message} />;
     case "FORBIDDEN":
     case "MFA_REQUIRED":
-      return <Forbidden code={code} />;
+      return <Forbidden code={error.code} />;
     default:
-      return <Unauthorized />;
+      return <Unauthorized message={CLERK_CONFIGURED ? undefined : error.message} />;
   }
 }
 
