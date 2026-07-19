@@ -63,6 +63,21 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
     return;
   }
 
+  // F12.12: hallazgo real de la validación final -- express.json({limit})
+  // (F12.4) rechaza un body de más de 100kb lanzando un error de
+  // body-parser con status 413 y type "entity.too.large", pero como no
+  // es instancia de AppError caía en el catch-all genérico de abajo y el
+  // cliente recibía un 500 "Something went wrong" en vez del 413 real.
+  // Un 500 sugiere un bug del servidor (y podría disparar alertas de
+  // guardia); un 413 dice exactamente lo que pasó: el cliente mandó un
+  // body demasiado grande.
+  if (typeof err === "object" && err !== null && "type" in err && (err as { type?: unknown }).type === "entity.too.large") {
+    res.status(413).json({
+      error: { code: "PAYLOAD_TOO_LARGE", message: "Request body is too large." },
+    });
+    return;
+  }
+
   // F12.7: logging estructurado con requestId real (X-Request-Id, ya en
   // la respuesta vía requestLoggingMiddleware) para poder correlacionar
   // un error de servidor con su request exacto sin cambiar la forma del
