@@ -24,6 +24,6 @@ apps/web/playwright-report/
 
 # F12.6: dumps reales de backup -- nunca se commitean (contienen datos
 # reales de negocio), ver scripts/db-backup.sh y
-# docs/BACKUP_AND_RECOVERY_RUNBOOK.md.
+# docs/BACKUP_AND_RESTORE.md.
 backups/
 *.dump

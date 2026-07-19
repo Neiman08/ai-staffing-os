@@ -1,6 +1,6 @@
-# Backup and Recovery Runbook
+# Backup and Restore
 
-F12.6. Estrategia real de backups para PostgreSQL, verificada con un ciclo real de backup → restore → comparación de conteos → arranque del API contra la base restaurada, ejecutado en esta misma fase (ver §7).
+F12.6 (renombrado en F14 de `BACKUP_AND_RECOVERY_RUNBOOK.md`, contenido sin cambios salvo esta nota — la estrategia es solo de base de datos, no depende de qué servicios de Render existan). Estrategia real de backups para PostgreSQL, verificada con un ciclo real de backup → restore → comparación de conteos → arranque del API contra la base restaurada, ejecutado dos veces (F12.6 y F12.12, ver §7). Para el procedimiento de revertir un *deploy* de código (distinto de restaurar datos), ver `docs/ROLLBACK.md`.
 
 ## 1. Estrategia general
 

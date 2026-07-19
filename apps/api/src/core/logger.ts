@@ -9,7 +9,7 @@
  *
  * Nunca loguea secretos: los campos vienen siempre de datos ya
  * conocidos como seguros (requestId, tenantId, userId, duración, status
- * code, nombre de módulo) -- ver ENVIRONMENT_VARIABLES.md "Nunca hacer"
+ * code, nombre de módulo) -- ver docs/RENDER_ENVIRONMENT_VARIABLES.md "Nunca hacer"
  * para la regla equivalente de variables de entorno.
  */
 

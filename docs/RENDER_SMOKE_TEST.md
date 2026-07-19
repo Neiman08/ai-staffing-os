@@ -1,6 +1,6 @@
-# Production Smoke Test Checklist
+# Render Smoke Test Checklist
 
-F12.11. Checklist manual para correr contra un entorno real (Render u otro) después de cada deploy. No es un reemplazo de la suite automatizada (`.github/workflows/ci.yml`) — es la verificación de que el entorno desplegado específico, con sus credenciales y URLs reales, funciona de punta a punta. Ninguno de estos pasos fue ejecutado contra Render real durante F12 (no hay un entorno de Render real conectado todavía — ver `docs/PRODUCTION_DEPLOYMENT_RUNBOOK.md` §2).
+F12.11 (actualizado en F14, 2026-07-19: cobertura de `apps/marketing`). Checklist manual para correr contra un entorno real (Render u otro) después de cada deploy. No es un reemplazo de la suite automatizada (`.github/workflows/ci.yml`) — es la verificación de que el entorno desplegado específico, con sus credenciales y URLs reales, funciona de punta a punta. Ninguno de estos pasos fue ejecutado contra Render real (no hay un entorno de Render real conectado todavía — ver `docs/RENDER_DEPLOYMENT.md` §4).
 
 Marcar cada ítem con el resultado real observado, nunca asumir.
 
@@ -13,6 +13,8 @@ Marcar cada ítem con el resultado real observado, nunca asumir.
 - [ ] Login real (o dev-bypass, según el entorno) funciona y llega al Dashboard.
 - [ ] La consola del navegador no muestra errores no esperados en el Dashboard (ver F12.10, `NotFound.tsx`/`ErrorBoundary.tsx` — un error real ahora se ve, nunca una pantalla muerta silenciosa).
 - [ ] Los headers de seguridad están presentes (`curl -I` contra la API real): `Content-Security-Policy` ausente pero `X-Content-Type-Options`, `X-Frame-Options`/equivalente de helmet presentes (ver F12.4).
+- [ ] La landing (`ai-staffing-os-marketing`) carga en el navegador sin pantalla en blanco, y `robots.txt`/`sitemap.xml` responden con el dominio real (no `dreistaff.com` por default si el dominio real es otro — confirma que `BUSINESS_DOMAIN` se completó antes del build).
+- [ ] Al menos un formulario/CTA de la landing que llama a `/api/v1/public/*` (ej. "Request Talent") completa exitosamente contra el API real — confirma que `VITE_API_URL` de `ai-staffing-os-marketing` apunta al servicio correcto (F14: antes de esto, un path relativo sin esta variable habría fallado silenciosamente contra el propio dominio estático).
 
 ## 2. Autenticación y sesión
 
@@ -55,7 +57,7 @@ Marcar cada ítem con el resultado real observado, nunca asumir.
 
 - [ ] Confirmar en el dashboard de Render que el plan de la base de datos real incluye backups automáticos (plan `starter` o superior).
 - [ ] `./scripts/db-backup.sh "postgresql://<URL real de producción>"` corre exitosamente al menos una vez desde que el entorno existe (backup manual de referencia).
-- [ ] El procedimiento de restore (`docs/BACKUP_AND_RECOVERY_RUNBOOK.md` §7) fue probado contra una copia real de producción en una base aislada, no solo contra datos de desarrollo — repetir esa prueba específica contra un dump real de producción antes de confiar en ella para un incidente real.
+- [ ] El procedimiento de restore (`docs/BACKUP_AND_RESTORE.md` §7) fue probado contra una copia real de producción en una base aislada, no solo contra datos de desarrollo — repetir esa prueba específica contra un dump real de producción antes de confiar en ella para un incidente real.
 
 ## 9. Observabilidad
 
@@ -72,5 +74,5 @@ Marcar cada ítem con el resultado real observado, nunca asumir.
 
 1. No ocultar el fallo — documentarlo (qué ítem, qué se observó, captura si aplica).
 2. Si es un problema de config (env var faltante/incorrecta en el dashboard de Render): corregir en el dashboard, no en el código, si el código ya era correcto.
-3. Si es un bug real de código: seguir el procedimiento normal (rollback si es urgente, ver `docs/PRODUCTION_DEPLOYMENT_RUNBOOK.md` §6; fix + test de regresión + nuevo deploy si no es urgente).
+3. Si es un bug real de código: seguir el procedimiento normal (rollback si es urgente, ver `docs/ROLLBACK.md`; fix + test de regresión + nuevo deploy si no es urgente).
 4. Repetir el checklist completo después de cualquier corrección antes de considerar el deploy sano.

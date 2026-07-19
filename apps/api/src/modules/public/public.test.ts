@@ -64,7 +64,15 @@ test("GET /public/stats: sin auth, companiesInNetwork nunca cuenta empresas demo
   const res = await fetch(`${baseUrl}/api/v1/public/stats`);
   assert.equal(res.status, 200);
   const body = (await res.json()) as { companiesInNetwork: number };
-  const realCompanyCount = await prisma.company.count({ where: { origin: { not: "DEMO_SEED" } } });
+  // F14: el endpoint real (core/public-tenant.ts) siempre escopa por
+  // PUBLIC_TENANT_SLUG -- contar sin ese mismo filtro de tenant hacía
+  // que este assert dependiera de que NINGÚN otro tenant de la base
+  // compartida de desarrollo tuviera Company reales (frágil: cualquier
+  // otro test, o una validación manual como la de F14, agrega
+  // companies a OTRO tenant y este conteo global diverge del que el
+  // endpoint realmente devuelve).
+  const publicTenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: process.env.PUBLIC_TENANT_SLUG ?? "titan" } });
+  const realCompanyCount = await prisma.company.count({ where: { tenantId: publicTenant.id, origin: { not: "DEMO_SEED" } } });
   assert.equal(body.companiesInNetwork, realCompanyCount);
 });
 

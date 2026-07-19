@@ -1,6 +1,8 @@
 # Variables de entorno — referencia completa
 
-F12.2. Fuente de verdad única para qué variable existe, quién la valida, y qué vale en cada entorno. La validación real vive en `apps/api/src/core/env.ts` (Zod, `envSchema`) — este documento es la explicación legible para humanos de esa misma fuente, nunca una segunda definición que pueda desincronizarse (cualquier variable nueva debe agregarse primero en `env.ts`, después acá).
+F12.2 (renombrado en F14, ver §nota abajo). Fuente de verdad única para qué variable existe, quién la valida, y qué vale en cada entorno. La validación real vive en `apps/api/src/core/env.ts` (Zod, `envSchema`) — este documento es la explicación legible para humanos de esa misma fuente, nunca una segunda definición que pueda desincronizarse (cualquier variable nueva debe agregarse primero en `env.ts`, después acá).
+
+**Nota F14 (2026-07-19)**: este archivo se llamaba `ENVIRONMENT_VARIABLES.md` — renombrado a `RENDER_ENVIRONMENT_VARIABLES.md` al agregar `apps/marketing` al blueprint de Render, sin cambiar el contenido salvo la sección "Frontend" (nueva subsección de marketing) y esta nota. `docs/F12_FINAL_REPORT.md` (histórico) todavía referencia el nombre viejo — no se edita retroactivamente un informe de cierre de fase.
 
 ## Cómo funciona la validación
 
@@ -90,6 +92,13 @@ Ninguna variable se imprime nunca por consola (ni siquiera en el error de arranq
 |---|---|---|---|
 | `VITE_API_URL` | No | `lib/api.ts`, `lib/download.ts` | Vacío = ruta relativa `/api/v1` (dev local vía proxy de Vite). En Render con servicios separados: URL absoluta del API. |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Solo si `AUTH_MODE=clerk` | `lib/auth-config.ts` | **Nunca la clave secreta** — Vite solo empaqueta variables con prefijo `VITE_` en el bundle del navegador; `CLERK_SECRET_KEY` (sin ese prefijo) nunca puede llegar al frontend por diseño de Vite, verificado: ningún archivo bajo `apps/web/src` referencia `CLERK_SECRET_KEY`. |
+
+### Landing pública (Vite — `apps/marketing`)
+
+| Variable | Requerida | Dónde se usa | Notas |
+|---|---|---|---|
+| `VITE_API_URL` | No | `src/lib/api.ts` (`PUBLIC_API_BASE`) | F14: agregado — antes el fetch usaba un path relativo fijo (`/api/v1/public`), que solo funcionaba en dev local por el proxy de Vite (`vite.config.ts`). Un sitio estático de Render no tiene ningún proceso que reenvíe `/api/*`, así que sin esta variable en producción el fetch pegaría contra el propio dominio estático del marketing (404), nunca contra `ai-staffing-os-api` real. Mismo patrón que `apps/web`. |
+| `BUSINESS_DOMAIN` | No (default `dreistaff.com`, hardcodeado en el script) | `scripts/generate-seo-files.mjs` (build-time, genera `robots.txt`/`sitemap.xml`) | **Sin prefijo `VITE_` a propósito** — no se empaqueta en el bundle del navegador, se lee directo de `process.env` durante el build (el script corre con Node antes de `vite build`, ver el script `"build"` de `apps/marketing/package.json`). Render sí expone `envVars` del servicio durante el build de un sitio estático (no solo en runtime), así que esto funciona igual que en el API. |
 
 ## Nunca hacer
 

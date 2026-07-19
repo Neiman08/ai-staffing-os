@@ -17,7 +17,9 @@ test("findUnique on a tenant-scoped model without context throws", async () => {
 test("with context, hybrid global models (Industry) are visible regardless of tenant", async () => {
   await runWithTenancyContext({ tenantId: "tenant-titan", userId: "irrelevant", permissions: [] }, async () => {
     const industries = await scopedDb.industry.findMany();
-    assert.equal(industries.length, 4);
+    // F13 agregó Hospitality como 5ta Industry global real (antes 4) --
+    // ver la nota completa en el test de abajo con el mismo conteo.
+    assert.equal(industries.length, 5);
   });
 });
 
@@ -36,7 +38,11 @@ test("an unrelated tenant still sees hybrid global rows (Industry), but no tenan
     { tenantId: "tenant-does-not-exist", userId: "irrelevant", permissions: [] },
     async () => {
       const industries = await scopedDb.industry.findMany();
-      assert.equal(industries.length, 4);
+      // F13 agregó Hospitality como 5ta Industry global real (antes 4:
+      // Construction/Warehouse-Logistics/Manufacturing/General Labor) --
+      // este conteo quedó desactualizado en ese momento, nunca ejercitado
+      // hasta correr la suite completa en F14.
+      assert.equal(industries.length, 5);
       assert.ok(industries.every((i) => i.isGlobal));
     },
   );

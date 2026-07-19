@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import { clerkMiddleware } from "@clerk/express";
 import { prisma } from "@ai-staffing-os/db";
 import { env } from "./core/env";
@@ -70,6 +71,17 @@ export function createApp() {
       crossOriginResourcePolicy: { policy: "cross-origin" },
     }),
   );
+
+  // F14 (preparación de despliegue, 2026-07-19): gzip/deflate real de
+  // cada respuesta -- a diferencia de apps/web/apps/marketing (sitios
+  // estáticos, Render ya comprime automáticamente su CDN), este es un
+  // proceso Node/Express corriendo el propio HTTP server, así que sin
+  // esto NINGUNA respuesta de la API sale comprimida. Respuestas reales
+  // de este proyecto que se benefician (analytics, listados grandes de
+  // Company/Candidate, reportes de misión) son JSON, altamente
+  // compresible. Filtro default de la librería (respeta
+  // Content-Type/Accept-Encoding, nunca comprime algo ya comprimido).
+  app.use(compression());
 
   // F4.9: reemplaza el cors() abierto de F0-F4.8 — allowlist explícito
   // armado desde env (nunca hardcodea dominios acá, ver core/env.ts

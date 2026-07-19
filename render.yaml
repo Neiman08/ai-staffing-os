@@ -15,9 +15,17 @@
 # "production" recién quedará habilitado cuando AUTH_MODE=clerk esté
 # realmente activo. Ver docs/F4_9_PRODUCTION_AUTH_PLAN.md.
 #
-# F12.11: apps/web ya está en este blueprint (abajo) como sitio
-# estático. apps/marketing sigue pendiente -- mismo patrón cuando el PO
-# decida agregarlo, no hay nada bloqueante distinto.
+# F14 (preparación de despliegue, 2026-07-19): apps/marketing agregado
+# como cuarto servicio (mismo patrón que apps/web) -- ver
+# docs/RENDER_DEPLOYMENT.md para el orden de creación recomendado
+# (db -> api -> web -> marketing) y docs/PRODUCTION_DEPLOYMENT.md para
+# la vista general. 4 recursos reales en este blueprint hoy:
+# ai-staffing-os-db, ai-staffing-os-api, ai-staffing-os-web,
+# ai-staffing-os-marketing. Ningún worker: los 3 schedulers
+# (prospecting/compliance/billing) corren dentro del mismo proceso de
+# ai-staffing-os-api (ver apps/api/src/index.ts) -- no existe un
+# proceso/servicio de worker separado en este repo, así que no se
+# inventa uno acá.
 
 databases:
   - name: ai-staffing-os-db
@@ -136,4 +144,40 @@ services:
         sync: false
       # Mismo estado diferido que CLERK_* del API — ver arriba.
       - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
+
+  # F14: apps/marketing como sitio estático separado (mismo patrón que
+  # ai-staffing-os-web arriba) -- landing pública (dreistaff.com), sin
+  # tenancyMiddleware, habla únicamente con /api/v1/public/* del API.
+  # buildCommand corre "generate-seo-files.mjs" (robots.txt/sitemap.xml,
+  # lee BUSINESS_DOMAIN) automáticamente vía el script "build" de
+  # apps/marketing/package.json antes de tsc -b/vite build.
+  - type: web
+    name: ai-staffing-os-marketing
+    runtime: static
+    region: oregon
+    branch: main
+    buildCommand: >-
+      corepack enable &&
+      pnpm install --frozen-lockfile &&
+      pnpm --filter @ai-staffing-os/marketing run build
+    staticPublishPath: apps/marketing/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # F14: apps/marketing/src/lib/api.ts ahora lee esto en vez de
+      # asumir un path relativo -- necesario porque, a diferencia de dev
+      # local (proxy de Vite), un sitio estático de Render no tiene
+      # ningún proceso que pueda reenviar /api/* al servicio real de
+      # ai-staffing-os-api. Completar en el dashboard con la URL
+      # absoluta real del API (ej. https://ai-staffing-os-api.onrender.com,
+      # SIN el sufijo /api/v1/public — eso ya lo agrega el código).
+      - key: VITE_API_URL
+        sync: false
+      # F14: leída en build-time por scripts/generate-seo-files.mjs
+      # (robots.txt/sitemap.xml) — mismo dominio real que BUSINESS_DOMAIN
+      # del servicio ai-staffing-os-api de arriba, nunca hardcodeado acá.
+      - key: BUSINESS_DOMAIN
         sync: false

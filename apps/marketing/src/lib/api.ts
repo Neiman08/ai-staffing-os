@@ -2,7 +2,16 @@
 // las rutas internas del CRM (esas exigen tenancyMiddleware/RBAC, ni
 // siquiera responderían sin sesión). Desacoplado a propósito, ver
 // docs/F4_8_PUBLIC_WEBSITE_PLAN.md.
-const PUBLIC_API_BASE = "/api/v1/public";
+//
+// Render prep (2026-07-19): en dev local esto funciona por el proxy de
+// Vite (vite.config.ts reenvía /api -> localhost:4000). En Render,
+// apps/marketing se despliega como sitio ESTÁTICO (sin proceso Node que
+// pueda proxyear) — sin esto, un fetch relativo a "/api/v1/public/..."
+// pegaría contra el propio dominio estático del marketing (404), nunca
+// contra ai-staffing-os-api real. Mismo patrón ya usado por apps/web
+// (VITE_API_URL) — vacío en dev (usa el proxy relativo), URL absoluta
+// real del API en producción.
+const PUBLIC_API_BASE = `${import.meta.env.VITE_API_URL ?? ""}/api/v1/public`;
 
 export class PublicApiError extends Error {
   status: number;
