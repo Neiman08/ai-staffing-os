@@ -2,10 +2,13 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
-import { enrichCompanyWithDecisionContacts, type ContactProviderPort } from "./contact-enrichment";
+import { enrichCompanyWithDecisionContacts, type ContactProviderPort, type HunterContactProviderPort } from "./contact-enrichment";
 import type { DecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { emptyContactResult } from "./tools/contact-providers/types";
 import type { ContactCandidate } from "./tools/contact-providers/types";
+import { emptyEmailResult } from "./tools/email-providers/types";
+import type { EmailCandidate } from "./tools/email-providers/types";
+import type { WebsiteNamedPerson } from "./tools/website-intelligence/types";
 
 /**
  * F7.7: tests de la integración impura People Data Labs + rolePlan
@@ -101,6 +104,12 @@ async function run(tenantId: string, companyId: string, rolePlan: DecisionRolePl
       rolePlan,
       contactProvider: provider,
       peopleDataLabsApiKey: "fake-key-for-tests",
+      // F15: este helper prueba EXCLUSIVAMENTE la fuente 1 (PDL) --
+      // "" evita que un rolesWithoutContact no vacío dispare la cascada
+      // real hacia Hunter (HUNTER_API_KEY sí está configurada en este
+      // entorno de desarrollo). Los tests dedicados de la cascada
+      // (F15, más abajo) pasan sus propios overrides explícitos.
+      hunterApiKey: "",
     }),
   );
 }
@@ -147,10 +156,17 @@ test("sin PEOPLEDATALABS_API_KEY: no llama al proveedor, motivo honesto en patte
       // específicamente el camino "sin key", determinista sin importar
       // el .env real.
       peopleDataLabsApiKey: "",
+      // F15: sin roles cubiertos tras PDL, la cascada seguiría hacia
+      // Hunter -- mismo criterio, "" fuerza el camino "sin key" en vez
+      // de caer al HUNTER_API_KEY real de este entorno (que SÍ dispararía
+      // una llamada de red real, atrapada por el guard de este archivo
+      // solo después de 3 reintentos con backoff -- lento e indeseado).
+      hunterApiKey: "",
     }),
   );
   assert.equal(called, false);
   assert.ok(report.patternsFailed[0]!.includes("PEOPLEDATALABS_API_KEY"));
+  assert.ok(report.patternsFailed.some((p) => p.includes("HUNTER_API_KEY")));
   assert.deepEqual(report.rolesWithoutContact, ["HR Manager"]);
 });
 
@@ -264,4 +280,271 @@ test("tenancy: los Contact creados en un tenant no son visibles desde otro", asy
     prisma.contact.findMany({ where: { tenantId: tenantB, firstName: "Jane", lastName: "Doe" } }),
   );
   assert.equal(visibleFromB.length, 0);
+});
+
+// ---------- F15: cascada PDL -> Website Intelligence -> Hunter.io ----------
+// "People Data Labs será solo una fuente de información" -- un 402/sin
+// resultados de PDL nunca más termina la búsqueda de contactos: sigue
+// automáticamente hacia Website Intelligence (namedPeople ya crawleado)
+// y después Hunter.io, en ese orden, cada uno solo si el anterior no
+// cubrió todos los roles planificados.
+
+function namedPersonFixture(overrides: Partial<WebsiteNamedPerson> = {}): WebsiteNamedPerson {
+  return {
+    firstName: "Carlos",
+    lastName: "Ramirez",
+    title: "HR Manager",
+    email: "carlos.ramirez@acme-mfg.com",
+    sourceUrl: "https://acme-mfg.com/about-us/team",
+    ...overrides,
+  };
+}
+
+function hunterCandidateFixture(overrides: Partial<EmailCandidate> = {}): EmailCandidate {
+  return {
+    firstName: "Priya",
+    lastName: "Singh",
+    title: "HR Manager",
+    email: "priya.singh@acme-mfg.com",
+    confidenceScore: 0.9,
+    sourceUrl: "https://acme-mfg.com/contact",
+    ...overrides,
+  };
+}
+
+function fakeHunterProvider(overrides: Partial<HunterContactProviderPort> = {}): HunterContactProviderPort {
+  return {
+    searchHunterEmails: async () => emptyEmailResult(),
+    ...overrides,
+  };
+}
+
+test("F15: PDL sin resultados (402/vacío) -> Website Intelligence encuentra la persona real, Contact creado con source correcto", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-pdl-to-website");
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({
+        searchPeopleDataLabs: async () => ({ candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: ["HTTP 402: no credits"], cancelled: false, providerStatus: "CREDIT_EXHAUSTED" }),
+      }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      websiteNamedPeople: [namedPersonFixture()],
+      hunterApiKey: "",
+    }),
+  );
+  assert.equal(report.contactsCreated.length, 1);
+  assert.equal(report.contactsCreated[0]!.source, "Website Intelligence");
+  assert.equal(report.contactsCreated[0]!.firstName, "Carlos");
+  assert.deepEqual(report.rolesWithoutContact, []);
+  assert.ok(report.sourcesUsed.includes("Website Intelligence"));
+  const contactRow = await prisma.contact.findUniqueOrThrow({ where: { id: report.contactsCreated[0]!.contactId } });
+  assert.equal(contactRow.source, "Website Intelligence");
+});
+
+test("F15: PDL y Website sin resultados -> Hunter.io encuentra la persona real, Contact creado con source correcto", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-pdl-website-to-hunter");
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({ searchPeopleDataLabs: async () => emptyContactResult() }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      websiteNamedPeople: [], // sin website o sin nadie encontrado ahí
+      hunterProvider: fakeHunterProvider({
+        searchHunterEmails: async () => ({
+          candidates: [hunterCandidateFixture()],
+          costUsd: 0,
+          sourcesUsed: ["Hunter.io (test)"],
+          patternsFailed: [],
+          cancelled: false,
+          providerStatus: "AVAILABLE",
+        }),
+      }),
+      hunterApiKey: "fake-hunter-key-for-tests",
+    }),
+  );
+  assert.equal(report.contactsCreated.length, 1);
+  assert.equal(report.contactsCreated[0]!.source, "Hunter.io");
+  assert.equal(report.contactsCreated[0]!.firstName, "Priya");
+  assert.deepEqual(report.rolesWithoutContact, []);
+  assert.ok(report.sourcesUsed.includes("Hunter.io"));
+});
+
+test("F15: ninguna de las 3 fuentes encuentra una persona real -> sin Contact, rolesWithoutContact honesto (candidato para 'organizacional')", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-all-empty");
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({ searchPeopleDataLabs: async () => emptyContactResult() }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      websiteNamedPeople: [],
+      hunterProvider: fakeHunterProvider({ searchHunterEmails: async () => emptyEmailResult() }),
+      hunterApiKey: "fake-hunter-key-for-tests",
+    }),
+  );
+  assert.equal(report.contactsCreated.length, 0);
+  assert.deepEqual(report.rolesWithoutContact, ["HR Manager"]);
+  const contacts = await prisma.contact.count({ where: { companyId } });
+  assert.equal(contacts, 0);
+});
+
+test("F15: un candidato de Website con cargo irrelevante (roleMismatchSkipped) nunca crea un Contact -- la cascada sigue hacia Hunter", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-website-role-mismatch");
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({ searchPeopleDataLabs: async () => emptyContactResult() }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      // Nombre real, pero un cargo que no matchea ningún rol planificado
+      // (rolePlanFixture solo pide "HR Manager") -- WebsiteNamedPerson
+      // siempre trae nombre+apellido reales (la extracción lo exige, ver
+      // extract.ts), así que "sin apellido" nunca es un caso real para
+      // esta fuente -- el descarte real acá es por rol irrelevante.
+      websiteNamedPeople: [namedPersonFixture({ title: "Accounts Receivable Associate" })],
+      hunterProvider: fakeHunterProvider({
+        searchHunterEmails: async () => ({
+          candidates: [hunterCandidateFixture()],
+          costUsd: 0,
+          sourcesUsed: ["Hunter.io (test)"],
+          patternsFailed: [],
+          cancelled: false,
+          providerStatus: "AVAILABLE",
+        }),
+      }),
+      hunterApiKey: "fake-hunter-key-for-tests",
+    }),
+  );
+  assert.equal(report.roleMismatchSkipped, 1);
+  assert.equal(report.contactsCreated.length, 1);
+  assert.equal(report.contactsCreated[0]!.source, "Hunter.io");
+});
+
+test("F15: si PDL ya cubrió el único rol planificado, Website y Hunter nunca se consultan (costo real evitado)", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-pdl-covers-all");
+  let hunterCalled = false;
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({
+        searchPeopleDataLabs: async () => ({ candidates: [candidateFixture()], costUsd: 0.05, sourcesUsed: ["People Data Labs (test)"], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE" }),
+      }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      // Website igual trae una persona real -- nunca debe procesarse
+      // porque PDL ya cubrió el único rol planificado (remainingRoles()
+      // queda vacío antes de llegar a esta fuente).
+      websiteNamedPeople: [namedPersonFixture({ firstName: "Nunca", lastName: "Debería Aparecer" })],
+      hunterProvider: fakeHunterProvider({ searchHunterEmails: async () => { hunterCalled = true; return emptyEmailResult(); } }),
+      hunterApiKey: "fake-hunter-key-for-tests",
+    }),
+  );
+  assert.equal(report.contactsCreated.length, 1);
+  assert.equal(report.contactsCreated[0]!.source, "People Data Labs");
+  assert.equal(hunterCalled, false, "Hunter nunca debe llamarse si PDL ya cubrió todos los roles");
+  const fakeNamedContact = await prisma.contact.findFirst({ where: { companyId, firstName: "Nunca" } });
+  assert.equal(fakeNamedContact, null);
+});
+
+test("F15: cancelación durante PDL detiene la cascada de inmediato -- Website y Hunter nunca se consultan", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-cancelled-during-pdl");
+  let hunterCalled = false;
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({
+        searchPeopleDataLabs: async () => ({ candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: ["cancelled by user"], cancelled: true, providerStatus: "AVAILABLE" }),
+      }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      websiteNamedPeople: [namedPersonFixture()],
+      hunterProvider: fakeHunterProvider({ searchHunterEmails: async () => { hunterCalled = true; return emptyEmailResult(); } }),
+      hunterApiKey: "fake-hunter-key-for-tests",
+    }),
+  );
+  assert.equal(report.cancelled, true);
+  assert.equal(report.contactsCreated.length, 0);
+  assert.equal(hunterCalled, false);
+  const contacts = await prisma.contact.count({ where: { companyId } });
+  assert.equal(contacts, 0);
+});
+
+test("F15: un contacto de Website que ya existe en el CRM (mismo nombre+empresa) se deduplica, nunca se crea dos veces", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("cascade-website-dedup");
+  const report1 = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task-1",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({ searchPeopleDataLabs: async () => emptyContactResult() }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      websiteNamedPeople: [namedPersonFixture()],
+      hunterApiKey: "",
+    }),
+  );
+  assert.equal(report1.contactsCreated.length, 1);
+
+  const report2 = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task-2",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({ searchPeopleDataLabs: async () => emptyContactResult() }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      websiteNamedPeople: [namedPersonFixture()],
+      hunterApiKey: "",
+    }),
+  );
+  assert.equal(report2.contactsCreated.length, 0);
+  assert.equal(report2.duplicatesSkipped, 1);
+  const contacts = await prisma.contact.count({ where: { companyId } });
+  assert.equal(contacts, 1);
 });

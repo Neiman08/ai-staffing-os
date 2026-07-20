@@ -4,6 +4,7 @@ import type { MissionObjective, MissionPlanStep, StructuredIntent } from "./cont
 import { BUSINESS_TAXONOMY } from "./taxonomy";
 import { detectCitiesAndStates } from "./geo";
 import { containsWord, normalizeText } from "./text-normalize";
+import { detectCriticalInfrastructureClients } from "./critical-infrastructure-clients";
 
 // F7.1: interprete de intencion -- 100% determinista, sin LLM, sin
 // Prisma, sin fetch. Toda la clasificacion viene de BUSINESS_TAXONOMY
@@ -152,6 +153,11 @@ export function interpretBusinessIntent(rawInstruction: string): StructuredInten
 
   const { cities: preferredCities, states } = detectCitiesAndStates(rawInstruction);
   const providersRequested = detectProvidersRequested(rawInstruction);
+  // F15: clientes de infraestructura crítica mencionados literalmente
+  // (ej. "QTS", "Meta", "Google") -- nunca un tipo de empresa, se usan
+  // en mission-planner.ts para ampliar las search queries hacia
+  // "contratistas que trabajan en proyectos de <cliente>".
+  const criticalInfrastructureClients = detectCriticalInfrastructureClients(rawInstruction);
   const restrictions: MissionRestrictions = mergeMissionRestrictions(null, rawInstruction);
   const objective = buildObjective(rawInstruction, companyTypes, industries, targetJobTitles, decisionRoles);
   const plannedSteps = buildPlannedSteps({ companyTypes, industries, targetJobTitles, hiringSignals, decisionRoles });
@@ -206,5 +212,6 @@ export function interpretBusinessIntent(rawInstruction: string): StructuredInten
     ambiguities,
     unsupportedCapabilities,
     matchedTaxonomyKeys,
+    criticalInfrastructureClients,
   };
 }

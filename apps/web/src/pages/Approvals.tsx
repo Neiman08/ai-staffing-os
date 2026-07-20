@@ -16,7 +16,17 @@ const STATUS_TABS = ["PENDING", "APPROVED", "REJECTED", "ALL"] as const;
 function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const action = approval.proposedAction as { channel?: string; leadId?: string; subject?: string; body?: string };
+  const action = approval.proposedAction as {
+    channel?: string;
+    leadId?: string;
+    subject?: string;
+    body?: string;
+    to?: string;
+    // F15: "person" cuando hay un Contact real identificado, "organizational"
+    // cuando el destinatario es un email de departamento (info@/hr@/careers@)
+    // -- ausente en approvals generados antes de este fix.
+    recipientKind?: "person" | "organizational";
+  };
 
   const decide = useMutation({
     mutationFn: (decision: "APPROVED" | "REJECTED") =>
@@ -48,6 +58,16 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
             {formatStatusLabel(approval.status)}
           </Badge>
         </div>
+        {action.to && (
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <span>Para: {action.to}</span>
+            {/* F15: nunca se disfraza un email de departamento como si
+                fuera una persona real -- explícito acá, en la misma
+                pantalla donde un humano decide aprobar o no el envío. */}
+            {action.recipientKind === "organizational" && <Badge variant="info">Contacto organizacional</Badge>}
+            {action.recipientKind === "person" && <Badge variant="success">Persona identificada</Badge>}
+          </p>
+        )}
         {action.subject && <p className="font-medium">{action.subject}</p>}
         {action.body && <p className="whitespace-pre-wrap text-muted-foreground">{action.body}</p>}
         {approval.status === "PENDING" ? (

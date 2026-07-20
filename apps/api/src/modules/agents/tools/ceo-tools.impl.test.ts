@@ -46,3 +46,24 @@ test("cadena vacía nunca se reporta como unrecognized", () => {
   const result = filterActuallyUnrecognizedTerms([""], []);
   assert.deepEqual(result, []);
 });
+
+// ---------- F15: clientes de infraestructura crítica (hallazgo real) ----------
+// "Prioriza empresas relacionadas con QTS, Meta, Google, Microsoft,
+// Amazon AWS, Compass Datacenters" -- el sistema los reportó como
+// "términos no reconocidos" pese a ser clientes reales de
+// infraestructura crítica (ver critical-infrastructure-clients.ts).
+// Ninguno de estos matchea business-taxonomy.ts (no son un sector) --
+// por eso necesitan su propio chequeo (c), separado del de taxonomía (b).
+
+test("QTS, Meta, Google, Microsoft, Amazon AWS y Compass Datacenters nunca quedan como unrecognized, aunque el LLM nunca los haya convertido en externalSearchTerms", () => {
+  const result = filterActuallyUnrecognizedTerms(
+    ["QTS", "Meta", "Google", "Microsoft", "Amazon AWS", "Compass Datacenters"],
+    [], // el LLM no generó ninguna query real para ellos -- exactamente el bug reportado
+  );
+  assert.deepEqual(result, []);
+});
+
+test("un cliente de infraestructura crítica mezclado con un término genuinamente desconocido -- solo el desconocido queda", () => {
+  const result = filterActuallyUnrecognizedTerms(["QTS", "xyzzy-nonexistent-sector-42"], []);
+  assert.deepEqual(result, ["xyzzy-nonexistent-sector-42"]);
+});

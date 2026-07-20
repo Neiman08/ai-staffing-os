@@ -3,33 +3,67 @@ import { getTaxonomyEntry } from "./taxonomy";
 import { normalizeText, containsWord } from "./text-normalize";
 
 /**
- * F7.4 Parte A: Business Validation -- pura, determinista, sin Prisma/
- * fetch/LLM (mismo criterio que el resto de ceo-intelligence/). Un solo
- * evaluador genérico que LEE de BUSINESS_TAXONOMY -- nunca un if por
- * categoría (regla explícita del PO: "no crear cientos de if dispersos,
- * las reglas deben salir de la taxonomía central"). Roofing/Electrical/
- * Data Centers/Landscaping/Healthcare/Restaurants usan exactamente el
- * mismo algoritmo que Hospitality/Manufacturing/Food Manufacturing/
- * Warehousing/Janitorial/Commercial Cleaning -- solo cambia qué entrada
- * de la taxonomía se lee.
+ * F16 (rediseño arquitectónico -- reemplaza F7.4 Parte A): Business
+ * Validation -- pura, determinista, sin Prisma/fetch/LLM. Calcula
+ * EXCLUSIVAMENTE la "Business Confidence": qué tan segura está la
+ * plataforma de que esta empresa candidata pertenece de verdad al
+ * trade/sector buscado. Un solo evaluador genérico que LEE de
+ * BUSINESS_TAXONOMY -- nunca un if por categoría.
  *
- * Mapeo de evidencia (cada entrada de BUSINESS_TAXONOMY ya trae el
- * vocabulario correcto para cada fuente):
- *   - nombre del candidato      <-> entry.companyTypes (frase completa,
- *     límite de palabra vía containsWord)
- *   - dominio del website       <-> entry.companyTypes, pero SOLO los
- *     ítems de una sola palabra (un dominio no tiene espacios, así que
- *     "distribution center" nunca puede aparecer literal en un hostname
- *     -- evitar falsos positivos de sustring sin límite de palabra real)
- *   - descripción pública       <-> entry.websitePhrases (el campo de la
- *     taxonomía pensado explícitamente para evidencia de contenido real
- *     de sitio, ver contracts.ts)
- *   - provider types            <-> entry.companyTypes
- *   - businessActivities        <-> entry.companyTypes (labels de la
- *     StructuredIntent, evidencia débil adicional, opcional)
+ * Separación de responsabilidades (ver company-evidence.ts para el
+ * contrato completo):
+ *   - Discovery encuentra candidatos y junta evidencia (nombre, sitio,
+ *     categorías reales del proveedor, descripción) -- nunca valida nada.
+ *   - Este módulo SOLO LEE `CompanyEvidence` -- nunca conoce la query de
+ *     búsqueda que encontró al candidato, ni ninguna estrategia de
+ *     descubrimiento. Esa dependencia (búsqueda -> confianza de negocio)
+ *     fue la causa raíz de una regresión real (F15->F16: candidatos
+ *     encontrados por queries "client-augmented" como "QTS data center
+ *     electrical contractor" nunca coincidían textualmente con ninguna
+ *     entrada de taxonomía, así que TODA la misión caía a WEAK y
+ *     conversion-policy.ts bloqueaba todo, pese a evidencia real de
+ *     contacto). `BusinessValidationInput` NO TIENE (ni puede tener) un
+ *     campo de texto de búsqueda -- ver el test de compilación en
+ *     business-validation.test.ts que falla si alguien lo reintroduce.
+ *   - Contact/Website Enrichment agrega más evidencia después (crawl del
+ *     sitio, cascada de contactos) -- nunca vuelve a tocar este módulo
+ *     directamente, solo enriquece `CompanyEvidence`.
+ *   - Commercial Conversion (conversion-policy.ts) LEE el resultado de
+ *     este módulo (`confidence`) junto con Hiring Confidence
+ *     (hiring-confidence.ts) -- dos dimensiones independientes, nunca
+ *     una sola clasificación mezclada.
+ *
+ * Diseño de scoring -- "max sobre señales independientes":
+ *   Cada señal de evidencia (nombre, categorías reales del proveedor,
+ *   dominio, descripción, actividades de negocio) mapea a un nivel de
+ *   confianza fijo. El resultado final es el nivel MÁS ALTO alcanzado
+ *   por cualquier señal presente -- nunca un promedio, nunca una resta.
+ *   Esto garantiza monotonicidad por construcción: agregar evidencia
+ *   nueva (ej. tras el crawl del sitio) solo puede sumar señales nuevas
+ *   al conjunto evaluado, nunca remueve una señal ya presente, así que
+ *   el nivel resultante nunca puede bajar (ver guardrail de
+ *   monotonicidad en business-validation.test.ts).
+ *
+ *   - EXACT: el nombre del candidato coincide con el trade/sector, O el
+ *     proveedor de discovery (Google Places `place.types`) ya categorizó
+ *     a esta empresa como ese trade. Ambas son evidencia de primera mano
+ *     sobre la identidad real del negocio -- Google categorizando a una
+ *     empresa como "electrician" pesa exactamente igual que su propio
+ *     nombre conteniendo "electric".
+ *   - STRONG: el dominio del sitio o su descripción pública mencionan el
+ *     trade/sector -- evidencia real, pero indirecta (contenido de
+ *     sitio, no categorización de un tercero).
+ *   - APPROXIMATE: solo las actividades de negocio declaradas en la
+ *     StructuredIntent de la misión coinciden -- la señal más débil de
+ *     las cuatro, porque no viene de la empresa candidata en sí, viene
+ *     de lo que el usuario escribió al pedir la misión.
+ *   - WEAK: ninguna señal de evidencia matcheó nada -- no hay evidencia
+ *     positiva ni negativa.
+ *   - REJECTED: evidencia negativa explícita (nombre excluido por la
+ *     misión, o coincide con negativeKeywords de la taxonomía).
  */
 
-export const BUSINESS_VALIDATION_VERSION = 1;
+export const BUSINESS_VALIDATION_VERSION = 2;
 
 export const businessValidationConfidenceLevels = [
   "EXACT",
@@ -54,19 +88,14 @@ const CONFIDENCE_SCORE_BY_LEVEL: Record<BusinessValidationConfidenceLevel, numbe
 export interface BusinessValidationInput {
   candidateName: string | null;
   website: string | null;
-  // Frase de búsqueda que encontró este candidato -- usada para detectar
-  // el nivel APPROXIMATE (encontrado por una query dirigida de esta
-  // misma taxonomía, sin ninguna corroboración independiente).
-  searchTerm: string;
   taxonomyKey: string;
   city: string | null;
   state: string | null;
   missionExclusions: string[];
-  // Los siguientes 3 campos suelen venir vacíos hoy -- ningún proveedor
-  // real conectado en F7.3/F7.4 los popula todavía (ver limitaciones
-  // documentadas). El validador los evalúa igual, honestamente, cuando
-  // SÍ vienen presentes -- una fase futura que los conecte no requiere
-  // tocar este archivo.
+  // Categorías reales que el proveedor de discovery le asigna al
+  // candidato -- Google Places `place.types` (ej. "electrician"). Puede
+  // venir vacío cuando el proveedor no las expone (Overpass) -- el
+  // validador nunca inventa una.
   providerTypes: string[];
   description: string | null;
   businessActivities: string[];
@@ -135,8 +164,10 @@ function buildEmptyResult(
 
 /**
  * Evalúa un candidato descubierto contra la entrada de taxonomía que lo
- * originó (`taxonomyKey`) -- determinista, misma entrada siempre produce
- * el mismo resultado. Nunca decide sobre datos que no recibió: si
+ * originó (`taxonomyKey`) -- determinista, la misma evidencia siempre
+ * produce el mismo resultado, sin importar qué query de descubrimiento
+ * (ni cuántas veces, ni con qué estrategia) haya encontrado al
+ * candidato. Nunca decide sobre datos que no recibió: si
  * `providerTypes`/`description` vienen vacíos, simplemente no aportan
  * evidencia (nunca se inventa una).
  */
@@ -172,31 +203,37 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
   }
 
   const nameMatches = matchPhrasesInText(input.candidateName, entry.companyTypes);
+  // Google Places (y proveedores similares) devuelven categorías como
+  // slugs con guion bajo (ej. "general_contractor", "hvac_contractor")
+  // -- se normalizan a espacios antes de comparar contra las frases
+  // humanas de la taxonomía ("general contractor"), sin lo cual nunca
+  // matchearían pese a ser evidencia real y directa.
+  const providerTypesText = input.providerTypes.map((t) => t.replace(/_/g, " ")).join(" ");
+  const providerTypeMatches = matchPhrasesInText(providerTypesText, entry.companyTypes);
   const domainMatches = matchWordsInDomain(domain, singleWordItems(entry.companyTypes));
   const descriptionMatches = matchPhrasesInText(input.description, entry.websitePhrases);
-  const providerTypeMatches = matchPhrasesInText(input.providerTypes.join(" "), entry.companyTypes);
   const businessActivityMatches = matchPhrasesInText(input.businessActivities.join(" "), entry.companyTypes);
 
   const matchedEvidence = [
-    ...new Set([...nameMatches, ...domainMatches, ...descriptionMatches, ...providerTypeMatches, ...businessActivityMatches]),
+    ...new Set([...nameMatches, ...providerTypeMatches, ...domainMatches, ...descriptionMatches, ...businessActivityMatches]),
   ];
   const sourceSignals: string[] = [];
   if (nameMatches.length > 0) sourceSignals.push("name");
+  if (providerTypeMatches.length > 0) sourceSignals.push("providerTypes");
   if (domainMatches.length > 0) sourceSignals.push("website");
   if (descriptionMatches.length > 0) sourceSignals.push("description");
-  if (providerTypeMatches.length > 0) sourceSignals.push("providerTypes");
   if (businessActivityMatches.length > 0) sourceSignals.push("businessActivities");
 
-  const searchTermMatchesTaxonomyQuery = entry.googleSearchPhrases.some(
-    (phrase) => normalizeText(phrase) === normalizeText(input.searchTerm),
-  );
-
+  // "Max sobre señales independientes" -- ver comentario de diseño
+  // arriba. Cada rama es un nivel fijo; el nivel final es el más alto
+  // alcanzado por CUALQUIER señal presente, nunca una combinación que
+  // pueda bajar al agregar más evidencia después.
   let confidence: BusinessValidationConfidenceLevel;
-  if (nameMatches.length > 0) {
+  if (nameMatches.length > 0 || providerTypeMatches.length > 0) {
     confidence = "EXACT";
-  } else if (domainMatches.length > 0 || descriptionMatches.length > 0 || providerTypeMatches.length > 0) {
+  } else if (domainMatches.length > 0 || descriptionMatches.length > 0) {
     confidence = "STRONG";
-  } else if (searchTermMatchesTaxonomyQuery) {
+  } else if (businessActivityMatches.length > 0) {
     confidence = "APPROXIMATE";
   } else {
     confidence = "WEAK";

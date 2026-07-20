@@ -102,7 +102,7 @@ function addressComponent(components: GooglePlacesAddressComponent[] | undefined
 export function extractFieldsFromGooglePlace(
   place: GooglePlace,
   fallbackState: string,
-): { name: string | null; fields: Record<string, DiscoveredField> } {
+): { name: string | null; fields: Record<string, DiscoveredField>; providerTypes: string[] } {
   const name = place.displayName?.text ?? null;
 
   const websiteRaw = place.websiteUri ?? null;
@@ -128,6 +128,11 @@ export function extractFieldsFromGooglePlace(
       visiblePositions: field("NOT_FOUND", null),
       contactName: field("NOT_FOUND", null),
     },
+    // F16: categorías reales que Google le asigna a este negocio (ej.
+    // "electrician", "general_contractor") -- evidencia de negocio de
+    // primera mano, nunca derivada de nuestro texto de búsqueda. Ver
+    // business-validation.ts.
+    providerTypes: place.types ?? [],
   };
 }
 
@@ -230,9 +235,9 @@ export async function searchGooglePlaces(params: ProviderSearchParams, apiKey: s
   log(params.taskId, "records found", { provider: "Google Places", textQuery, count: result.places.length });
 
   const candidates: ProviderCandidate[] = result.places.map((place) => {
-    const { name, fields } = extractFieldsFromGooglePlace(place, params.stateCode);
+    const { name, fields, providerTypes } = extractFieldsFromGooglePlace(place, params.stateCode);
     const sourceUrl = place.googleMapsUri ?? `https://www.google.com/maps/place/?q=place_id:${place.id}`;
-    return { name, fields, sourceUrl };
+    return { name, fields, sourceUrl, providerTypes };
   });
 
   return {

@@ -51,15 +51,27 @@ export interface ConvertDiscoveredCompanyResult {
   approvalRequestId: string | null;
 }
 
-function buildOutreachDraft(companyName: string, contactFirstName: string | null): { subject: string; body: string } {
-  // F14: plantilla genérica, sin datos inventados -- nunca asume un
+// F15 (pedido explícito del PO): "si existe email organizacional
+// verificado, genera igualmente la Opportunity y el Draft
+// correspondiente indicando que el destinatario será organizacional" --
+// nunca se disfraza un email de departamento (info@/hr@/careers@) como
+// si fuera una persona real identificada.
+export type DraftRecipientKind = "person" | "organizational";
+
+function buildOutreachDraft(companyName: string, contactFirstName: string | null, recipientKind: DraftRecipientKind): { subject: string; body: string } {
+  // F14/F15: plantilla genérica, sin datos inventados -- nunca asume un
   // dolor/necesidad específica del negocio que no fue confirmada.
-  // `contactFirstName` solo se usa si viene de un Contact real (PDL);
-  // sin eso, el saludo queda genérico, nunca "Hola [nombre inventado]".
+  // `contactFirstName` solo se usa si viene de un Contact real (PDL/
+  // Website Intelligence/Hunter, ver contact-enrichment.ts); sin eso, el
+  // saludo queda genérico, nunca "Hola [nombre inventado]".
   const greeting = contactFirstName ? `Hola ${contactFirstName},` : "Hola,";
+  const orgNote =
+    recipientKind === "organizational"
+      ? "\n\n(Este mensaje se dirige al contacto organizacional general de la empresa -- no se identificó todavía a una persona específica de decisión.)"
+      : "";
   return {
     subject: `Posible colaboración con ${companyName}`,
-    body: `${greeting}\n\nVimos que ${companyName} podría estar buscando personal para sus operaciones. Nos gustaría conversar brevemente para entender sus necesidades actuales de staffing y ver si podemos ayudar.\n\n¿Tendría disponibilidad esta semana para una llamada breve?\n\nSaludos.`,
+    body: `${greeting}\n\nVimos que ${companyName} podría estar buscando personal para sus operaciones. Nos gustaría conversar brevemente para entender sus necesidades actuales de staffing y ver si podemos ayudar.\n\n¿Tendría disponibilidad esta semana para una llamada breve?\n\nSaludos.${orgNote}`,
   };
 }
 
@@ -130,7 +142,11 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
           draftBlockedByRestriction = true;
         } else {
           const to = params.bestRealContact?.email ?? params.bestVerifiedOrgEmail!;
-          const { subject, body } = buildOutreachDraft(params.company.name, params.bestRealContact?.firstName ?? null);
+          // F15: organizacional cuando no hay Contact real con email --
+          // aunque bestRealContact exista sin email, el canal real usado
+          // es igual el organizacional (`to` ya cayó al org email arriba).
+          const recipientKind: DraftRecipientKind = params.bestRealContact?.email ? "person" : "organizational";
+          const { subject, body } = buildOutreachDraft(params.company.name, params.bestRealContact?.firstName ?? null, recipientKind);
           const approval = await scopedDb.approvalRequest.create({
             data: {
               tenantId: ctx.tenantId,
@@ -142,6 +158,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
                 leadId,
                 opportunityId,
                 contactId: params.bestRealContact?.contactId ?? null,
+                recipientKind,
                 to,
                 subject,
                 body,

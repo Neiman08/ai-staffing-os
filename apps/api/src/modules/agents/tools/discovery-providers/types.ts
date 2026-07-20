@@ -13,6 +13,14 @@ export interface ProviderCandidate {
   name: string | null;
   fields: Record<string, DiscoveredField>;
   sourceUrl: string;
+  // F16: categorías reales que el proveedor le asigna a este negocio --
+  // Google Places las llama `place.types` (ej. "electrician",
+  // "general_contractor"), evidencia de negocio de primera mano (el
+  // proveedor categorizó ASÍ a esta empresa, no es texto de búsqueda
+  // nuestro). Overpass no tiene un equivalente real -- omite el campo,
+  // nunca inventa una categoría. Ver business-validation.ts, que la lee
+  // como evidencia con el mismo peso que el nombre del candidato.
+  providerTypes?: string[];
 }
 
 export interface ProviderSearchResult {

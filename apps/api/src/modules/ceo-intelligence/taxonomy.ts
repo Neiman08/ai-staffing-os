@@ -382,6 +382,12 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "high voltage contractor",
       "low voltage contractor",
       "data center electrical contractor",
+      // F16: "electrician" es el slug real que devuelve Google Places
+      // `place.types` para este rubro -- palabra distinta a "electrical
+      // contractor" (sin raíz común detectable por containsWord), así
+      // que sin esta entrada la evidencia real de Google nunca podía
+      // matchear pese a ser la categorización oficial del negocio.
+      "electrician",
     ],
     crmIndustryBucket: "Construction",
     // F14: orden específico-primero, pedido explícito del PO -- nunca

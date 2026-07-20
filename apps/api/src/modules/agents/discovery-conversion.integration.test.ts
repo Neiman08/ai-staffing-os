@@ -170,7 +170,13 @@ async function run(
   plan: MissionPlan,
   providers: DiscoveryProviderPort,
   websiteIntelligence: WebsiteIntelligencePort,
-  opts: { restrictions?: MissionRestrictions; contactProvider?: ContactProviderPort; targetJobTitles?: string[]; decisionRoles?: string[] } = {},
+  opts: {
+    restrictions?: MissionRestrictions;
+    contactProvider?: ContactProviderPort;
+    targetJobTitles?: string[];
+    decisionRoles?: string[];
+    businessActivities?: string[];
+  } = {},
 ) {
   return runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] }, async () => {
     const missionTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "daily_revenue_mission" } });
@@ -186,6 +192,7 @@ async function run(
       contactProvider: opts.contactProvider,
       peopleDataLabsApiKey: opts.contactProvider ? "fake-pdl-key-for-tests" : undefined,
       convertToCommercialActions: true,
+      businessActivities: opts.businessActivities ?? [],
     });
     createdCompanyIds.push(...report.createdCompanyIds);
     return report;
@@ -221,10 +228,14 @@ test("escenario 1: EXACT + Possible Hiring + email verificado crea Company, Lead
 
   const approval = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: validation.conversion!.approvalRequestId! } });
   assert.equal(approval.status, "PENDING");
-  const proposedAction = approval.proposedAction as { to?: string; subject?: string; body?: string };
+  const proposedAction = approval.proposedAction as { to?: string; subject?: string; body?: string; recipientKind?: string };
   assert.equal(proposedAction.to, "info@acme-mfg.com");
   assert.ok(proposedAction.subject);
   assert.ok(proposedAction.body);
+  // F15: sin Contact real, el destinatario es explícitamente organizacional
+  // -- nunca se disfraza info@ como si fuera una persona identificada.
+  assert.equal(proposedAction.recipientKind, "organizational");
+  assert.match(proposedAction.body!, /contacto organizacional/i);
 });
 
 // ---------- 2. EXACT + Possible Hiring + teléfono, sin email -> Lead + Opportunity, sin Draft ----------
@@ -255,18 +266,21 @@ test("escenario 2: EXACT + Possible Hiring + teléfono confirmado pero sin email
 
 test("escenario 3: APPROXIMATE + Possible Hiring crea un Lead de investigación y una Opportunity condicionada a revisión manual", async () => {
   const tenantId = await setupTenant("scenario-3");
-  // Nombre sin "manufactur*"/"factory"/etc y sin dominio que matchee
-  // companyTypes -- searchTerm del plan ("manufacturing company") sí
-  // coincide con googleSearchPhrases de la taxonomía -> APPROXIMATE
-  // (business-validation.ts: nameMatches/domainMatches/description
-  // vacíos, pero searchTermMatchesTaxonomyQuery true).
+  // F16: Nombre sin "manufactur*"/"factory"/etc, sin dominio que matchee
+  // companyTypes y sin providerTypes/descripción -- la ÚNICA evidencia
+  // disponible es que la StructuredIntent de la misión declaró
+  // "factory" como actividad de negocio buscada (businessActivities),
+  // la señal más débil de las 4 que reconoce business-validation.ts ->
+  // APPROXIMATE. Ya NO depende del texto de la query de discovery (esa
+  // dependencia era la causa raíz de la regresión F15, ver el
+  // comentario de diseño en business-validation.ts).
   const candidate = candidateFixture({
     name: "Zenith Industries LLC",
     fields: { ...candidateFixture().fields, website: { status: "CONFIRMED", value: "https://www.zenith-corp.com" } },
   });
   const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidate]) });
   const websiteIntelligence = websiteIntelligenceWithEmail("info@zenith-corp.com");
-  const report = await run(tenantId, manufacturingPlan(), providers, websiteIntelligence);
+  const report = await run(tenantId, manufacturingPlan(), providers, websiteIntelligence, { businessActivities: ["factory"] });
 
   assert.equal(report.companiesCreated, 1);
   const validation = report.companyValidations[0]!;
@@ -378,9 +392,10 @@ test("escenario 6: PDL devuelve 402 (CREDIT_EXHAUSTED) pero el email organizacio
   // El borrador usó el email organizacional (Website Intelligence),
   // nunca un contacto de PDL -- PDL no aportó nada en este escenario.
   const approval = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: validation.conversion!.approvalRequestId! } });
-  const proposedAction = approval.proposedAction as { to?: string; contactId?: string | null };
+  const proposedAction = approval.proposedAction as { to?: string; contactId?: string | null; recipientKind?: string };
   assert.equal(proposedAction.to, "info@acme-mfg.com");
   assert.equal(proposedAction.contactId, null);
+  assert.equal(proposedAction.recipientKind, "organizational");
 });
 
 // ---------- 7. La misión autoriza opportunities/mensajes -> nunca se detiene tras discover_companies ----------
@@ -486,4 +501,64 @@ test("escenario 9: la taxonomía electrical (industrial/commercial/data center) 
   const validation = report.companyValidations[0]!;
   assert.equal(validation.businessConfidence, "EXACT");
   assert.equal(validation.detectedBusinessType, "electrical contractor");
+});
+
+// ---------- F15: métricas de cierre ("empresas y personas con las que realmente podamos contactar") ----------
+
+const contactPlan = manufacturingPlan({
+  steps: ["discover_companies", "find_hiring_signals", "find_contacts"],
+  optionalSteps: ["find_hiring_signals", "find_contacts"],
+});
+
+test("F15: contacto personal real encontrado -> companiesEnriched=1, companiesPendingInvestigation=0, sin badge organizacional", async () => {
+  const tenantId = await setupTenant("f15-metrics-real-person");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const websiteIntelligence = websiteIntelligenceWithEmail("info@acme-mfg.com");
+  const contactProvider: ContactProviderPort = {
+    searchPeopleDataLabs: async () => ({
+      candidates: [contactCandidateFixture()],
+      costUsd: 0.05,
+      sourcesUsed: ["People Data Labs (test)"],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+    }),
+  };
+  const report = await run(tenantId, contactPlan, providers, websiteIntelligence, { contactProvider, decisionRoles: ["HR Manager"] });
+
+  assert.equal(report.companiesEnriched, 1);
+  assert.equal(report.companiesWithOrganizationalEmail, 1);
+  assert.equal(report.companiesReadyForOrganizationalContact, 0);
+  assert.equal(report.companiesPendingInvestigation, 0);
+  assert.equal(report.companyValidations[0]!.readyForOrganizationalContact, false);
+});
+
+test("F15: sin persona real pero con email organizacional verificado -> companiesReadyForOrganizationalContact=1", async () => {
+  const tenantId = await setupTenant("f15-metrics-org-only");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const websiteIntelligence = websiteIntelligenceWithEmail("info@acme-mfg.com");
+  // PDL sin ningún candidato con nombre real -- nunca se inventa una persona.
+  const contactProvider: ContactProviderPort = { searchPeopleDataLabs: async () => ({ candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE" }) };
+  const report = await run(tenantId, contactPlan, providers, websiteIntelligence, { contactProvider, decisionRoles: ["HR Manager"] });
+
+  assert.equal(report.contactsCreatedTotal, 0);
+  assert.equal(report.companiesEnriched, 1);
+  assert.equal(report.companiesWithOrganizationalEmail, 1);
+  assert.equal(report.companiesReadyForOrganizationalContact, 1);
+  assert.equal(report.companiesPendingInvestigation, 0);
+  assert.equal(report.companyValidations[0]!.readyForOrganizationalContact, true);
+});
+
+test("F15: sin persona real Y sin email organizacional -> companiesPendingInvestigation=1, nunca 'enriquecida'", async () => {
+  const tenantId = await setupTenant("f15-metrics-pending-investigation");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const websiteIntelligence = websiteIntelligenceWithEmail(null); // sin ningún email genérico encontrado
+  const contactProvider: ContactProviderPort = { searchPeopleDataLabs: async () => ({ candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE" }) };
+  const report = await run(tenantId, contactPlan, providers, websiteIntelligence, { contactProvider, decisionRoles: ["HR Manager"] });
+
+  assert.equal(report.companiesEnriched, 0);
+  assert.equal(report.companiesWithOrganizationalEmail, 0);
+  assert.equal(report.companiesReadyForOrganizationalContact, 0);
+  assert.equal(report.companiesPendingInvestigation, 1);
+  assert.equal(report.companyValidations[0]!.readyForOrganizationalContact, false);
 });

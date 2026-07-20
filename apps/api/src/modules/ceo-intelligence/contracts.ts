@@ -137,6 +137,14 @@ export const structuredIntentSchema = z.object({
   // Trazabilidad: qué entradas de la taxonomía matchearon — permite
   // auditar/testear el intérprete sin adivinar su lógica interna.
   matchedTaxonomyKeys: z.array(z.string()),
+  // F15: nombres canónicos de clientes de infraestructura crítica
+  // detectados literalmente en la instrucción (ver
+  // critical-infrastructure-clients.ts) -- ej. "QTS", "Meta", "Google".
+  // NUNCA son un tipo de empresa a buscar -- son la EMPRESA CLIENTE
+  // cuyos proyectos el contratista buscado podría estar sirviendo, así
+  // que mission-planner.ts los usa para ampliar las search queries
+  // (nunca para reemplazar el tipo de empresa/industria ya detectado).
+  criticalInfrastructureClients: z.array(z.string()),
 });
 export type StructuredIntent = z.infer<typeof structuredIntentSchema>;
 

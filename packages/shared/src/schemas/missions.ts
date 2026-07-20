@@ -181,6 +181,11 @@ export const ceoStructuredIntentSchema = z.object({
   ambiguities: z.array(z.string()),
   unsupportedCapabilities: z.array(z.string()),
   matchedTaxonomyKeys: z.array(z.string()),
+  // F15: clientes de infraestructura crítica detectados (ej. "QTS",
+  // "Meta", "Google") -- espejo de StructuredIntent.criticalInfrastructureClients
+  // (apps/api/.../ceo-intelligence/contracts.ts). Vacío en cualquier
+  // misión lanzada antes de este fix.
+  criticalInfrastructureClients: z.array(z.string()).default([]),
 });
 export type CeoStructuredIntent = z.infer<typeof ceoStructuredIntentSchema>;
 
@@ -518,6 +523,25 @@ export const companyValidationRecordSchema = z.object({
       approvalRequestId: z.string().nullable(),
     })
     .nullable(),
+  // F15: sin persona real encontrada (contactsFound=0) pero con email
+  // organizacional usable -- "lista para contacto organizacional" en
+  // vez de sin acción. false en cualquier registro de una misión
+  // anterior a este fix (nunca se infiere retroactivamente).
+  readyForOrganizationalContact: z.boolean().default(false),
+  // F16: categorías reales del proveedor de discovery (Google Places
+  // `place.types`) -- evidencia de negocio de primera mano, ya usada en
+  // businessConfidence. Expuesta acá para trazabilidad/UI.
+  providerTypes: z.array(z.string()).default([]),
+  // F16: clasificación (nunca exclusión automática) cuando el nombre de
+  // esta Company coincide con un cliente de infraestructura crítica
+  // conocido -- ver critical-infrastructure-clients.ts.
+  isClientOwnerCandidate: z.boolean().default(false),
+  clientOwnerAssociations: z.array(z.string()).default([]),
+  // F16: segunda dimensión, INDEPENDIENTE de businessConfidence -- qué
+  // tan probable es que valga la pena contactar. Distinto del campo
+  // `hiringConfidence` (arriba, score numérico fijo de F7.5).
+  hiringConfidenceTier: z.enum(["HIGH", "MEDIUM", "LOW", "NONE"]).default("NONE"),
+  hiringConfidenceConcreteEvidence: z.boolean().default(false),
 });
 export type CompanyValidationRecord = z.infer<typeof companyValidationRecordSchema>;
 
@@ -583,6 +607,13 @@ export const discoveryExecutionReportSchema = z.object({
   opportunitiesBlockedByRestriction: z.number(),
   draftsCreated: z.number(),
   draftsBlockedByRestriction: z.number(),
+  // F15: "empresas y personas con las que realmente podamos contactar"
+  // -- una misión nunca debería leerse como exitosa mirando solo
+  // companiesCreated. 0 en cualquier reporte generado antes de F15.
+  companiesEnriched: z.number().default(0),
+  companiesWithOrganizationalEmail: z.number().default(0),
+  companiesReadyForOrganizationalContact: z.number().default(0),
+  companiesPendingInvestigation: z.number().default(0),
   costUsd: z.number(),
   durationMs: z.number(),
   stopReason: z.string(),

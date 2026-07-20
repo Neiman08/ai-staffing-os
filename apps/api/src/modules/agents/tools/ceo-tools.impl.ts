@@ -19,6 +19,7 @@ import { AppError } from "../../../core/errors";
 import type { UsageAccumulator } from "../usage";
 import { interpretBusinessIntent } from "../../ceo-intelligence/intent-interpreter";
 import { normalizeText } from "../../ceo-intelligence/text-normalize";
+import { detectCriticalInfrastructureClients } from "../../ceo-intelligence/critical-infrastructure-clients";
 
 function tryParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
   try {
@@ -224,6 +225,13 @@ export async function computeContactCoverage(missionTaskId: string): Promise<Mis
  * separado, nunca debe aparecer acá. Mismo criterio de "defensa en
  * profundidad, nunca confiar ciegamente en el LLM" que ya usa este
  * archivo para industryNames/categoryNames arriba.
+ *
+ * F15 (hallazgo real: "QTS, Meta, Google, Microsoft, Amazon AWS, Compass
+ * Datacenters" reportados como unrecognizedTerms): esos nombres nunca
+ * matchean business-taxonomy.ts (no son un sector) pero SÍ son clientes
+ * de infraestructura crítica reales, reconocidos por su propia base de
+ * conocimiento (critical-infrastructure-clients.ts) — nunca deben
+ * aparecer como "no reconocidos" solo porque no son una industria.
  */
 export function filterActuallyUnrecognizedTerms(unrecognizedTerms: string[], externalSearchTerms: string[]): string[] {
   const normalizedSearchPhrases = externalSearchTerms.map((t) => normalizeText(t));
@@ -244,7 +252,11 @@ export function filterActuallyUnrecognizedTerms(unrecognizedTerms: string[], ext
     // pasa acá — evaluado aislado, exactamente como lo reportaría un
     // humano leyendo solo esa palabra suelta.
     const recognizedByTaxonomy = interpretBusinessIntent(term).matchedTaxonomyKeys.length > 0;
-    return !recognizedByTaxonomy;
+    if (recognizedByTaxonomy) return false;
+    // (c) F15: es un cliente de infraestructura crítica conocido (QTS,
+    // Meta, Google...) -- nunca un sector, pero tampoco "no reconocido".
+    const recognizedAsCriticalInfrastructureClient = detectCriticalInfrastructureClients(term).length > 0;
+    return !recognizedAsCriticalInfrastructureClient;
   });
 }
 

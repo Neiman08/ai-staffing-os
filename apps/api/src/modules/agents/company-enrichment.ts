@@ -4,7 +4,7 @@ import { AppError } from "../../core/errors";
 import { logAuditEvent } from "../../core/audit-log";
 import { validateEmailTrust, type EmailTrustResult } from "../ceo-intelligence/email-trust";
 import { runWebsiteIntelligence } from "./tools/website-intelligence/crawler";
-import type { WebsiteIntelligenceResult } from "./tools/website-intelligence/types";
+import type { WebsiteIntelligenceResult, WebsiteNamedPerson } from "./tools/website-intelligence/types";
 
 /**
  * F7.4 Parte B: wiring impuro entre Website Intelligence (existente, sin
@@ -51,6 +51,12 @@ export interface WebsiteCrawlSignals {
   hasCareersPage: boolean;
   careersPageUrl: string | null;
   pageTexts: Array<{ url: string; text: string }>;
+  // F15: personas reales con nombre+cargo detectadas en el MISMO crawl
+  // (Team/Leadership/About/Contact/Careers, ver website-intelligence/
+  // extract.ts) -- nunca un segundo request al sitio. Fuente de
+  // respaldo para Contact Intelligence (contact-enrichment.ts) cuando
+  // People Data Labs no encuentra nada o no está disponible.
+  namedPeople: WebsiteNamedPerson[];
 }
 
 export interface CompanyEnrichmentReport {
@@ -91,6 +97,7 @@ function emptyReport(patternsFailed: string[] = [], websiteSignals?: Partial<Web
       hasCareersPage: false,
       careersPageUrl: null,
       pageTexts: [],
+      namedPeople: [],
       ...websiteSignals,
     },
   };
@@ -148,6 +155,7 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
     hasCareersPage: websiteResult.hasCareersPage,
     careersPageUrl: websiteResult.careersPageUrl,
     pageTexts: websiteResult.pageTexts,
+    namedPeople: websiteResult.namedPeople,
   };
 
   if (websiteResult.cancelled) {

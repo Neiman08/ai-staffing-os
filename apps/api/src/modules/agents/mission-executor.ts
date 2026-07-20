@@ -17,6 +17,8 @@ import {
   type DiscoveryCandidateLike,
 } from "../ceo-intelligence/discovery-identity";
 import { validateBusinessCandidate, BUSINESS_VALIDATION_VERSION, type BusinessValidationConfidenceLevel } from "../ceo-intelligence/business-validation";
+import { computeHiringConfidence, type HiringConfidenceTier } from "../ceo-intelligence/hiring-confidence";
+import { detectClientOwnerMatch } from "../ceo-intelligence/critical-infrastructure-clients";
 import { createQueuedTask } from "./task-executor";
 import { computeConfidenceScore } from "./tools/discovery-tools.impl";
 import { searchGooglePlaces } from "./tools/discovery-providers/google-places";
@@ -27,7 +29,7 @@ import { getDataProviderBudgetStatus } from "./data-provider-budget";
 import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } from "./company-enrichment";
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
-import { enrichCompanyWithDecisionContacts, type ContactProviderPort } from "./contact-enrichment";
+import { enrichCompanyWithDecisionContacts, type ContactProviderPort, type HunterContactProviderPort } from "./contact-enrichment";
 import { recommendOpportunityAction, type OpportunityRecommendationResult, type BestContactRankingTier } from "../ceo-intelligence/opportunity-recommendation";
 import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from "./discovery-conversion";
 
@@ -102,6 +104,11 @@ export interface ExecuteDiscoveryPlanParams {
   // Default: el módulo real.
   contactProvider?: ContactProviderPort;
   peopleDataLabsApiKey?: string;
+  // F15: inyección para tests de la 3ra fuente de la cascada de Contact
+  // Intelligence (Hunter.io) -- nunca se llama al proveedor real en un
+  // test unitario. Default: el módulo real (contact-enrichment.ts).
+  hunterProvider?: HunterContactProviderPort;
+  hunterApiKey?: string;
   // F14: opt-in explícito -- true SOLO para el llamador que sabe que
   // este es el punto TERMINAL de la misión para estas Companies (hoy:
   // runDynamicDiscoveryMission, useExternalDiscovery=true explícito,
@@ -187,12 +194,38 @@ export interface CompanyValidationRecord {
   // F7.6: null cuando el plan no declaró find_contacts -- Decision-Maker
   // Role Planning solo corre en preparación de ese paso futuro (F7.7).
   rolePlan: DecisionRolePlan | null;
-  // F7.7: contactos personales reales creados para esta Company (People
-  // Data Labs, matcheados contra rolePlan.targetRoles) y los roles
-  // planificados para los que ningún candidato real matcheó -- nunca se
-  // inventa un contacto de relleno para esos roles.
+  // F7.7/F15: contactos personales reales creados para esta Company
+  // (People Data Labs -> Website Intelligence -> Hunter.io, en cascada,
+  // matcheados contra rolePlan.targetRoles) y los roles planificados
+  // para los que ningún candidato real de NINGUNA fuente matcheó --
+  // nunca se inventa un contacto de relleno para esos roles.
   contactsFound: number;
   rolesWithoutContact: string[];
+  // F15 (objetivo de misión: "empresas y personas con las que
+  // realmente podamos contactar", nunca solo empresas): true cuando
+  // NINGUNA fuente encontró una persona real (contactsFound === 0) pero
+  // sí hay un email organizacional usable (hasValidEmail) -- la Company
+  // queda "lista para contacto organizacional" en vez de sin acción.
+  // false tanto si ya hay un contacto real como si tampoco hay canal
+  // organizacional (ver companiesPendingInvestigation en el reporte).
+  readyForOrganizationalContact: boolean;
+  // F16: categorías reales que el proveedor de discovery (Google Places
+  // `place.types`) le asigna a esta empresa -- evidencia de negocio de
+  // primera mano, ya usada (con más peso que cualquier texto) en
+  // businessConfidence. Se expone acá solo para trazabilidad/UI.
+  providerTypes: string[];
+  // F16: clasificación (nunca exclusión automática) cuando el nombre de
+  // esta Company coincide con un cliente de infraestructura crítica
+  // conocido -- ver critical-infrastructure-clients.ts.
+  isClientOwnerCandidate: boolean;
+  clientOwnerAssociations: string[];
+  // F16: segunda dimensión, INDEPENDIENTE de businessConfidence -- qué
+  // tan probable es que valga la pena contactar a esta Company, combina
+  // señal de contratación + página de carreras + emails + contactos
+  // reales. Ver hiring-confidence.ts. Distinto de `hiringConfidence`
+  // (arriba, F7.5 -- ese es solo el score fijo asociado a hiringStatus).
+  hiringConfidenceTier: HiringConfidenceTier;
+  hiringConfidenceConcreteEvidence: boolean;
   // F7.10: recomendación determinista sobre qué hacer con esta Company
   // -- NUNCA crea una Opportunity automáticamente, solo la prepara para
   // que el CEO (humano) decida (requiresApproval siempre true).
@@ -294,6 +327,23 @@ export interface DiscoveryExecutionReport {
   opportunitiesBlockedByRestriction: number;
   draftsCreated: number;
   draftsBlockedByRestriction: number;
+  // F15 (objetivo de misión: "empresas y personas con las que realmente
+  // podamos contactar", nunca solo empresas). Las 4 métricas de cierre
+  // pedidas por el PO, calculadas sobre companyValidations -- una misión
+  // nunca debería reportarse como "exitosa" mirando solo companiesCreated:
+  // - companiesEnriched: encontraron AL MENOS un canal real (persona real
+  //   o email organizacional verificado/riesgoso).
+  // - companiesWithOrganizationalEmail: tienen hasValidEmail=true (sin
+  //   importar si además se encontró una persona).
+  // - companiesReadyForOrganizationalContact: sin persona real, pero con
+  //   email organizacional usable -- ver CompanyValidationRecord.readyForOrganizationalContact.
+  // - companiesPendingInvestigation: sin persona real Y sin ningún email
+  //   organizacional -- ninguna fuente automática encontró nada, requiere
+  //   investigación manual real antes de poder contactar.
+  companiesEnriched: number;
+  companiesWithOrganizationalEmail: number;
+  companiesReadyForOrganizationalContact: number;
+  companiesPendingInvestigation: number;
 }
 
 interface FinalQuery {
@@ -466,27 +516,28 @@ interface Candidate extends DiscoveryCandidateLike {
 }
 
 /**
- * F7.4 Parte A: adaptador delgado sobre validateBusinessCandidate
- * (business-validation.ts, puro) — reemplaza la validación básica de
- * F7.3 (solo nombre + exclusiones + negativeKeywords) por el evaluador
- * completo taxonomy-driven (nombre + dominio + descripción + provider
- * types + businessActivities, 5 niveles de confianza EXACT/STRONG/
- * APPROXIMATE/WEAK/REJECTED). `providerTypes`/`description` quedan
- * siempre vacíos hoy -- ningún proveedor conectado los popula todavía
- * (limitación documentada, ver discoveryMetadata.originalProviderTypes,
- * F7.3 §15.11 y F7.4 doc).
+ * F16 (rediseño arquitectónico -- reemplaza el adaptador F7.4 Parte A):
+ * adaptador delgado sobre validateBusinessCandidate (business-
+ * validation.ts, puro). Nunca pasa `candidate.query.searchTerm` -- esa
+ * dependencia (texto de búsqueda -> confianza de negocio) fue la causa
+ * raíz de una regresión real, ver el comentario de diseño al inicio de
+ * business-validation.ts. `providerTypes` ahora viene de
+ * `candidate.raw.providerTypes` (Google Places `place.types`, ver
+ * google-places.ts) -- evidencia real de la empresa, no del descubridor.
+ * `description` sigue vacío hoy -- ningún proveedor de discovery
+ * conectado la popula todavía en esta etapa (el crawl del sitio llega
+ * recién en el enrichment posterior, F7.4 Parte B).
  */
 function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActivities: string[]) {
   const website = candidate.raw.fields.website?.status === "CONFIRMED" ? (candidate.raw.fields.website.value as string) : null;
   return validateBusinessCandidate({
     candidateName: candidate.raw.name,
     website,
-    searchTerm: candidate.query.searchTerm,
     taxonomyKey: candidate.query.taxonomyKey,
     city: candidate.query.city,
     state: candidate.query.state,
     missionExclusions: plan.exclusions,
-    providerTypes: [],
+    providerTypes: candidate.raw.providerTypes ?? [],
     description: null,
     businessActivities,
   });
@@ -564,6 +615,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     opportunitiesBlockedByRestriction: 0,
     draftsCreated: 0,
     draftsBlockedByRestriction: 0,
+    companiesEnriched: 0,
+    companiesWithOrganizationalEmail: 0,
+    companiesReadyForOrganizationalContact: 0,
+    companiesPendingInvestigation: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -671,6 +726,13 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   let opportunitiesBlockedByRestrictionTotal = 0;
   let draftsCreatedTotal = 0;
   let draftsBlockedByRestrictionTotal = 0;
+  // F15: métricas de cierre de misión -- ver el comentario en
+  // DiscoveryExecutionReport sobre por qué "solo encontramos empresas"
+  // nunca debe leerse como éxito sin mirar estas 4.
+  let companiesEnrichedTotal = 0;
+  let companiesWithOrganizationalEmailTotal = 0;
+  let companiesReadyForOrganizationalContactTotal = 0;
+  let companiesPendingInvestigationTotal = 0;
 
   // Claves de identidad de TODAS las Companies ya existentes en el
   // tenant — CUALQUIER origen, incluido DEMO_SEED a propósito: una
@@ -903,6 +965,11 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         acceptedResults += 1;
         record.acceptedCount += 1;
         if (queryCap !== null) acceptedByQueryKey.set(queryKey, (acceptedByQueryKey.get(queryKey) ?? 0) + 1);
+        // F16: mismo cálculo que dentro de persistAcceptedCandidate (ver
+        // discoveryMetadata.clientOwnerAssociations) -- se repite acá,
+        // barato y puro, para exponerlo también en CompanyValidationRecord
+        // sin acoplar este loop al Json interno de discoveryMetadata.
+        const clientOwnerMatchesForCandidate = detectClientOwnerMatch(candidate.raw.name);
 
         // F7.10 fix: los pasos F7.5/F7.6/F7.10 escriben cada uno su
         // propia clave en Company.discoveryMetadata -- `company` nunca
@@ -1022,9 +1089,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             abortSignal: params.abortSignal,
             contactProvider: params.contactProvider,
             peopleDataLabsApiKey: params.peopleDataLabsApiKey,
+            // F15: 2da y 3ra fuente de la cascada -- namedPeople viene
+            // del MISMO crawl que ya hizo enrichCompanyWithOrganizationalEmails
+            // arriba (nunca un segundo request al sitio); Hunter corre
+            // solo si PDL+Website no cubrieron todos los roles.
+            websiteNamedPeople: enrichment.websiteSignals.namedPeople,
+            hunterProvider: params.hunterProvider,
+            hunterApiKey: params.hunterApiKey,
           });
           if (contactEnrichment.costUsd > 0) totalCostUsd += contactEnrichment.costUsd;
-          if (contactEnrichment.sourcesUsed.length > 0) providersUsed.add("People Data Labs");
+          for (const source of contactEnrichment.sourcesUsed) providersUsed.add(source);
           contactCandidatesFoundTotal += contactEnrichment.candidatesFound;
           contactsCreatedTotal += contactEnrichment.contactsCreated.length;
           contactDuplicatesSkippedTotal += contactEnrichment.duplicatesSkipped;
@@ -1095,6 +1169,31 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         // comentario en ExecuteDiscoveryPlanParams (nunca duplicar la
         // creación de Lead/Opportunity que ya hace el loop clásico para
         // el llamador de fallback).
+        // F16: Hiring Confidence -- segunda dimensión INDEPENDIENTE de
+        // Business Confidence (validation.confidence), calculada SIEMPRE
+        // (no solo cuando convertToCommercialActions está activo -- es
+        // una lectura pura de evidencia ya reunida, Commercial Conversion
+        // es solo uno de sus consumidores) combinando señal de
+        // contratación + página de carreras + emails organizacionales +
+        // contactos reales ya encontrados. Reemplaza el chequeo anterior,
+        // más angosto, que solo miraba `targetTitlesMatched.length > 0`
+        // -- ahora también reconoce evidencia real de contact enrichment
+        // (F7.6/F7.7/F15).
+        const hiringConfidence = computeHiringConfidence({
+          hiringSignalStatus: hiringSignal?.hiringStatus ?? null,
+          hiringSignalTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
+          hasCareersPage: enrichment.websiteSignals.hasCareersPage,
+          organizationalEmailsVerified: enrichment.emailsVerified,
+          organizationalEmailsRisky: enrichment.emailsRisky,
+          namedContactsFound: contactsFoundForCompany,
+          bestContactRankingTier: bestContactRankingTierForCompany,
+        });
+        currentDiscoveryMetadata = { ...currentDiscoveryMetadata, hiringConfidence };
+        await scopedDb.company.update({
+          where: { id: company.id },
+          data: { discoveryMetadata: currentDiscoveryMetadata as never },
+        });
+
         let conversion: ConvertDiscoveredCompanyResult | null = null;
         if (params.convertToCommercialActions) {
           const bestVerifiedOrgEmail = enrichment.emails.find((e) => e.status === "VERIFIED")?.email ?? null;
@@ -1115,7 +1214,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             evidence: {
               businessConfidence: validation.confidence,
               hiringStatus: hiringSignal?.hiringStatus ?? null,
-              hiringEvidenceConcrete: (hiringSignal?.targetTitlesMatched.length ?? 0) > 0,
+              hiringEvidenceConcrete: hiringConfidence.concreteEvidence,
               hasVerifiedOrgEmail: !!bestVerifiedOrgEmail,
               hasRiskyOrgEmail: enrichment.emailsRisky > 0,
               hasConfirmedPhone: !!company.phone,
@@ -1131,6 +1230,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           if (conversion.draftCreated) draftsCreatedTotal += 1;
           if (conversion.draftBlockedByRestriction) draftsBlockedByRestrictionTotal += 1;
         }
+
+        // F15: "empresas y personas con las que realmente podamos
+        // contactar" -- calculado con la MISMA evidencia ya reunida
+        // arriba (contactsFoundForCompany de la cascada F7.7/F15,
+        // hasValidEmail de Email Trust F7.4), nunca un dato nuevo.
+        const readyForOrganizationalContact = contactsFoundForCompany === 0 && hasValidEmail;
+        if (contactsFoundForCompany > 0 || hasValidEmail) companiesEnrichedTotal += 1;
+        if (hasValidEmail) companiesWithOrganizationalEmailTotal += 1;
+        if (readyForOrganizationalContact) companiesReadyForOrganizationalContactTotal += 1;
+        if (contactsFoundForCompany === 0 && !hasValidEmail) companiesPendingInvestigationTotal += 1;
 
         companyValidations.push({
           companyId: company.id,
@@ -1155,6 +1264,12 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           rolesWithoutContact: rolesWithoutContactForCompany,
           opportunityRecommendation,
           conversion,
+          readyForOrganizationalContact,
+          providerTypes: candidate.raw.providerTypes ?? [],
+          isClientOwnerCandidate: clientOwnerMatchesForCandidate.length > 0,
+          clientOwnerAssociations: clientOwnerMatchesForCandidate,
+          hiringConfidenceTier: hiringConfidence.tier,
+          hiringConfidenceConcreteEvidence: hiringConfidence.concreteEvidence,
         });
         // F7.9: cortar el loop de candidatos de ESTA query inmediatamente
         // al detectar cancelación -- sin este break, el resto de
@@ -1259,6 +1374,10 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     opportunitiesBlockedByRestriction: opportunitiesBlockedByRestrictionTotal,
     draftsCreated: draftsCreatedTotal,
     draftsBlockedByRestriction: draftsBlockedByRestrictionTotal,
+    companiesEnriched: companiesEnrichedTotal,
+    companiesWithOrganizationalEmail: companiesWithOrganizationalEmailTotal,
+    companiesReadyForOrganizationalContact: companiesReadyForOrganizationalContactTotal,
+    companiesPendingInvestigation: companiesPendingInvestigationTotal,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -1324,6 +1443,7 @@ async function persistAcceptedCandidate(params: {
   if (!ctx) throw AppError.unauthorized();
   const { candidate, industryId, confidenceScore, businessValidation, missionTaskId } = params;
   const raw = candidate.raw;
+  const clientOwnerMatches = detectClientOwnerMatch(raw.name);
   const website = raw.fields.website?.status === "CONFIRMED" ? (raw.fields.website.value as string) : null;
   const phone = raw.fields.phone?.status === "CONFIRMED" ? (raw.fields.phone.value as string) : null;
   const city = raw.fields.city?.status === "CONFIRMED" ? (raw.fields.city.value as string) : candidate.query.city;
@@ -1365,7 +1485,7 @@ async function persistAcceptedCandidate(params: {
         classificationReason:
           businessValidation.matchedEvidence.length > 0
             ? `Evidencia coincidente: ${businessValidation.matchedEvidence.join(", ")}.`
-            : `Sin evidencia directa en nombre/dominio — aceptada por confianza ${businessValidation.confidence} (query dirigida de la taxonomía "${candidate.query.taxonomyKey}").`,
+            : `Sin evidencia directa (nombre/categorías/dominio/descripción) para el trade "${candidate.query.taxonomyKey}" -- confianza ${businessValidation.confidence}.`,
         // F7.4: nuevos campos de discoveryMetadata (Json, sin migración) —
         // trazabilidad completa de Business Validation.
         matchedEvidence: businessValidation.matchedEvidence,
@@ -1373,7 +1493,15 @@ async function persistAcceptedCandidate(params: {
         businessValidationVersion: BUSINESS_VALIDATION_VERSION,
         accepted: true,
         rejectionReason: null,
-        originalProviderTypes: [],
+        // F16: categorías reales del proveedor (Google Places
+        // `place.types`) -- ya propagadas y usadas como evidencia real en
+        // classifyCandidate, acá solo se persisten para trazabilidad.
+        originalProviderTypes: raw.providerTypes ?? [],
+        // F16: clasificación (nunca exclusión automática) cuando el
+        // NOMBRE del candidato coincide con un cliente de infraestructura
+        // crítica conocido -- ver critical-infrastructure-clients.ts.
+        isClientOwnerCandidate: clientOwnerMatches.length > 0,
+        clientOwnerAssociations: clientOwnerMatches,
         discoveredAt: now.toISOString(),
         lastUpdatedAt: now.toISOString(),
       },

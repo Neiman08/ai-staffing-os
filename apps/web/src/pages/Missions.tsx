@@ -245,6 +245,11 @@ function CeoIntentSection({ intent }: { intent: NonNullable<MissionDetail["ceoIn
       <TagList label="Decisores" items={intent.decisionRoles} />
       <TagList label="Ciudades" items={intent.preferredCities} />
       <TagList label="Estados" items={intent.states} />
+      {/* F15: clientes de infraestructura crítica detectados (QTS, Meta,
+          Google...) -- nunca un tipo de empresa, la búsqueda real amplía
+          hacia "contratistas que trabajan en SUS proyectos" (ver
+          mission-planner.ts). Vacío en misiones anteriores a este fix. */}
+      <TagList label="Clientes de infraestructura crítica" items={intent.criticalInfrastructureClients ?? []} variant="info" />
       <TagList label="Exclusiones" items={intent.exclusions} variant="danger" />
       <div className="flex flex-wrap gap-1.5 text-xs">
         <Badge variant={intent.restrictions.allowCampaignCreation ? "neutral" : "warning"}>
@@ -470,6 +475,49 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
         </div>
       )}
 
+      {/* F15: "empresas y personas con las que realmente podamos
+          contactar" -- resumen de cierre pedido explícitamente por el
+          PO, nunca solo companiesCreated. Guardia explícita
+          (companiesEnriched != null) porque una misión anterior a F15
+          nunca tiene estos campos. */}
+      {report.companiesEnriched != null && (
+        <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Resultado real de la misión</p>
+          <div className="grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-7">
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.companiesCreated}</p>
+              <p className="text-muted-foreground">Empresas encontradas</p>
+            </div>
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.companiesEnriched}</p>
+              <p className="text-muted-foreground">Empresas enriquecidas</p>
+            </div>
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.contactsCreatedTotal}</p>
+              <p className="text-muted-foreground">Contactos personales</p>
+            </div>
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.companiesWithOrganizationalEmail}</p>
+              <p className="text-muted-foreground">Con email organizacional</p>
+            </div>
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.opportunitiesCreated}</p>
+              <p className="text-muted-foreground">Oportunidades creadas</p>
+            </div>
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.draftsCreated}</p>
+              <p className="text-muted-foreground">Borradores creados</p>
+            </div>
+            <div>
+              <p className={`text-base font-semibold tabular-nums ${report.companiesPendingInvestigation > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
+                {report.companiesPendingInvestigation}
+              </p>
+              <p className="text-muted-foreground">Pendientes de investigación</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TagList label="Proveedores usados" items={report.providersUsed} variant="info" />
       <TagList label="Proveedores omitidos" items={report.providersOmitted} variant="warning" />
 
@@ -529,6 +577,16 @@ const HIRING_STATUS_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   NO_SIGNAL: "neutral",
   BLOCKED: "danger",
   UNKNOWN: "neutral",
+};
+
+// F16: badges de Hiring Confidence -- segunda dimensión INDEPENDIENTE de
+// Business Confidence (arriba), qué tan probable es que valga la pena
+// contactar (señal de contratación + carreras + emails + contactos).
+const HIRING_CONFIDENCE_VARIANTS: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  HIGH: "success",
+  MEDIUM: "warning",
+  LOW: "neutral",
+  NONE: "neutral",
 };
 
 // F7.10: badges de Opportunity Recommendation -- nunca implica que la
@@ -652,12 +710,26 @@ function CompanyConversionCard({ v, company }: { v: CompanyValidationRecord; com
             <Badge variant="neutral" title="Company creada por esta misión">
               Company creada
             </Badge>
-            <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"} title="Clasificación de negocio">
+            <Badge variant={BUSINESS_CONFIDENCE_VARIANTS[v.businessConfidence] ?? "neutral"} title="Business Confidence -- exclusivamente evidencia de la empresa (nombre, categorías reales del proveedor, dominio, descripción), nunca la query que la encontró">
               {v.businessConfidence}
             </Badge>
+            {/* F16: segunda dimensión, independiente de Business Confidence --
+                qué tan probable es que valga la pena contactar. */}
+            {v.hiringConfidenceTier && v.hiringConfidenceTier !== "NONE" && (
+              <Badge variant={HIRING_CONFIDENCE_VARIANTS[v.hiringConfidenceTier] ?? "neutral"} title="Hiring Confidence -- señal de contratación + carreras + emails + contactos reales">
+                Hiring: {v.hiringConfidenceTier}
+              </Badge>
+            )}
             {v.hiringStatus && (
               <Badge variant={HIRING_STATUS_VARIANTS[v.hiringStatus] ?? "neutral"} title="Señal de contratación">
                 {formatStatusLabel(v.hiringStatus)}
+              </Badge>
+            )}
+            {/* F16: clasificación (nunca exclusión automática) -- el nombre
+                coincide con un cliente de infraestructura crítica conocido. */}
+            {v.isClientOwnerCandidate && (
+              <Badge variant="warning" title={`Nombre coincide con: ${v.clientOwnerAssociations.join(", ")}`}>
+                CLIENT_OWNER
               </Badge>
             )}
             {outcomeBadges.map((b, i) => (
@@ -665,6 +737,13 @@ function CompanyConversionCard({ v, company }: { v: CompanyValidationRecord; com
                 {b.label}
               </Badge>
             ))}
+            {/* F15: sin persona real encontrada, pero con un canal
+                organizacional usable -- nunca "sin acción". */}
+            {v.readyForOrganizationalContact && (
+              <Badge variant="info" title="Sin persona real identificada -- listo para contacto vía email organizacional">
+                Listo para contacto organizacional
+              </Badge>
+            )}
           </div>
         </div>
         <Button size="sm" variant="ghost" className="shrink-0 gap-1" onClick={() => setExpanded((e) => !e)}>
@@ -679,6 +758,7 @@ function CompanyConversionCard({ v, company }: { v: CompanyValidationRecord; com
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
             {v.detectedBusinessType && <span>Tipo: {v.detectedBusinessType}</span>}
             {v.detectedSector && <span>Sector: {v.detectedSector}</span>}
+            {v.providerTypes.length > 0 && <span>Categorías del proveedor: {v.providerTypes.join(", ")}</span>}
             <span>CompanyContactPoint creados: {v.companyContactPointsCreated}</span>
             {!v.hasValidEmail && <span className="text-amber-600 dark:text-amber-400">Sin email organizacional válido</span>}
           </div>
