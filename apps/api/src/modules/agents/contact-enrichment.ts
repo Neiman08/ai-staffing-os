@@ -128,6 +128,16 @@ export interface ContactEnrichmentReport {
   rolesWithoutContact: string[];
   sourcesUsed: string[];
   patternsFailed: string[];
+  // F16 debt fix: proveedores CONSIDERADOS por esta cascada (PDL,
+  // Hunter.io) pero nunca intentados en absoluto -- credenciales
+  // ausentes o presupuesto de proveedor de datos excedido, siempre
+  // decidido ANTES de cualquier request real. Separado a propósito de
+  // patternsFailed (que sigue reservado para intentos reales que sí
+  // salieron -- 402/429/errores de red, incluido el eco del health-gate
+  // de provider-health.ts para no repetir la misma llamada condenada por
+  // cada empresa) -- nunca se mezclan, un proveedor con un intento real
+  // fallido/degradado NUNCA aparece acá.
+  providersOmitted: string[];
   providerStatus: ProviderStatusValue;
   costUsd: number;
   cancelled: boolean;
@@ -147,6 +157,7 @@ function emptyReport(patternsFailed: string[] = [], rolesWithoutContact: string[
     rolesWithoutContact,
     sourcesUsed: [],
     patternsFailed,
+    providersOmitted: [],
     providerStatus: "NOT_CONFIGURED",
     costUsd: 0,
     cancelled: false,
@@ -382,6 +393,7 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
   const contactsCreated: CreatedContactRecord[] = [];
   const sourcesUsed = new Set<string>();
   const patternsFailed: string[] = [];
+  const providersOmitted: string[] = [];
   let candidatesFound = 0;
   let duplicatesSkipped = 0;
   let insufficientDataSkipped = 0;
@@ -407,12 +419,19 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
   // ---------- Fuente 1: People Data Labs ----------
   const pdlApiKey = params.peopleDataLabsApiKey ?? env.PEOPLEDATALABS_API_KEY;
   if (!pdlApiKey) {
-    patternsFailed.push("People Data Labs no configurada (PEOPLEDATALABS_API_KEY ausente) -- se continúa con las demás fuentes");
+    // F16 debt fix: esto es una OMISIÓN real (proveedor considerado por
+    // la cascada, nunca intentado por falta de credenciales) -- va a
+    // providersOmitted, nunca a patternsFailed (ese campo queda
+    // reservado para intentos reales que sí salieron, ver el comentario
+    // en ContactEnrichmentReport).
+    providersOmitted.push("People Data Labs omitido: PEOPLEDATALABS_API_KEY no configurada -- se continúa con las demás fuentes.");
   } else {
     const budgetStatus = await getDataProviderBudgetStatus(ctx.tenantId);
     if (budgetStatus.exceeded) {
       log(params.taskId, "data provider budget exceeded, skipping PDL", { ...budgetStatus });
-      patternsFailed.push(`presupuesto de proveedor de datos excedido ($${budgetStatus.spentUsd.toFixed(2)}/$${budgetStatus.budgetUsd.toFixed(2)}) -- se continúa con las demás fuentes`);
+      providersOmitted.push(
+        `People Data Labs omitido: presupuesto de proveedor de datos excedido ($${budgetStatus.spentUsd.toFixed(2)}/$${budgetStatus.budgetUsd.toFixed(2)}) -- se continúa con las demás fuentes.`,
+      );
     } else {
       const provider = params.contactProvider ?? REAL_CONTACT_PROVIDER;
       const limit = Math.min(targetRoles.length * 2, 10);
@@ -460,7 +479,9 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
   // ---------- Fuente 3: Hunter.io Domain Search ----------
   const hunterApiKey = params.hunterApiKey ?? env.HUNTER_API_KEY;
   if (!cancelled && remainingRoles().length > 0 && !hunterApiKey) {
-    patternsFailed.push("Hunter.io no configurada (HUNTER_API_KEY ausente)");
+    // F16 debt fix: misma razón que PDL arriba -- omisión real, va a
+    // providersOmitted.
+    providersOmitted.push("Hunter.io omitido: HUNTER_API_KEY no configurada.");
   }
   if (!cancelled && remainingRoles().length > 0 && hunterApiKey) {
     const domain = deriveDomain(params.companyWebsite);
@@ -511,6 +532,7 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
     roleMismatchSkipped,
     rolesWithoutContact,
     sourcesUsed: Array.from(sourcesUsed),
+    providersOmitted,
   });
 
   return {
@@ -522,6 +544,7 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
     rolesWithoutContact,
     sourcesUsed: Array.from(sourcesUsed),
     patternsFailed,
+    providersOmitted,
     providerStatus,
     costUsd,
     cancelled,

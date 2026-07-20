@@ -49,6 +49,11 @@ after(async () => {
   }
   if (createdTenantIds.length) {
     await prisma.company.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    // F16 debt fix: el test de presupuesto excedido crea AgentTask/
+    // AgentInstance propios -- se limpian acá igual que el resto,
+    // Tenant no cascadea (tenantId sin @relation, ver schema.prisma).
+    await prisma.agentTask.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    await prisma.agentInstance.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
   }
 });
@@ -136,7 +141,7 @@ test("rolePlan sin targetRoles: no llama al proveedor", async () => {
   assert.equal(report.candidatesFound, 0);
 });
 
-test("sin PEOPLEDATALABS_API_KEY: no llama al proveedor, motivo honesto en patternsFailed", async () => {
+test("sin PEOPLEDATALABS_API_KEY: no llama al proveedor, motivo honesto en providersOmitted (F16 debt fix: nunca en patternsFailed -- una omisión real por falta de credenciales, no un intento fallido)", async () => {
   const { tenantId, companyId } = await setupTenantWithCompany("no-api-key");
   let called = false;
   const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
@@ -165,9 +170,51 @@ test("sin PEOPLEDATALABS_API_KEY: no llama al proveedor, motivo honesto en patte
     }),
   );
   assert.equal(called, false);
-  assert.ok(report.patternsFailed[0]!.includes("PEOPLEDATALABS_API_KEY"));
-  assert.ok(report.patternsFailed.some((p) => p.includes("HUNTER_API_KEY")));
+  assert.ok(report.providersOmitted.some((p) => p.includes("PEOPLEDATALABS_API_KEY")));
+  assert.ok(report.providersOmitted.some((p) => p.includes("HUNTER_API_KEY")));
+  // Nunca en patternsFailed -- ese campo queda reservado para intentos
+  // reales que sí salieron (402/429/errores de red), nunca para una
+  // omisión por credenciales ausentes.
+  assert.ok(!report.patternsFailed.some((p) => p.includes("PEOPLEDATALABS_API_KEY")));
+  assert.ok(!report.patternsFailed.some((p) => p.includes("HUNTER_API_KEY")));
   assert.deepEqual(report.rolesWithoutContact, ["HR Manager"]);
+});
+
+test("F16 debt fix: presupuesto de proveedor de datos excedido -> PDL omitido con razón verificable en providersOmitted, nunca en patternsFailed, nunca se llama al proveedor real", async () => {
+  const { tenantId, companyId } = await setupTenantWithCompany("budget-exceeded");
+  await prisma.tenant.update({ where: { id: tenantId }, data: { settings: { dataProviderBudgetUsd: 0.01 } } });
+  const discoveryDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "discovery" } });
+  const agentInstance = await prisma.agentInstance.create({ data: { tenantId, definitionId: discoveryDefinition.id, isActive: true } });
+  await prisma.agentTask.create({
+    data: {
+      tenantId,
+      agentInstanceId: agentInstance.id,
+      type: "discover_companies",
+      status: "DONE",
+      triggeredBy: "AGENT",
+      input: {},
+      costUsd: 5,
+    },
+  });
+  let called = false;
+  const report = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    enrichCompanyWithDecisionContacts({
+      taskId: "test-task",
+      companyId,
+      companyName: "Acme Manufacturing",
+      companyWebsite: "https://acme-mfg.com",
+      companyState: "IL",
+      companyCity: "Chicago",
+      industryName: "Manufacturing",
+      rolePlan: rolePlanFixture(companyId),
+      contactProvider: fakeProvider({ searchPeopleDataLabs: async () => { called = true; return emptyContactResult(); } }),
+      peopleDataLabsApiKey: "fake-key-for-tests",
+      hunterApiKey: "",
+    }),
+  );
+  assert.equal(called, false);
+  assert.ok(report.providersOmitted.some((p) => p.includes("People Data Labs omitido") && p.includes("presupuesto")));
+  assert.ok(!report.patternsFailed.some((p) => p.includes("presupuesto")));
 });
 
 test("candidato con email de dominio oficial: emailDomainTrust VERIFIED, nunca crea CompanyContactPoint", async () => {
@@ -346,6 +393,13 @@ test("F15: PDL sin resultados (402/vacío) -> Website Intelligence encuentra la 
   assert.ok(report.sourcesUsed.includes("Website Intelligence"));
   const contactRow = await prisma.contact.findUniqueOrThrow({ where: { id: report.contactsCreated[0]!.contactId } });
   assert.equal(contactRow.source, "Website Intelligence");
+  // F16 debt fix: PDL fue REALMENTE intentado y respondió 402 -- eso es
+  // un fallo real, va a patternsFailed, JAMÁS a providersOmitted (el
+  // único rol planificado ya quedó cubierto por Website Intelligence
+  // antes de siquiera llegar al chequeo de Hunter, así que tampoco hay
+  // ninguna omisión real de Hunter que reportar acá).
+  assert.ok(report.patternsFailed.includes("HTTP 402: no credits"));
+  assert.deepEqual(report.providersOmitted, []);
 });
 
 test("F15: PDL y Website sin resultados -> Hunter.io encuentra la persona real, Contact creado con source correcto", async () => {

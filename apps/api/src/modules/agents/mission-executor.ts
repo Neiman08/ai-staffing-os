@@ -1108,6 +1108,15 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           });
           if (contactEnrichment.costUsd > 0) totalCostUsd += contactEnrichment.costUsd;
           for (const source of contactEnrichment.sourcesUsed) providersUsed.add(source);
+          // F16 debt fix: antes providersOmitted SOLO se poblaba desde
+          // executeOneQuery (Google Places/Overpass) -- People Data
+          // Labs/Hunter.io nunca aparecían acá aunque genuinamente se
+          // hayan omitido por falta de credenciales o presupuesto
+          // excedido (ver contact-enrichment.ts, que ahora separa esos
+          // 2 motivos de patternsFailed). Mismo Set que ya usa la capa
+          // de discovery -- un solo providersOmitted real para toda la
+          // misión, nunca dos fuentes de verdad distintas.
+          for (const omitted of contactEnrichment.providersOmitted) providersOmitted.add(omitted);
           contactCandidatesFoundTotal += contactEnrichment.candidatesFound;
           contactsCreatedTotal += contactEnrichment.contactsCreated.length;
           contactDuplicatesSkippedTotal += contactEnrichment.duplicatesSkipped;
