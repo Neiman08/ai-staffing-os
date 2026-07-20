@@ -377,7 +377,13 @@ const DISCOVERY_STATE_LABELS: Record<string, string> = {
  * ejecutor (detail.discoveryExecution !== null) — nunca se muestra para
  * misiones legacy/planned-only.
  */
-function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDetail["discoveryExecution"]> }) {
+function DiscoveryExecutionSection({
+  report,
+  isFallbackOnly,
+}: {
+  report: NonNullable<MissionDetail["discoveryExecution"]>;
+  isFallbackOnly: boolean;
+}) {
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
       <div className="flex items-center justify-between gap-2">
@@ -445,34 +451,50 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
       {/* F14: agregados reales de conversión "descubrimiento -> acción
           comercial" -- guardia explícita (leadsCreated != null) porque
           una misión anterior a F14 nunca tiene estos campos en el JSON
-          congelado de AgentTask.output. */}
-      {report.leadsCreated != null && (
-        <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
-          <div>
-            <p className="text-base font-semibold tabular-nums">{report.leadsCreated}</p>
-            <p className="text-muted-foreground">Leads creados</p>
-          </div>
-          <div>
-            <p className="text-base font-semibold tabular-nums">{report.opportunitiesCreated}</p>
-            <p className="text-muted-foreground">Opportunities creadas</p>
-          </div>
-          {report.opportunitiesBlockedByRestriction > 0 && (
+          congelado de AgentTask.output.
+          F16 debt fix: cuando este reporte viene de discoveryFallback
+          (isFallbackOnly), leadsCreated/opportunitiesCreated/draftsCreated
+          son SIEMPRE 0 por diseño -- ese sub-paso nunca convierte, las
+          Company recién descubiertas siguen hacia el pipeline clásico de
+          la misión. Mostrar esos 0 acá era engañoso (parecía "0 leads
+          creados por la misión" cuando el pipeline clásico sí creó
+          leads/opportunities reales, visibles en el resumen de cabecera
+          de la misión) -- se reemplaza por una nota explícita, nunca se
+          inventa un número alternativo. */}
+      {isFallbackOnly ? (
+        <p className="rounded-md border border-border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+          Este descubrimiento no crea Leads/Opportunities/borradores directamente — las empresas encontradas
+          pasan al pipeline comercial de la misión, ver los totales reales en el resumen de arriba.
+        </p>
+      ) : (
+        report.leadsCreated != null && (
+          <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
             <div>
-              <p className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">{report.opportunitiesBlockedByRestriction}</p>
-              <p className="text-muted-foreground">Opportunities bloqueadas</p>
+              <p className="text-base font-semibold tabular-nums">{report.leadsCreated}</p>
+              <p className="text-muted-foreground">Leads creados</p>
             </div>
-          )}
-          <div>
-            <p className="text-base font-semibold tabular-nums">{report.draftsCreated}</p>
-            <p className="text-muted-foreground">Borradores generados</p>
-          </div>
-          {report.draftsBlockedByRestriction > 0 && (
             <div>
-              <p className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">{report.draftsBlockedByRestriction}</p>
-              <p className="text-muted-foreground">Borradores bloqueados</p>
+              <p className="text-base font-semibold tabular-nums">{report.opportunitiesCreated}</p>
+              <p className="text-muted-foreground">Opportunities creadas</p>
             </div>
-          )}
-        </div>
+            {report.opportunitiesBlockedByRestriction > 0 && (
+              <div>
+                <p className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">{report.opportunitiesBlockedByRestriction}</p>
+                <p className="text-muted-foreground">Opportunities bloqueadas</p>
+              </div>
+            )}
+            <div>
+              <p className="text-base font-semibold tabular-nums">{report.draftsCreated}</p>
+              <p className="text-muted-foreground">Borradores generados</p>
+            </div>
+            {report.draftsBlockedByRestriction > 0 && (
+              <div>
+                <p className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">{report.draftsBlockedByRestriction}</p>
+                <p className="text-muted-foreground">Borradores bloqueados</p>
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* F15: "empresas y personas con las que realmente podamos
@@ -482,7 +504,9 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
           nunca tiene estos campos. */}
       {report.companiesEnriched != null && (
         <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Resultado real de la misión</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {isFallbackOnly ? "Resultado de este descubrimiento" : "Resultado real de la misión"}
+          </p>
           <div className="grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-7">
             <div>
               <p className="text-base font-semibold tabular-nums">{report.companiesCreated}</p>
@@ -500,14 +524,22 @@ function DiscoveryExecutionSection({ report }: { report: NonNullable<MissionDeta
               <p className="text-base font-semibold tabular-nums">{report.companiesWithOrganizationalEmail}</p>
               <p className="text-muted-foreground">Con email organizacional</p>
             </div>
-            <div>
-              <p className="text-base font-semibold tabular-nums">{report.opportunitiesCreated}</p>
-              <p className="text-muted-foreground">Oportunidades creadas</p>
-            </div>
-            <div>
-              <p className="text-base font-semibold tabular-nums">{report.draftsCreated}</p>
-              <p className="text-muted-foreground">Borradores creados</p>
-            </div>
+            {/* F16 debt fix: opportunitiesCreated/draftsCreated de ESTE
+                reporte son siempre 0 cuando viene de discoveryFallback --
+                se ocultan acá (ya se explican arriba), nunca se muestran
+                como si fueran el resultado comercial de la misión. */}
+            {!isFallbackOnly && (
+              <div>
+                <p className="text-base font-semibold tabular-nums">{report.opportunitiesCreated}</p>
+                <p className="text-muted-foreground">Oportunidades creadas</p>
+              </div>
+            )}
+            {!isFallbackOnly && (
+              <div>
+                <p className="text-base font-semibold tabular-nums">{report.draftsCreated}</p>
+                <p className="text-muted-foreground">Borradores creados</p>
+              </div>
+            )}
             <div>
               <p className={`text-base font-semibold tabular-nums ${report.companiesPendingInvestigation > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
                 {report.companiesPendingInvestigation}
@@ -992,6 +1024,21 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
         // ambos a la vez, así que mostrar el que esté presente reutiliza
         // las 3 secciones de abajo sin duplicar ningún componente.
         const discoveryReport = detail.discoveryExecution ?? detail.discoveryFallback;
+        // F16 debt fix (hallazgo real del PO: "la misión muestra 0
+        // Leads/0 Opportunities/0 Drafts" mientras las tareas y el
+        // Executive Report mostraban actividad comercial real): cuando
+        // el reporte viene de discoveryFallback (runAutoExternalDiscoveryFallback,
+        // mission-orchestrator.ts), leadsCreated/opportunitiesCreated/
+        // draftsCreated de ESTE reporte son SIEMPRE 0 por diseño -- ese
+        // llamador nunca activa convertToCommercialActions a propósito
+        // (las Company recién descubiertas siguen hacia el pipeline
+        // clásico de abajo, que sí crea Lead/Opportunity/borrador real,
+        // reflejados en detail.leadsCreated/opportunitiesCreated/
+        // draftsAwaitingApproval -- ver el resumen de cabecera). Mostrar
+        // los 0 de ESTE sub-reporte como si fueran el resultado comercial
+        // de la misión completa era engañoso -- se oculta acá y se
+        // aclara con una nota, nunca se inventa un número.
+        const discoveryReportIsFallbackOnly = !detail.discoveryExecution && !!detail.discoveryFallback;
         return (
         <div className="space-y-4">
           <div>
@@ -1018,7 +1065,9 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
           {detail.missionPlan && (
             <MissionPlanSection plan={detail.missionPlan} warnings={detail.ceoIntentMeta?.warnings ?? []} />
           )}
-          {discoveryReport && <DiscoveryExecutionSection report={discoveryReport} />}
+          {discoveryReport && (
+            <DiscoveryExecutionSection report={discoveryReport} isFallbackOnly={discoveryReportIsFallbackOnly} />
+          )}
           {discoveryReport && <BusinessValidationSection report={discoveryReport} selectedCompanies={detail.selectedCompanies} />}
           {detail.unrecognizedTerms.length > 0 && (
             <div>

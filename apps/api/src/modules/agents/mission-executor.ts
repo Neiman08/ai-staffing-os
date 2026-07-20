@@ -561,9 +561,18 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const providers = params.providers ?? REAL_PROVIDERS;
   const googlePlacesApiKey = params.googlePlacesApiKey ?? env.GOOGLE_PLACES_API_KEY;
   const requestedCompanyCount = params.plan.stopConditions.maxCompanies;
-  const limitations: string[] = [
-    "Business Validation no incluye provider types ni descripción pública — ningún proveedor conectado los popula todavía (evidencia limitada a nombre/dominio/query).",
-  ];
+  // F16 debt fix: antes había acá un mensaje FIJO afirmando que ningún
+  // proveedor poblaba providerTypes -- quedó desactualizado desde F16
+  // (google-places.ts ya propaga place.types real hasta
+  // BusinessValidationInput.providerTypes, ver business-validation.ts).
+  // La señal honesta y ya correcta es por-candidato: business-
+  // validation.ts:244 agrega "Sin provider types disponibles..." a
+  // validation.warnings SOLO cuando de verdad viene vacío para ESA
+  // fuente puntual (ej. Overpass, que no tiene equivalente de
+  // place.types) -- eso ya llega a report.validationWarnings ("Advertencias"
+  // en la UI). `limitations` queda vacío por defecto acá; cualquier
+  // limitación real y actual se agrega más abajo, nunca una fija.
+  const limitations: string[] = [];
 
   const emptyReport = (missionState: MissionExecutionState, stopReason: string): DiscoveryExecutionReport => ({
     requestedCompanyCount,

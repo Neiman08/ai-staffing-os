@@ -19,7 +19,7 @@ import { AppError } from "../../../core/errors";
 import type { UsageAccumulator } from "../usage";
 import { interpretBusinessIntent } from "../../ceo-intelligence/intent-interpreter";
 import { normalizeText } from "../../ceo-intelligence/text-normalize";
-import { detectCriticalInfrastructureClients } from "../../ceo-intelligence/critical-infrastructure-clients";
+import { CRITICAL_INFRASTRUCTURE_CLIENTS, detectCriticalInfrastructureClients } from "../../ceo-intelligence/critical-infrastructure-clients";
 
 function tryParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
   try {
@@ -149,37 +149,63 @@ export interface MissionContactCoverage {
  * la misión (closeMission) siempre marcaba COMPLETED sin mirar si en
  * verdad se encontró algo de lo que la instrucción pedía. Esto agrega el
  * dato real que le falta: de las Company que esta misión realmente
- * intentó enriquecer con contactos (find_contacts/find_email), cuántas
- * terminaron con al menos un punto de contacto real — un Contact
- * nombrado O un email organizacional en Company.email (§6 del pedido:
- * ambos cuentan, nunca se descarta un email real solo porque no tiene un
- * nombre asociado) — y cuántas se quedaron sin nada, y por qué (créditos
- * agotados, proveedor no configurado, etc., nunca "no se sabe").
+ * consideró, cuántas terminaron con al menos un punto de contacto real —
+ * un Contact nombrado O un email organizacional en Company.email (§6 del
+ * pedido: ambos cuentan, nunca se descarta un email real solo porque no
+ * tiene un nombre asociado) — y cuántas se quedaron sin nada, y por qué
+ * (créditos agotados, proveedor no configurado, etc., nunca "no se sabe").
+ *
+ * F16 debt fix (hallazgo real del PO: el Executive Report decía "no se
+ * buscaron contactos" en una misión que sí ejecutó Hunter.io/People Data
+ * Labs y creó Contacts reales): esta función buscaba AgentTask hijos de
+ * type "find_contacts"/"find_email" -- esos tipos NUNCA existen como
+ * AgentTask real en este código (confirmado: 0 filas en toda la base,
+ * ver también DATA_PROVIDER_TASK_TYPES en data-provider-budget.ts, que
+ * tiene el mismo problema). Contact Intelligence corre desde F7.7 DENTRO
+ * de discover_companies (mission-executor.ts, enrichCompanyWithDecisionContacts),
+ * sin crear un AgentTask propio por compañía -- así que companyIds
+ * siempre quedaba vacío y esto siempre devolvía companiesConsidered=0,
+ * sin importar cuántos Contacts reales se hubieran creado. Se reemplaza
+ * por las DOS fuentes reales de "compañías que esta misión consideró":
+ * select_target_companies (pipeline clásico, campaignId->companyIds) y
+ * discover_companies (F7.3/F13/F14, vía Company.discoveredByAgentTaskId
+ * -- el mismo vínculo que ya usa missions/service.ts para "empresas
+ * seleccionadas"). providersOmitted sale del discoveryExecution/
+ * discoveryFallback ya persistido en el output de esta misión (población
+ * real hecha por executeDiscoveryPlan), no de un task output que nunca
+ * existió.
  */
 export async function computeContactCoverage(missionTaskId: string): Promise<MissionContactCoverage> {
-  const children = await scopedDb.agentTask.findMany({ where: { parentTaskId: missionTaskId } });
-  const findContactsTasks = children.filter((t) => t.type === "find_contacts");
-  const findEmailTasks = children.filter((t) => t.type === "find_email");
-  const intelligenceTasks = [...findContactsTasks, ...findEmailTasks];
+  const [missionTask, children] = await Promise.all([
+    scopedDb.agentTask.findUnique({ where: { id: missionTaskId } }),
+    scopedDb.agentTask.findMany({ where: { parentTaskId: missionTaskId } }),
+  ]);
 
-  const companyIds = Array.from(
-    new Set(
-      intelligenceTasks
-        .map((t) => (t.input as { companyId?: string } | null)?.companyId)
-        .filter((id): id is string => !!id),
-    ),
-  );
+  const selectTargetCompanyIds = children
+    .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
+    .flatMap((t) => (t.output as { companyIds?: string[] } | null)?.companyIds ?? []);
 
-  const providersOmitted = new Set<string>();
-  for (const t of intelligenceTasks) {
-    const output = t.output as { providerStatus?: string; hunterProviderStatus?: string } | null;
-    if (output?.providerStatus && output.providerStatus !== "AVAILABLE") {
-      providersOmitted.add(`People Data Labs: ${output.providerStatus}`);
-    }
-    if (output?.hunterProviderStatus && output.hunterProviderStatus !== "AVAILABLE") {
-      providersOmitted.add(`Hunter.io: ${output.hunterProviderStatus}`);
-    }
-  }
+  const discoverTaskIds = children
+    .filter((t) => t.type === "discover_companies" && t.status === "DONE")
+    .map((t) => t.id);
+  const discoveredCompanies =
+    discoverTaskIds.length > 0
+      ? await scopedDb.company.findMany({
+          where: { discoveredByAgentTaskId: { in: discoverTaskIds } },
+          select: { id: true },
+        })
+      : [];
+
+  const companyIds = Array.from(new Set([...selectTargetCompanyIds, ...discoveredCompanies.map((c) => c.id)]));
+
+  const missionOutput = (missionTask?.output ?? {}) as {
+    discoveryExecution?: { providersOmitted?: string[] };
+    discoveryFallback?: { providersOmitted?: string[] };
+  };
+  const providersOmitted = new Set<string>([
+    ...(missionOutput.discoveryExecution?.providersOmitted ?? []),
+    ...(missionOutput.discoveryFallback?.providersOmitted ?? []),
+  ]);
 
   if (companyIds.length === 0) {
     return {
@@ -232,9 +258,34 @@ export async function computeContactCoverage(missionTaskId: string): Promise<Mis
  * de infraestructura crítica reales, reconocidos por su propia base de
  * conocimiento (critical-infrastructure-clients.ts) — nunca deben
  * aparecer como "no reconocidos" solo porque no son una industria.
+ *
+ * F16 debt fix (hallazgo real: "Compass, Vantage, STACK, Aligned, Switch"
+ * SEGUÍAN apareciendo como unrecognizedTerms pese a que
+ * detectCriticalInfrastructureClients ya sabe resolverlos
+ * CONTEXTUALMENTE cuando la instrucción menciona infraestructura
+ * crítica/data centers): el bug estaba acá, no en critical-infrastructure-
+ * clients.ts -- este filtro evaluaba cada término COMPLETAMENTE AISLADO
+ * (ej. la palabra suelta "Compass", sin el resto de la frase), así que
+ * el chequeo contextual nunca podía ver "infraestructura crítica" en
+ * ningún lado. Se resuelve la lista de clientes UNA sola vez contra la
+ * instrucción COMPLETA (rawInstruction, con todo su contexto real), y
+ * cada término se compara contra los alias (completos Y contextuales) de
+ * esos clientes ya resueltos -- nunca se vuelve a evaluar el término
+ * solo para esto.
  */
-export function filterActuallyUnrecognizedTerms(unrecognizedTerms: string[], externalSearchTerms: string[]): string[] {
+export function filterActuallyUnrecognizedTerms(
+  unrecognizedTerms: string[],
+  externalSearchTerms: string[],
+  rawInstruction: string,
+): string[] {
   const normalizedSearchPhrases = externalSearchTerms.map((t) => normalizeText(t));
+  const clientsRecognizedInFullContext = new Set(detectCriticalInfrastructureClients(rawInstruction));
+  const recognizedClientAliasesNormalized = new Set(
+    CRITICAL_INFRASTRUCTURE_CLIENTS.filter((c) => clientsRecognizedInFullContext.has(c.name))
+      .flatMap((c) => [...c.aliases, ...(c.contextualAliases ?? [])])
+      .map((alias) => normalizeText(alias)),
+  );
+
   return unrecognizedTerms.filter((term) => {
     const normalizedTerm = normalizeText(term);
     if (!normalizedTerm) return false;
@@ -253,10 +304,14 @@ export function filterActuallyUnrecognizedTerms(unrecognizedTerms: string[], ext
     // humano leyendo solo esa palabra suelta.
     const recognizedByTaxonomy = interpretBusinessIntent(term).matchedTaxonomyKeys.length > 0;
     if (recognizedByTaxonomy) return false;
-    // (c) F15: es un cliente de infraestructura crítica conocido (QTS,
-    // Meta, Google...) -- nunca un sector, pero tampoco "no reconocido".
-    const recognizedAsCriticalInfrastructureClient = detectCriticalInfrastructureClients(term).length > 0;
-    return !recognizedAsCriticalInfrastructureClient;
+    // (c) F15/F16: es un cliente de infraestructura crítica conocido (QTS,
+    // Meta, Google... o un alias corto contextual como "Compass"/
+    // "Vantage" cuando la instrucción completa ya trae contexto real de
+    // infraestructura crítica/data centers) -- nunca un sector, pero
+    // tampoco "no reconocido". Comparado contra los alias YA resueltos
+    // arriba con el contexto completo, nunca reevaluado aislado.
+    if (recognizedClientAliasesNormalized.has(normalizedTerm)) return false;
+    return true;
   });
 }
 
@@ -366,6 +421,7 @@ Regla crítica sobre missionRestrictions: estos 4 flags son SIEMPRE true salvo q
           unrecognizedTerms: filterActuallyUnrecognizedTerms(
             [...parsed.unrecognizedTerms, ...droppedTerms],
             parsed.externalSearchTerms ?? [],
+            input.rawInstruction,
           ),
           useExternalDiscovery: parsed.useExternalDiscovery ?? false,
           externalSearchTerms: parsed.externalSearchTerms ?? [],
