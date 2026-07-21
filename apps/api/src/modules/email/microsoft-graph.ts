@@ -462,6 +462,12 @@ export interface MailboxIdentity {
   address: string;
   sentItemsFolderId: string | null;
   error?: string;
+  directoryObjectId: string | null;
+  userPrincipalName: string | null;
+  mail: string | null;
+  displayName: string | null;
+  directoryError?: string;
+  mailboxSettingsError?: string;
 }
 
 /**
@@ -472,16 +478,54 @@ export interface MailboxIdentity {
  * Si dos direcciones devuelven el mismo sentItemsFolderId, es
  * matemáticamente el mismo almacén de buzón -- evidencia real de Graph,
  * nunca una suposición. Sola lectura.
+ *
+ * El perfil de directorio (GET /users/{address}) es un intento best-effort
+ * aparte -- requiere User.Read.All (Application), que puede no estar
+ * concedido; si falla, se reporta el error real en `directoryError` en vez
+ * de ocultarlo, nunca se asume nada sobre id/UPN/mail/displayName.
  */
 export async function resolveMailboxIdentity(mailbox: string, creds: GraphCredentials): Promise<MailboxIdentity> {
   const tokenResult = await getAccessToken(undefined, creds);
-  if ("error" in tokenResult) return { address: mailbox, sentItemsFolderId: null, error: `token: ${tokenResult.error}` };
+  if ("error" in tokenResult) {
+    return {
+      address: mailbox,
+      sentItemsFolderId: null,
+      error: `token: ${tokenResult.error}`,
+      directoryObjectId: null,
+      userPrincipalName: null,
+      mail: null,
+      displayName: null,
+    };
+  }
 
   const folderResult = await graphFetch(undefined, tokenResult.accessToken, `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems?$select=id`, { method: "GET" }, undefined);
-  if ("error" in folderResult) return { address: mailbox, sentItemsFolderId: null, error: `sentitems lookup: ${folderResult.error}` };
-  const folder = folderResult.json as { id?: string } | null;
+  const folder = "error" in folderResult ? null : (folderResult.json as { id?: string } | null);
+  const folderError = "error" in folderResult ? `sentitems lookup: ${folderResult.error}` : undefined;
 
-  return { address: mailbox, sentItemsFolderId: folder?.id ?? null };
+  const userResult = await graphFetch(
+    undefined,
+    tokenResult.accessToken,
+    `/users/${encodeURIComponent(mailbox)}?$select=id,userPrincipalName,mail,displayName`,
+    { method: "GET" },
+    undefined,
+  );
+  const user = "error" in userResult ? null : (userResult.json as { id?: string; userPrincipalName?: string; mail?: string; displayName?: string } | null);
+  const directoryError = "error" in userResult ? `user lookup: ${userResult.error}` : undefined;
+
+  const settingsResult = await graphFetch(undefined, tokenResult.accessToken, `/users/${encodeURIComponent(mailbox)}/mailboxSettings`, { method: "GET" }, undefined);
+  const mailboxSettingsError = "error" in settingsResult ? `mailboxSettings lookup: ${settingsResult.error}` : undefined;
+
+  return {
+    address: mailbox,
+    sentItemsFolderId: folder?.id ?? null,
+    error: folderError,
+    directoryObjectId: user?.id ?? null,
+    userPrincipalName: user?.userPrincipalName ?? null,
+    mail: user?.mail ?? null,
+    displayName: user?.displayName ?? null,
+    directoryError,
+    mailboxSettingsError,
+  };
 }
 
 export async function findMessagesBySubject(mailbox: string, subject: string, creds: GraphCredentials): Promise<{ error?: string; messages: Array<{ id: string; subject: string; sentDateTime: string | null; parentFolderId: string | null }> }> {
