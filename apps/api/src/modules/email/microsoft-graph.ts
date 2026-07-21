@@ -242,8 +242,18 @@ async function graphFetch(
       if (!res.ok) {
         let detail = "";
         try {
+          // F17 (pedido explícito: "reporta exactamente qué permiso o
+          // configuración falta"): antes solo se guardaba `error.code`
+          // (ej. "ErrorAccessDenied"), un código genérico que no dice
+          // POR QUÉ -- `error.message` de Graph suele nombrar el permiso
+          // real que falta (ej. "Application is missing required
+          // permission Mail.ReadWrite..."). Nunca contiene secretos
+          // (es texto de error de la API de Microsoft, no credenciales) --
+          // se trunca igual, nunca se asume que es corto.
           const body = (await res.json()) as { error?: { code?: string; message?: string } };
-          detail = body.error?.code ?? "";
+          const code = body.error?.code ?? "";
+          const message = body.error?.message ?? "";
+          detail = [code, message].filter(Boolean).join(": ").slice(0, 500);
         } catch {
           /* cuerpo no-JSON, se ignora */
         }
