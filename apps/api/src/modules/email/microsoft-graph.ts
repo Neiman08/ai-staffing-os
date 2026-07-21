@@ -246,6 +246,13 @@ async function graphFetch(
         headers: {
           authorization: `Bearer ${accessToken}`,
           "content-type": "application/json",
+          // Sin esto, el `id` de un mensaje cambia en cuanto Graph lo mueve
+          // de Drafts a Sent Items al enviarlo (comportamiento real
+          // confirmado: el id devuelto por el paso de creación dejó de
+          // existir segundos después del envío real) -- el id inmutable es
+          // el único que sigue siendo válido para lookups posteriores
+          // (Sent Items, threading) tras ese movimiento de carpeta.
+          prefer: 'IdType="ImmutableId"',
         },
         body: init.body ? JSON.stringify(init.body) : undefined,
         signal,
