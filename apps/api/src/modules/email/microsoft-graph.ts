@@ -398,7 +398,7 @@ export interface DeliveryInvestigationResult {
   sentDateTime: string | null;
   internetMessageId: string | null;
   from: string | null;
-  possibleNdrs: Array<{ subject: string; receivedDateTime: string | null; from: string | null }>;
+  possibleNdrs: Array<{ subject: string; receivedDateTime: string | null; from: string | null; bodyPreview: string | null }>;
 }
 
 /**
@@ -440,16 +440,16 @@ export async function investigateDelivery(mailbox: string, messageId: string, se
   const folder = "error" in folderResult ? null : (folderResult.json as { id?: string } | null);
   const inSentItems = !!folder?.id && message.parentFolderId === folder.id;
 
-  const ndrPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${sentAtIso}`)}&$select=subject,receivedDateTime,from&$top=25`;
+  const ndrPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${sentAtIso}`)}&$select=id,subject,receivedDateTime,from,bodyPreview&$top=25`;
   const ndrResult = await graphFetch(undefined, tokenResult.accessToken, ndrPath, { method: "GET" }, undefined);
-  const ndrBody = "error" in ndrResult ? null : (ndrResult.json as { value?: Array<{ subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string } } }> } | null);
+  const ndrBody = "error" in ndrResult ? null : (ndrResult.json as { value?: Array<{ id?: string; subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string } }; bodyPreview?: string }> } | null);
   const possibleNdrs = (ndrBody?.value ?? [])
     .filter((m) => {
       const subj = (m.subject ?? "").toLowerCase();
       const fromAddr = (m.from?.emailAddress?.address ?? "").toLowerCase();
-      return subj.includes("undeliverable") || subj.includes("delivery status") || subj.includes("failure") || fromAddr.includes("postmaster") || fromAddr.includes("mailer-daemon");
+      return subj.includes("undeliverable") || subj.includes("delivery status") || subj.includes("failure") || fromAddr.includes("postmaster") || fromAddr.includes("mailer-daemon") || fromAddr.includes("microsoftexchange");
     })
-    .map((m) => ({ subject: m.subject ?? "", receivedDateTime: m.receivedDateTime ?? null, from: m.from?.emailAddress?.address ?? null }));
+    .map((m) => ({ subject: m.subject ?? "", receivedDateTime: m.receivedDateTime ?? null, from: m.from?.emailAddress?.address ?? null, bodyPreview: m.bodyPreview ?? null }));
 
   const realFrom = message.from?.emailAddress ? `${message.from.emailAddress.name ?? ""} <${message.from.emailAddress.address ?? ""}>` : null;
   const toRecipients = (message.toRecipients ?? []).map((r) => r.emailAddress?.address ?? "").filter(Boolean);
