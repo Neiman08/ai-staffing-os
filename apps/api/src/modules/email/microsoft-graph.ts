@@ -425,11 +425,12 @@ export async function verifyMessageInSentItems(mailbox: string, messageId: strin
   // qué carpeta real quedó (parentFolderId), en vez de asumir que el
   // nombre de carpeta bien conocido "sentitems" funciona anidado en la
   // misma ruta que un id de mensaje específico.
-  const msgPath = `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}?$select=id,subject,sentDateTime,parentFolderId`;
+  const msgPath = `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}?$select=id,subject,sentDateTime,parentFolderId,from`;
   const msgResult = await graphFetch(undefined, tokenResult.accessToken, msgPath, { method: "GET" }, undefined);
   if ("error" in msgResult) return { found: false, detail: `message lookup: ${msgResult.error}` };
-  const message = msgResult.json as { id?: string; subject?: string; sentDateTime?: string; parentFolderId?: string } | null;
+  const message = msgResult.json as { id?: string; subject?: string; sentDateTime?: string; parentFolderId?: string; from?: { emailAddress?: { address?: string; name?: string } } } | null;
   if (!message?.id) return { found: false, detail: "mensaje no encontrado en el buzón" };
+  const realFrom = message.from?.emailAddress ? `${message.from.emailAddress.name ?? ""} <${message.from.emailAddress.address ?? ""}>` : "n/a";
 
   const folderPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems?$select=id`;
   const folderResult = await graphFetch(undefined, tokenResult.accessToken, folderPath, { method: "GET" }, undefined);
@@ -439,7 +440,7 @@ export async function verifyMessageInSentItems(mailbox: string, messageId: strin
   const inSentItems = !!folder?.id && message.parentFolderId === folder.id;
   return {
     found: inSentItems,
-    detail: `sentDateTime=${message.sentDateTime ?? "n/a"}, parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}`,
+    detail: `from=${realFrom}, sentDateTime=${message.sentDateTime ?? "n/a"}, parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}`,
   };
 }
 
