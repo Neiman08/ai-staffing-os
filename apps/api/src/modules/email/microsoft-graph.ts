@@ -389,3 +389,79 @@ export async function checkMicrosoftGraphHealth(creds: GraphCredentials): Promis
   if ("error" in result) return { healthy: false, reason: result.error };
   return { healthy: true, reason: null };
 }
+
+export interface DeliveryInvestigationResult {
+  foundInSentItems: boolean;
+  detail: string;
+  subject: string | null;
+  toRecipients: string[];
+  sentDateTime: string | null;
+  internetMessageId: string | null;
+  from: string | null;
+  possibleNdrs: Array<{ subject: string; receivedDateTime: string | null; from: string | null }>;
+}
+
+/**
+ * Reintroducido de forma puntual y autorizada explícitamente por el
+ * usuario ("autoriza un cambio de código puntual para reintroducir la
+ * verificación de Graph") -- investigación real de un correo no
+ * recibido: confirma ubicación en Sent Items, recupera destinatario/
+ * asunto/hora/internetMessageId reales, y busca en el Inbox cualquier
+ * NDR (Non-Delivery Report) real llegado después del envío. Sola
+ * lectura, nunca envía ni crea nada. Se elimina de nuevo una vez
+ * concluida esta investigación puntual (mismo criterio que el resto de
+ * herramientas de diagnóstico de esta integración).
+ */
+export async function investigateDelivery(mailbox: string, messageId: string, sentAtIso: string, creds: GraphCredentials): Promise<DeliveryInvestigationResult> {
+  const tokenResult = await getAccessToken(undefined, creds);
+  if ("error" in tokenResult) {
+    return { foundInSentItems: false, detail: `token: ${tokenResult.error}`, subject: null, toRecipients: [], sentDateTime: null, internetMessageId: null, from: null, possibleNdrs: [] };
+  }
+
+  const msgPath = `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}?$select=id,subject,sentDateTime,parentFolderId,from,toRecipients,internetMessageId`;
+  const msgResult = await graphFetch(undefined, tokenResult.accessToken, msgPath, { method: "GET" }, undefined);
+  if ("error" in msgResult) {
+    return { foundInSentItems: false, detail: `message lookup: ${msgResult.error}`, subject: null, toRecipients: [], sentDateTime: null, internetMessageId: null, from: null, possibleNdrs: [] };
+  }
+  const message = msgResult.json as {
+    id?: string;
+    subject?: string;
+    sentDateTime?: string;
+    parentFolderId?: string;
+    internetMessageId?: string;
+    from?: { emailAddress?: { address?: string; name?: string } };
+    toRecipients?: Array<{ emailAddress?: { address?: string } }>;
+  } | null;
+  if (!message?.id) {
+    return { foundInSentItems: false, detail: "mensaje no encontrado en el buzón", subject: null, toRecipients: [], sentDateTime: null, internetMessageId: null, from: null, possibleNdrs: [] };
+  }
+
+  const folderResult = await graphFetch(undefined, tokenResult.accessToken, `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems?$select=id`, { method: "GET" }, undefined);
+  const folder = "error" in folderResult ? null : (folderResult.json as { id?: string } | null);
+  const inSentItems = !!folder?.id && message.parentFolderId === folder.id;
+
+  const ndrPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${sentAtIso}`)}&$select=subject,receivedDateTime,from&$top=25`;
+  const ndrResult = await graphFetch(undefined, tokenResult.accessToken, ndrPath, { method: "GET" }, undefined);
+  const ndrBody = "error" in ndrResult ? null : (ndrResult.json as { value?: Array<{ subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string } } }> } | null);
+  const possibleNdrs = (ndrBody?.value ?? [])
+    .filter((m) => {
+      const subj = (m.subject ?? "").toLowerCase();
+      const fromAddr = (m.from?.emailAddress?.address ?? "").toLowerCase();
+      return subj.includes("undeliverable") || subj.includes("delivery status") || subj.includes("failure") || fromAddr.includes("postmaster") || fromAddr.includes("mailer-daemon");
+    })
+    .map((m) => ({ subject: m.subject ?? "", receivedDateTime: m.receivedDateTime ?? null, from: m.from?.emailAddress?.address ?? null }));
+
+  const realFrom = message.from?.emailAddress ? `${message.from.emailAddress.name ?? ""} <${message.from.emailAddress.address ?? ""}>` : null;
+  const toRecipients = (message.toRecipients ?? []).map((r) => r.emailAddress?.address ?? "").filter(Boolean);
+
+  return {
+    foundInSentItems: inSentItems,
+    detail: `parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}${"error" in ndrResult ? `, ndr lookup error: ${ndrResult.error}` : ""}`,
+    subject: message.subject ?? null,
+    toRecipients,
+    sentDateTime: message.sentDateTime ?? null,
+    internetMessageId: message.internetMessageId ?? null,
+    from: realFrom,
+    possibleNdrs,
+  };
+}
