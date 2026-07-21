@@ -48,6 +48,28 @@ function isCancellation(signal: AbortSignal | undefined): boolean {
   return !!signal?.aborted;
 }
 
+/**
+ * F17 (diagnóstico del 403 ErrorAccessDenied real en producción, pedido
+ * explícito: "reporta exactamente qué permiso falta, nunca adivines"):
+ * decodifica SOLO el claim `roles` (permisos de aplicación ya
+ * consentidos por el admin) del payload del JWT -- nunca la firma, nunca
+ * el token completo, nunca se devuelve ni se persiste, solo se loguea
+ * como evidencia. `roles` no es secreto: son nombres de permiso (ej.
+ * "Mail.Send"), el mismo tipo de dato que ya aparece en el portal de
+ * Azure AD del propio tenant.
+ */
+function decodeJwtRoles(accessToken: string): string[] | null {
+  try {
+    const payloadSegment = accessToken.split(".")[1];
+    if (!payloadSegment) return null;
+    const base64 = payloadSegment.replace(/-/g, "+").replace(/_/g, "/").padEnd(payloadSegment.length + ((4 - (payloadSegment.length % 4)) % 4), "=");
+    const payload = JSON.parse(Buffer.from(base64, "base64").toString("utf8")) as { roles?: unknown };
+    return Array.isArray(payload.roles) ? payload.roles.filter((r): r is string => typeof r === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
 interface GraphCredentials {
   tenantId: string;
   clientId: string;
@@ -165,7 +187,7 @@ export async function getAccessToken(
   abortSignal?: AbortSignal,
 ): Promise<{ accessToken: string } | TokenFetchError> {
   if (cachedToken && cachedToken.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
-    log(taskId, "token reused from cache");
+    log(taskId, "token reused from cache", { roles: decodeJwtRoles(cachedToken.accessToken) });
     return { accessToken: cachedToken.accessToken };
   }
 
@@ -173,7 +195,7 @@ export async function getAccessToken(
   if ("error" in result) return result;
 
   cachedToken = { accessToken: result.accessToken, expiresAt: Date.now() + result.expiresInSec * 1000 };
-  log(taskId, "token acquired", { expiresInSec: result.expiresInSec });
+  log(taskId, "token acquired", { expiresInSec: result.expiresInSec, roles: decodeJwtRoles(result.accessToken) });
   return { accessToken: result.accessToken };
 }
 
