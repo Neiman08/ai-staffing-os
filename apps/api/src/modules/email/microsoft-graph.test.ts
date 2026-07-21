@@ -135,8 +135,10 @@ function tokenOkThen(next: (url: string, init?: RequestInit) => Response | Promi
 }
 
 test("sendGraphMail: camino feliz -- crea el mensaje (201, id real) y lo envía (202) -- devuelve messageId/conversationId reales", async () => {
-  globalThis.fetch = tokenOkThen((href) => {
+  let createRequestBody: string | undefined;
+  globalThis.fetch = tokenOkThen((href, init) => {
     if (href.endsWith("/messages")) {
+      createRequestBody = init?.body as string | undefined;
       return jsonResponse(201, { id: "AAMkAGI-real-message-id", conversationId: "AAQkAGI-real-conversation-id" });
     }
     if (href.includes("/messages/AAMkAGI-real-message-id/send")) {
@@ -162,6 +164,17 @@ test("sendGraphMail: camino feliz -- crea el mensaje (201, id real) y lo envía 
     assert.equal(result.providerMessageId, "AAMkAGI-real-message-id");
     assert.equal(result.conversationId, "AAQkAGI-real-conversation-id");
   }
+
+  // Regresión real: el campo `from` estaba declarado en la interfaz pero
+  // nunca se incluía en el body real enviado a Graph -- la URL del buzón
+  // (/users/sales@dreistaff.com/messages) decide DÓNDE se crea el mensaje,
+  // nunca qué remitente se muestra. Sin este assert, un `sendGraphMail`
+  // que "funciona" (200/201/202, kind:"sent") puede seguir enviando en
+  // producción con el remitente real del buzón en vez de sales@ -- exactamente
+  // lo que pasó en la prueba controlada real antes de este fix.
+  assert.ok(createRequestBody, "debe haberse capturado el body real enviado a POST /messages");
+  const parsedBody = JSON.parse(createRequestBody!) as { from?: { emailAddress?: { address?: string; name?: string } } };
+  assert.deepEqual(parsedBody.from, { emailAddress: { address: "sales@dreistaff.com", name: "DreiStaff Sales" } });
 });
 
 test("sendGraphMail: 403 ErrorSendAsDenied al crear el mensaje -- falla, NUNCA reintentable, motivo exacto disponible", async () => {
