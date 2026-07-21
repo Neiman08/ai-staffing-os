@@ -46,9 +46,7 @@ export function Footer() {
         <div className="grid grid-cols-2 gap-10 sm:grid-cols-6">
           <div className="col-span-2 sm:col-span-2">
             <Link to="/" className="flex items-center gap-2 font-semibold">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-                {brandName?.[0] ?? "…"}
-              </span>
+              <img src="/logo-icon.png" alt="" className="h-8 w-auto" />
               <span className="text-lg tracking-tight">{brandName || "…"}</span>
             </Link>
             <p className="mt-4 max-w-xs text-sm text-ink-foreground/60">

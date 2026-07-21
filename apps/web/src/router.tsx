@@ -4,6 +4,7 @@ import { RequireAuth } from "@/components/auth/RequireAuth";
 import { CLERK_CONFIGURED } from "@/lib/auth-config";
 import { SignInPage } from "./pages/auth/SignInPage";
 import { SignUpPage } from "./pages/auth/SignUpPage";
+import MockLogin from "./pages/auth/MockLogin";
 import Dashboard from "./pages/Dashboard";
 import Companies from "./pages/Companies";
 import CompanyDetail from "./pages/CompanyDetail";
@@ -81,7 +82,11 @@ export const router = createBrowserRouter([
         { path: "/sign-in/*", element: <SignInPage /> },
         { path: "/sign-up/*", element: <SignUpPage /> },
       ]
-    : []),
+    : [
+        // TEMPORAL -- ver lib/mock-auth.ts. Eliminar esta rama junto con
+        // MockLogin.tsx al integrar el sistema de auth definitivo.
+        { path: "/login", element: <MockLogin /> },
+      ]),
   {
     path: "/",
     element: (

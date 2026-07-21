@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- F4.8: mismo monograma y color primario (HSL 255 92% 62%) ya usado
-       en el Sidebar del portal privado (apps/web) — no es un logo nuevo,
-       es el mismo tratamiento visual reutilizado como favicon. -->
-  <rect width="32" height="32" rx="8" fill="#7c5cfa" />
-  <text x="16" y="22" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">D</text>
-</svg>

@@ -22,10 +22,8 @@ export function Header() {
   return (
     <header className="sticky top-0 z-50 border-b border-white/10 bg-ink/85 text-ink-foreground backdrop-blur-md transition-colors">
       <Container className="flex h-16 items-center justify-between">
-        <Link to="/" className="flex items-center gap-2 font-semibold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            {branding?.brandName?.[0] ?? "…"}
-          </span>
+        <Link to="/" className="flex items-center gap-2.5 font-semibold">
+          <img src="/logo-icon.png" alt="" className="h-10 w-auto sm:h-11" />
           <span className="text-lg tracking-tight">{branding?.brandName ?? "…"}</span>
         </Link>
 

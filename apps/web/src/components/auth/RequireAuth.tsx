@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@clerk/clerk-react";
 import { CLERK_CONFIGURED } from "@/lib/auth-config";
+import { isMockAuthenticated } from "@/lib/mock-auth";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { ApiError } from "@/lib/api";
 import { SessionLoading } from "@/pages/auth/SessionLoading";
@@ -72,9 +73,22 @@ function ClerkRequireAuth({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * TEMPORAL -- ver lib/mock-auth.ts. Antes de resolver la identidad real
+ * de dev-bypass, exige haber pasado por la pantalla de login mock (una
+ * sola vez por sesión de pestaña) -- pedido explícito: "no quiero que
+ * entre directamente". No cambia en absoluto la identidad que
+ * DevBypassRequireAuth ya resolvía (sigue siendo DEV_DEFAULT_USER_EMAIL
+ * del backend); solo antepone un gate de UI. Eliminar este chequeo (y
+ * MockLogin.tsx/mock-auth.ts) al integrar el sistema de auth definitivo.
+ */
 function DevBypassRequireAuth({ children }: { children: ReactNode }) {
-  const userQuery = useCurrentUser();
+  const location = useLocation();
+  const userQuery = useCurrentUser({ enabled: isMockAuthenticated() });
 
+  if (!isMockAuthenticated()) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
   if (userQuery.isPending) return <SessionLoading />;
   if (userQuery.isError) return <>{renderByErrorCode(userQuery.error)}</>;
 

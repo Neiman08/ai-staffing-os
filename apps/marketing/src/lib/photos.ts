@@ -13,7 +13,11 @@ function unsplash(id: string, params = "w=1600&q=80&auto=format&fit=crop"): stri
 
 export const PHOTOS = {
   heroOfficeCollaboration: {
-    src: unsplash("1522071820081-009f0129c71c"),
+    // F4.8B: resolución elevada a propósito (w=2400 en vez del default
+    // 1600) — este asset ahora es un fondo full-bleed a todo el ancho
+    // del hero (ver Hero.tsx), no una tarjeta acotada; con 1600px se ve
+    // borroso en monitores anchos/retina a ese tamaño de renderizado.
+    src: unsplash("1522071820081-009f0129c71c", "w=2400&q=80&auto=format&fit=crop"),
     alt: "Two professionals reviewing work together in a modern office",
   },
   handshakeInterview: {

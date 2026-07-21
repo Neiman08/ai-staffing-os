@@ -60,9 +60,7 @@ function SidebarContent({
   return (
     <>
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
-          {brandName?.[0] ?? "…"}
-        </div>
+        <img src="/logo-icon.png" alt="" className="h-7 w-auto" />
         <span className="text-sm font-semibold">
           {brandName ?? "…"} {portalLabel}
         </span>
