@@ -49,3 +49,42 @@ test("env: NODE_ENV=development + AUTH_MODE=dev-bypass arranca normalmente", () 
   const result = runEnv({ NODE_ENV: "development", AUTH_MODE: "dev-bypass" });
   assert.equal(result.status, 0);
 });
+
+// ---------- F17: Microsoft Graph -- credenciales completas o ninguna, MAIL_FROM del dominio propio ----------
+
+test("env: Microsoft Graph con solo AZURE_TENANT_ID (configuración parcial) se niega a arrancar", () => {
+  const result = runEnv({ AZURE_TENANT_ID: "fake-tenant", AZURE_CLIENT_ID: "", AZURE_CLIENT_SECRET: "" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Microsoft Graph requires AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET together/);
+});
+
+test("env: Microsoft Graph con 2 de 3 credenciales (configuración parcial) se niega a arrancar", () => {
+  const result = runEnv({ AZURE_TENANT_ID: "fake-tenant", AZURE_CLIENT_ID: "fake-client", AZURE_CLIENT_SECRET: "" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Microsoft Graph requires AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET together/);
+});
+
+test("env: Microsoft Graph con las 3 credenciales arranca normalmente", () => {
+  const result = runEnv({
+    AZURE_TENANT_ID: "fake-tenant",
+    AZURE_CLIENT_ID: "fake-client",
+    AZURE_CLIENT_SECRET: "fake-secret",
+  });
+  assert.equal(result.status, 0);
+});
+
+test("env: sin ninguna credencial de Microsoft Graph arranca normalmente (proveedor simplemente no configurado)", () => {
+  const result = runEnv({ AZURE_TENANT_ID: "", AZURE_CLIENT_ID: "", AZURE_CLIENT_SECRET: "" });
+  assert.equal(result.status, 0);
+});
+
+test("env: MAIL_FROM en un dominio ajeno a BUSINESS_DOMAIN se niega a arrancar", () => {
+  const result = runEnv({ MAIL_FROM: "hello@otro-dominio.com" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /MAIL_FROM \("hello@otro-dominio\.com"\) must be an address on BUSINESS_DOMAIN/);
+});
+
+test("env: MAIL_FROM en el propio BUSINESS_DOMAIN arranca normalmente", () => {
+  const result = runEnv({ MAIL_FROM: "hello@dreistaff.com", BUSINESS_DOMAIN: "dreistaff.com" });
+  assert.equal(result.status, 0);
+});

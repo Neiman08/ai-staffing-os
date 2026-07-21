@@ -84,6 +84,24 @@ const envSchema = z.object({
   OUTREACH_REPLY_TO: z.string().optional(),
   BUSINESS_POSTAL_ADDRESS: z.string().optional(),
 
+  // F17: Microsoft Graph (envío real de email, OAuth2 Client Credentials
+  // -- app-only, nunca /me/sendMail). Las 4 opcionales acá por el mismo
+  // motivo que el resto de proveedores externos (CI/dev nunca deben
+  // romper por su ausencia) -- la guarda real ("las 4 juntas o ninguna",
+  // y MAIL_FROM debe ser del dominio propio) vive más abajo, al final de
+  // loadEnv(), mismo criterio que la guarda de Clerk. Ver
+  // modules/email/microsoft-graph.ts / modules/email/sender-profiles.ts.
+  AZURE_TENANT_ID: z.string().optional(),
+  AZURE_CLIENT_ID: z.string().optional(),
+  AZURE_CLIENT_SECRET: z.string().optional(),
+  // Remitente GENERAL (contacto institucional/formularios públicos) --
+  // nunca el remitente comercial, que está hardcodeado a propósito en
+  // sender-profiles.ts (sales@<BUSINESS_DOMAIN>, nunca configurable por
+  // env -- "Valida que MAIL_FROM no permita remitentes arbitrarios" del
+  // pedido real). Debe ser del dominio propio (BUSINESS_DOMAIN) cuando
+  // esté configurado -- validado más abajo.
+  MAIL_FROM: z.string().optional(),
+
   // F4.7.5 §2: Production Mode — default false (permite datos demo,
   // seeds, regresión). NUNCA se activa desde este commit — queda
   // preparado, a la espera de aprobación explícita del PO antes de
@@ -125,6 +143,32 @@ function loadEnv() {
   if (data.AUTH_MODE === "clerk" && (!data.CLERK_SECRET_KEY || !data.CLERK_PUBLISHABLE_KEY)) {
     console.error(
       "FATAL: AUTH_MODE=clerk requires CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY to be set.",
+    );
+    process.exit(1);
+  }
+
+  // F17: Microsoft Graph -- las 3 credenciales de Client Credentials
+  // deben venir juntas o ninguna. Una configuración parcial (ej.
+  // AZURE_CLIENT_ID sin AZURE_CLIENT_SECRET) fallaría de forma
+  // impredecible en el primer envío real en vez de al arrancar -- mismo
+  // criterio que la guarda de Clerk arriba.
+  const azureVars = [data.AZURE_TENANT_ID, data.AZURE_CLIENT_ID, data.AZURE_CLIENT_SECRET];
+  const azureConfiguredCount = azureVars.filter((v) => !!v).length;
+  if (azureConfiguredCount > 0 && azureConfiguredCount < azureVars.length) {
+    console.error(
+      "FATAL: Microsoft Graph requires AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET together — " +
+        "found a partial configuration. Set all three, or none.",
+    );
+    process.exit(1);
+  }
+  // MAIL_FROM (remitente GENERAL) nunca puede ser un dominio ajeno --
+  // este backend jamás debe poder mandar "en nombre de" un dominio que
+  // no controlamos. El remitente COMERCIAL (sales@) ni siquiera lee esta
+  // variable -- está hardcodeado en sender-profiles.ts, ver ese archivo.
+  if (data.MAIL_FROM && !data.MAIL_FROM.toLowerCase().endsWith(`@${data.BUSINESS_DOMAIN.toLowerCase()}`)) {
+    console.error(
+      `FATAL: MAIL_FROM ("${data.MAIL_FROM}") must be an address on BUSINESS_DOMAIN ("${data.BUSINESS_DOMAIN}") — ` +
+        "arbitrary sender domains are not allowed.",
     );
     process.exit(1);
   }

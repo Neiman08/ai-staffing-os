@@ -6,6 +6,7 @@ import { clerkMiddleware } from "@clerk/express";
 import { prisma } from "@ai-staffing-os/db";
 import { env } from "./core/env";
 import { errorHandler, notFoundHandler } from "./core/errors";
+import { getEmailProviderHealth } from "./modules/email/health";
 import { requestLoggingMiddleware } from "./core/request-logging";
 import { tenancyMiddleware } from "./core/tenancy/middleware";
 import { authRouter } from "./modules/auth/router";
@@ -159,12 +160,20 @@ export function createApp() {
       const migrations = await prisma.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) as count FROM "_prisma_migrations"`;
       const migrationsApplied = Number(migrations[0]?.count ?? 0) > 0;
       const authConfigured = env.AUTH_MODE === "dev-bypass" || Boolean(env.CLERK_SECRET_KEY && env.CLERK_PUBLISHABLE_KEY);
+      // F17: informativo únicamente -- nunca gatea el status 503 de este
+      // endpoint. Microsoft Graph caído no debe sacar a esta instancia de
+      // rotación (Render usa esta misma ruta como health check real) --
+      // solo DB/migraciones/auth son motivos reales de "no listo". Sin
+      // AZURE_* configurada, `configured:false` corta acá sin ninguna
+      // llamada de red real (nunca agrega latencia cuando el proveedor
+      // no está en uso).
+      const emailProvider = await getEmailProviderHealth();
 
       if (!migrationsApplied || !authConfigured) {
-        res.status(503).json({ status: "not_ready", db: true, migrationsApplied, authConfigured });
+        res.status(503).json({ status: "not_ready", db: true, migrationsApplied, authConfigured, emailProvider });
         return;
       }
-      res.json({ status: "ok", db: true, migrationsApplied, authConfigured });
+      res.json({ status: "ok", db: true, migrationsApplied, authConfigured, emailProvider });
     } catch {
       res.status(503).json({ status: "not_ready", db: false });
     }

@@ -69,6 +69,8 @@ const STRICT_TENANT_MODELS = new Set([
   "Campaign",
   "CampaignCompany",
   "CompanyContactPoint",
+  // F17: EmailMessage tiene tenantId requerido, no-nullable -- mismo criterio que el resto.
+  "EmailMessage",
 ]);
 
 /**

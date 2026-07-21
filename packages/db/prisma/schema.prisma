@@ -2092,6 +2092,72 @@ model ApprovalRequest {
   @@index([tenantId, status])
 }
 
+// ================= ENVÍO DE EMAIL (Microsoft Graph) =================
+// F17: registro real de cada intento de envío -- ni Activity ni AuditLog
+// tenían campos para esto (confirmado: ninguno tiene sentAt/provider/
+// messageId/status de entrega). Un envío real de un borrador aprobado
+// (ApprovalRequest) crea EXACTAMENTE una fila acá, nunca se marca
+// SENT hasta que Microsoft Graph confirme -- ver
+// modules/email/email-service.ts.
+
+enum EmailMessageStatus {
+  PENDING // creada, todavía no se intentó el envío real
+  SENT // Microsoft Graph confirmó el envío (HTTP 202, con messageId real cuando Graph lo devuelve)
+  FAILED // error real de Graph que NO amerita reintento (ej. 403 ErrorSendAsDenied, remitente inválido)
+  RETRYABLE // error transitorio real (429/5xx/timeout) -- puede reintentarse
+}
+
+// F17: distingue el propósito real del envío -- nunca un `from` de texto
+// libre controlado por el llamador (ver modules/email/sender-profiles.ts,
+// que es la ÚNICA fuente de verdad de qué dirección/nombre usa cada
+// perfil). COMMERCIAL es el único activo hoy (Approval Requests,
+// campañas, secuencias, seguimiento de Leads/Opportunities). RECRUITING
+// existe en el enum -- documentado, con perfil ya definido -- pero
+// ningún código todavía lo invoca (el PO pidió explícitamente no activar
+// envíos a candidatos todavía).
+enum EmailSenderProfile {
+  COMMERCIAL
+  GENERAL
+  RECRUITING
+}
+
+model EmailMessage {
+  id                String             @id @default(cuid())
+  tenantId          String
+  // Vínculos reales opcionales -- un envío puede originarse de un
+  // ApprovalRequest aprobado (el caso principal hoy) o dispararse desde
+  // otro punto del CRM más adelante (envío manual). Ninguno es
+  // obligatorio a propósito -- nunca se inventa un vínculo que no existe.
+  approvalRequestId String?
+  leadId            String?
+  opportunityId     String?
+  companyId         String?
+  contactId         String?
+  senderProfile     EmailSenderProfile
+  fromEmail         String
+  fromName          String
+  toEmail           String
+  ccEmails          String[]           @default([])
+  bccEmails         String[]           @default([])
+  replyTo           String?
+  subject           String
+  bodyHtml          String?
+  bodyText          String?
+  provider          String // "microsoft_graph" -- string libre a propósito, mismo criterio que Contact.source (permite otro proveedor futuro sin migración)
+  status            EmailMessageStatus @default(PENDING)
+  providerMessageId String?
+  conversationId    String?
+  errorMessage      String?
+  sentAt            DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, approvalRequestId])
+  @@index([tenantId, leadId])
+  @@index([tenantId, opportunityId])
+}
+
 // ================= AUDITORÍA, EVENTOS, NOTIFICACIONES =================
 
 model AuditLog {

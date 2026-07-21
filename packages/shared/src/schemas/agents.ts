@@ -138,6 +138,19 @@ export type AgentTaskDetail = z.infer<typeof agentTaskDetailSchema>;
 export const approvalStatusSchema = z.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]);
 export const riskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
 
+// F17: presente SOLO en la respuesta directa de decideApproval (nunca en
+// listApprovals) -- feedback inmediato de si el envío real vía
+// Microsoft Graph funcionó. `null` = no era un borrador de email (ej.
+// LinkedIn, o la decisión fue REJECTED). Ver modules/email/email-service.ts.
+export const approvalEmailSendResultSchema = z
+  .object({
+    status: z.enum(["SENT", "FAILED", "RETRYABLE"]),
+    providerMessageId: z.string().nullable(),
+    errorMessage: z.string().nullable(),
+  })
+  .nullable();
+export type ApprovalEmailSendResult = z.infer<typeof approvalEmailSendResultSchema>;
+
 export const approvalRequestListItemSchema = z.object({
   id: z.string(),
   agentTaskId: z.string(),
@@ -150,6 +163,7 @@ export const approvalRequestListItemSchema = z.object({
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
   createdAt: z.string(),
+  emailSendResult: approvalEmailSendResultSchema.optional(),
 });
 export type ApprovalRequestListItem = z.infer<typeof approvalRequestListItemSchema>;
 

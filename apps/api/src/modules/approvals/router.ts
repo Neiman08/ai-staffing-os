@@ -6,8 +6,10 @@ import * as approvalsService from "./service";
 /**
  * F2 §9: every draftOutreach ends in a PENDING ApprovalRequest here — the
  * only place a human signs off on AI-produced content meant for someone
- * outside the tenant. Deciding never sends anything either; it only marks
- * the draft as usable or not.
+ * outside the tenant. F17: deciding APPROVED now really sends the email
+ * (Microsoft Graph, always from the COMMERCIAL sender profile) — see
+ * approvals/service.ts's resolveDraftEmail/sendEmail. REJECTED never
+ * sends anything.
  */
 export const approvalsRouter = Router();
 

@@ -30,9 +30,29 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
 
   const decide = useMutation({
     mutationFn: (decision: "APPROVED" | "REJECTED") =>
-      apiFetch(`/approvals/${approval.id}/decide`, { method: "POST", body: JSON.stringify({ decision }) }),
-    onSuccess: () => {
-      toast({ title: "Decisión registrada", variant: "success" });
+      apiFetch<ApprovalRequestListItem>(`/approvals/${approval.id}/decide`, {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      }),
+    onSuccess: (result) => {
+      // F17: emailSendResult solo viene poblado en la respuesta directa
+      // de este POST (nunca en el listado) -- es el único momento real
+      // en que se sabe si Microsoft Graph confirmó el envío, así que se
+      // muestra acá mismo, nunca se inventa un "enviado" optimista.
+      if (result.emailSendResult) {
+        const r = result.emailSendResult;
+        if (r.status === "SENT") {
+          toast({ title: "Email enviado", description: `Confirmado por Microsoft Graph (id ${r.providerMessageId ?? "—"}).`, variant: "success" });
+        } else {
+          toast({
+            title: r.status === "RETRYABLE" ? "Email no enviado (reintentable)" : "Email no enviado",
+            description: r.errorMessage ?? "Error desconocido del proveedor.",
+            variant: "error",
+          });
+        }
+      } else {
+        toast({ title: "Decisión registrada", variant: "success" });
+      }
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
     onError: (err) => toast({ title: "No se pudo registrar la decisión", description: String(err), variant: "error" }),
