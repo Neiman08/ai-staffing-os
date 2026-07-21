@@ -395,3 +395,29 @@ export async function checkMicrosoftGraphHealth(creds: GraphCredentials): Promis
   if ("error" in result) return { healthy: false, reason: result.error };
   return { healthy: true, reason: null };
 }
+
+export interface SentItemsCheckResult {
+  found: boolean;
+  detail: string;
+}
+
+/**
+ * F17 (evidencia real pedida explícitamente: "verifica y entrégame ...
+ * aparición en Elementos enviados"): lectura sola-lectura, nunca envía ni
+ * crea nada -- confirma que un mensaje ya enviado quedó específicamente
+ * en la carpeta Sent Items del buzón (Graph mueve el mensaje ahí
+ * automáticamente al enviarlo, esto lo comprueba en vivo en vez de solo
+ * confiar en el comportamiento documentado). Requiere Mail.ReadWrite
+ * (Application) -- el mismo permiso ya necesario para crear el borrador.
+ */
+export async function verifyMessageInSentItems(mailbox: string, messageId: string, creds: GraphCredentials): Promise<SentItemsCheckResult> {
+  const tokenResult = await getAccessToken(undefined, creds);
+  if ("error" in tokenResult) return { found: false, detail: `token: ${tokenResult.error}` };
+
+  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages/${encodeURIComponent(messageId)}?$select=id,subject,sentDateTime`;
+  const result = await graphFetch(undefined, tokenResult.accessToken, path, { method: "GET" }, undefined);
+  if ("error" in result) return { found: false, detail: result.error };
+
+  const message = result.json as { id?: string; subject?: string; sentDateTime?: string } | null;
+  return { found: !!message?.id, detail: message?.sentDateTime ? `sentDateTime=${message.sentDateTime}` : "encontrado sin sentDateTime" };
+}

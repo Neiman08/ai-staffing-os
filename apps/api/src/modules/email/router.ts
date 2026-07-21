@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { sendManualEmailInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { scopedDb } from "../../core/tenancy/prisma-extension";
+import { env } from "../../core/env";
+import { AppError } from "../../core/errors";
 import { sendEmail } from "./email-service";
+import { verifyMessageInSentItems } from "./microsoft-graph";
 
 /**
  * F17: "correos manuales enviados desde el CRM" -- el único punto donde
@@ -29,6 +33,35 @@ emailRouter.post("/emails/send-manual", requirePermission("approvals.decide"), a
       contactId: input.contactId ?? null,
     });
     res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * F17 (evidencia real pedida explícitamente: "verifica ... aparición en
+ * Elementos enviados"): lectura sola-lectura sobre un EmailMessage ya
+ * persistido -- nunca acepta un buzón/messageId de texto libre, siempre
+ * usa exactamente lo que este mismo backend ya registró como remitente y
+ * providerMessageId reales tras un envío real. No envía ni crea nada.
+ */
+emailRouter.get("/emails/:id/verify-sent-items", requirePermission("approvals.decide"), async (req, res, next) => {
+  try {
+    const emailMessage = await scopedDb.emailMessage.findUnique({ where: { id: req.params.id } });
+    if (!emailMessage) throw AppError.notFound("EmailMessage no encontrado");
+    if (emailMessage.status !== "SENT" || !emailMessage.providerMessageId) {
+      res.json({ found: false, detail: `EmailMessage status=${emailMessage.status}, sin providerMessageId -- nunca se llegó a enviar` });
+      return;
+    }
+    if (!env.AZURE_TENANT_ID || !env.AZURE_CLIENT_ID || !env.AZURE_CLIENT_SECRET) {
+      throw AppError.badRequest("Microsoft Graph no configurado");
+    }
+    const result = await verifyMessageInSentItems(emailMessage.fromEmail, emailMessage.providerMessageId, {
+      tenantId: env.AZURE_TENANT_ID,
+      clientId: env.AZURE_CLIENT_ID,
+      clientSecret: env.AZURE_CLIENT_SECRET,
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }
