@@ -398,7 +398,7 @@ export interface DeliveryInvestigationResult {
   sentDateTime: string | null;
   internetMessageId: string | null;
   from: string | null;
-  possibleNdrs: Array<{ subject: string; receivedDateTime: string | null; from: string | null; bodyPreview: string | null }>;
+  possibleNdrs: Array<{ subject: string; receivedDateTime: string | null; from: string | null; body: string | null }>;
 }
 
 /**
@@ -440,23 +440,32 @@ export async function investigateDelivery(mailbox: string, messageId: string, se
   const folder = "error" in folderResult ? null : (folderResult.json as { id?: string } | null);
   const inSentItems = !!folder?.id && message.parentFolderId === folder.id;
 
-  const ndrPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${sentAtIso}`)}&$select=id,subject,receivedDateTime,from,bodyPreview&$top=25`;
-  const ndrResult = await graphFetch(undefined, tokenResult.accessToken, ndrPath, { method: "GET" }, undefined);
-  const ndrBody = "error" in ndrResult ? null : (ndrResult.json as { value?: Array<{ id?: string; subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string } }; bodyPreview?: string }> } | null);
-  const possibleNdrs = (ndrBody?.value ?? [])
-    .filter((m) => {
-      const subj = (m.subject ?? "").toLowerCase();
-      const fromAddr = (m.from?.emailAddress?.address ?? "").toLowerCase();
-      return subj.includes("undeliverable") || subj.includes("delivery status") || subj.includes("failure") || fromAddr.includes("postmaster") || fromAddr.includes("mailer-daemon") || fromAddr.includes("microsoftexchange");
-    })
-    .map((m) => ({ subject: m.subject ?? "", receivedDateTime: m.receivedDateTime ?? null, from: m.from?.emailAddress?.address ?? null, bodyPreview: m.bodyPreview ?? null }));
+  const ndrListPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$filter=${encodeURIComponent(`receivedDateTime ge ${sentAtIso}`)}&$select=id,subject,receivedDateTime,from&$top=25`;
+  const ndrListResult = await graphFetch(undefined, tokenResult.accessToken, ndrListPath, { method: "GET" }, undefined);
+  const ndrListBody = "error" in ndrListResult ? null : (ndrListResult.json as { value?: Array<{ id?: string; subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string } } }> } | null);
+  const ndrCandidates = (ndrListBody?.value ?? []).filter((m) => {
+    const subj = (m.subject ?? "").toLowerCase();
+    const fromAddr = (m.from?.emailAddress?.address ?? "").toLowerCase();
+    return subj.includes("undeliverable") || subj.includes("delivery status") || subj.includes("failure") || fromAddr.includes("postmaster") || fromAddr.includes("mailer-daemon") || fromAddr.includes("microsoftexchange");
+  });
+
+  const possibleNdrs: DeliveryInvestigationResult["possibleNdrs"] = [];
+  for (const m of ndrCandidates) {
+    if (!m.id) continue;
+    const fullResult = await graphFetch(undefined, tokenResult.accessToken, `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(m.id)}?$select=body`, { method: "GET" }, undefined);
+    const fullBody = "error" in fullResult ? null : ((fullResult.json as { body?: { content?: string } } | null)?.body?.content ?? null);
+    // El body de una NDR real de Exchange es HTML -- se despoja de tags
+    // para que el diagnóstico SMTP real quede legible en texto plano.
+    const plainBody = fullBody ? fullBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : null;
+    possibleNdrs.push({ subject: m.subject ?? "", receivedDateTime: m.receivedDateTime ?? null, from: m.from?.emailAddress?.address ?? null, body: plainBody });
+  }
 
   const realFrom = message.from?.emailAddress ? `${message.from.emailAddress.name ?? ""} <${message.from.emailAddress.address ?? ""}>` : null;
   const toRecipients = (message.toRecipients ?? []).map((r) => r.emailAddress?.address ?? "").filter(Boolean);
 
   return {
     foundInSentItems: inSentItems,
-    detail: `parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}${"error" in ndrResult ? `, ndr lookup error: ${ndrResult.error}` : ""}`,
+    detail: `parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}${"error" in ndrListResult ? `, ndr lookup error: ${ndrListResult.error}` : ""}`,
     subject: message.subject ?? null,
     toRecipients,
     sentDateTime: message.sentDateTime ?? null,
