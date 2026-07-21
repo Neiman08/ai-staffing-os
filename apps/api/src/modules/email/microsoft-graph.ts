@@ -344,6 +344,15 @@ export async function sendGraphMail(params: SendGraphMailParams, creds: GraphCre
   const message = {
     subject: params.subject,
     body,
+    // F17 (bug real encontrado en la prueba controlada de producción):
+    // sin esto, Exchange usa la identidad propia del buzón como remitente
+    // visible en vez del alias/dirección pedido -- confirmado en vivo,
+    // el envío real llegó como "hello@dreistaff.com" (el dueño real del
+    // buzón) en lugar de "sales@dreistaff.com" pese a que la llamada ya
+    // apuntaba a /users/sales@dreistaff.com/messages. La URL del buzón
+    // solo decide DÓNDE se crea el mensaje, nunca qué remitente se
+    // muestra -- eso lo decide únicamente este campo.
+    from: { emailAddress: { address: params.from.email, name: params.from.name } },
     toRecipients: graphRecipients(params.to),
     ccRecipients: graphRecipients(params.cc),
     bccRecipients: graphRecipients(params.bcc),
