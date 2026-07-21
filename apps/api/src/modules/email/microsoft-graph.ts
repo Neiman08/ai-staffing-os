@@ -414,10 +414,24 @@ export async function verifyMessageInSentItems(mailbox: string, messageId: strin
   const tokenResult = await getAccessToken(undefined, creds);
   if ("error" in tokenResult) return { found: false, detail: `token: ${tokenResult.error}` };
 
-  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages/${encodeURIComponent(messageId)}?$select=id,subject,sentDateTime`;
-  const result = await graphFetch(undefined, tokenResult.accessToken, path, { method: "GET" }, undefined);
-  if ("error" in result) return { found: false, detail: result.error };
+  // Lectura genérica (sin carpeta) -- confirma que el mensaje existe y en
+  // qué carpeta real quedó (parentFolderId), en vez de asumir que el
+  // nombre de carpeta bien conocido "sentitems" funciona anidado en la
+  // misma ruta que un id de mensaje específico.
+  const msgPath = `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}?$select=id,subject,sentDateTime,parentFolderId`;
+  const msgResult = await graphFetch(undefined, tokenResult.accessToken, msgPath, { method: "GET" }, undefined);
+  if ("error" in msgResult) return { found: false, detail: `message lookup: ${msgResult.error}` };
+  const message = msgResult.json as { id?: string; subject?: string; sentDateTime?: string; parentFolderId?: string } | null;
+  if (!message?.id) return { found: false, detail: "mensaje no encontrado en el buzón" };
 
-  const message = result.json as { id?: string; subject?: string; sentDateTime?: string } | null;
-  return { found: !!message?.id, detail: message?.sentDateTime ? `sentDateTime=${message.sentDateTime}` : "encontrado sin sentDateTime" };
+  const folderPath = `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems?$select=id`;
+  const folderResult = await graphFetch(undefined, tokenResult.accessToken, folderPath, { method: "GET" }, undefined);
+  if ("error" in folderResult) return { found: false, detail: `sentitems folder lookup: ${folderResult.error}` };
+  const folder = folderResult.json as { id?: string } | null;
+
+  const inSentItems = !!folder?.id && message.parentFolderId === folder.id;
+  return {
+    found: inSentItems,
+    detail: `sentDateTime=${message.sentDateTime ?? "n/a"}, parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}`,
+  };
 }
