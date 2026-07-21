@@ -435,3 +435,23 @@ export async function verifyMessageInSentItems(mailbox: string, messageId: strin
     detail: `sentDateTime=${message.sentDateTime ?? "n/a"}, parentFolderId=${message.parentFolderId ?? "n/a"}, sentItemsFolderId=${folder?.id ?? "n/a"}`,
   };
 }
+
+/**
+ * F17 (diagnóstico puntual: la búsqueda por id exacto devolvió 404 en un
+ * mensaje recién enviado -- confirma si existe en el buzón por otra vía,
+ * sin adivinar y sin enviar nada nuevo). Sola lectura.
+ */
+export async function findMessagesBySubject(mailbox: string, subject: string, creds: GraphCredentials): Promise<{ error?: string; messages: Array<{ id: string; subject: string; sentDateTime: string | null; parentFolderId: string | null }> }> {
+  const tokenResult = await getAccessToken(undefined, creds);
+  if ("error" in tokenResult) return { error: `token: ${tokenResult.error}`, messages: [] };
+
+  const path = `/users/${encodeURIComponent(mailbox)}/messages?$filter=${encodeURIComponent(`subject eq '${subject.replace(/'/g, "''")}'`)}&$select=id,subject,sentDateTime,parentFolderId&$top=10`;
+  const result = await graphFetch(undefined, tokenResult.accessToken, path, { method: "GET" }, undefined);
+  if ("error" in result) return { error: result.error, messages: [] };
+
+  const body = result.json as { value?: Array<{ id?: string; subject?: string; sentDateTime?: string; parentFolderId?: string }> } | null;
+  const messages = (body?.value ?? [])
+    .filter((m): m is { id: string; subject?: string; sentDateTime?: string; parentFolderId?: string } => !!m.id)
+    .map((m) => ({ id: m.id, subject: m.subject ?? "", sentDateTime: m.sentDateTime ?? null, parentFolderId: m.parentFolderId ?? null }));
+  return { messages };
+}
