@@ -5,7 +5,7 @@ import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { env } from "../../core/env";
 import { AppError } from "../../core/errors";
 import { sendEmail } from "./email-service";
-import { verifyMessageInSentItems, findMessagesBySubject } from "./microsoft-graph";
+import { verifyMessageInSentItems, findMessagesBySubject, resolveMailboxIdentity } from "./microsoft-graph";
 
 /**
  * F17: "correos manuales enviados desde el CRM" -- el único punto donde
@@ -62,6 +62,26 @@ emailRouter.get("/emails/:id/verify-sent-items", requirePermission("approvals.de
       clientSecret: env.AZURE_CLIENT_SECRET,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * F17 (diagnóstico puntual, sola lectura, pregunta original del pedido:
+ * "determina si sales@ es un alias de hello@ o un buzón independiente"):
+ * compara el id real del buzón + el id de su carpeta Sent Items para 2
+ * direcciones -- si son idénticos, es matemáticamente el mismo buzón.
+ * No envía ni crea nada.
+ */
+emailRouter.get("/emails/diagnostic/mailbox-identity", requirePermission("approvals.decide"), async (req, res, next) => {
+  try {
+    if (!env.AZURE_TENANT_ID || !env.AZURE_CLIENT_ID || !env.AZURE_CLIENT_SECRET) {
+      throw AppError.badRequest("Microsoft Graph no configurado");
+    }
+    const creds = { tenantId: env.AZURE_TENANT_ID, clientId: env.AZURE_CLIENT_ID, clientSecret: env.AZURE_CLIENT_SECRET };
+    const [sales, hello] = await Promise.all([resolveMailboxIdentity("sales@dreistaff.com", creds), resolveMailboxIdentity("hello@dreistaff.com", creds)]);
+    res.json({ sales, hello, sameMailbox: !!sales.mailboxId && sales.mailboxId === hello.mailboxId });
   } catch (err) {
     next(err);
   }
