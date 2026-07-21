@@ -39,11 +39,16 @@ emailRouter.post("/emails/send-manual", requirePermission("approvals.decide"), a
 });
 
 /**
+ * ============================================================
+ * TEMPORAL -- NO ES CÓDIGO DE PRODUCCIÓN PERMANENTE. PENDIENTE DE ELIMINAR.
+ * ============================================================
  * Reintroducido de forma puntual y autorizada explícitamente por el
  * usuario para investigar un correo real reportado como "no recibido" --
  * lectura sola sobre un EmailMessage ya persistido, nunca acepta un
- * buzón/messageId de texto libre. Se elimina de nuevo al concluir esta
- * investigación puntual.
+ * buzón/messageId de texto libre. Eliminar junto con investigateDelivery
+ * en microsoft-graph.ts una vez que Microsoft 365 levante el bloqueo de
+ * salida (550 5.7.708), DKIM esté firmando, y una prueba real confirme
+ * entrega sin NDR (ver comentario extendido en microsoft-graph.ts).
  */
 emailRouter.get("/emails/:id/investigate-delivery", requirePermission("approvals.decide"), async (req, res, next) => {
   try {

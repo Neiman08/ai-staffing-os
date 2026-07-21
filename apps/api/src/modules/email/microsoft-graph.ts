@@ -402,15 +402,24 @@ export interface DeliveryInvestigationResult {
 }
 
 /**
+ * ============================================================
+ * TEMPORAL -- NO ES CÓDIGO DE PRODUCCIÓN PERMANENTE.
+ * ============================================================
  * Reintroducido de forma puntual y autorizada explícitamente por el
  * usuario ("autoriza un cambio de código puntual para reintroducir la
- * verificación de Graph") -- investigación real de un correo no
- * recibido: confirma ubicación en Sent Items, recupera destinatario/
+ * verificación de Graph") para investigar el correo de prueba real que
+ * nunca llegó a neimangroupllc@gmail.com (commits 4468e4a/49ce883/
+ * a70f7a7). Confirma ubicación en Sent Items, recupera destinatario/
  * asunto/hora/internetMessageId reales, y busca en el Inbox cualquier
  * NDR (Non-Delivery Report) real llegado después del envío. Sola
- * lectura, nunca envía ni crea nada. Se elimina de nuevo una vez
- * concluida esta investigación puntual (mismo criterio que el resto de
- * herramientas de diagnóstico de esta integración).
+ * lectura, nunca envía ni crea nada.
+ *
+ * PENDIENTE DE ELIMINAR: una vez que Microsoft 365 levante el bloqueo de
+ * salida (550 5.7.708) y el firmado DKIM esté activo, y se confirme con
+ * una prueba real que el correo llega sin generar NDR, esta función y su
+ * ruta (GET /emails/:id/investigate-delivery en router.ts) deben
+ * eliminarse por completo -- mismo criterio que el resto de herramientas
+ * de diagnóstico de esta integración (ver 85272fb/8c15162).
  */
 export async function investigateDelivery(mailbox: string, messageId: string, sentAtIso: string, creds: GraphCredentials): Promise<DeliveryInvestigationResult> {
   const tokenResult = await getAccessToken(undefined, creds);
