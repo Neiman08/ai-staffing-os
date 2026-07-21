@@ -460,31 +460,28 @@ export async function verifyMessageInSentItems(mailbox: string, messageId: strin
  */
 export interface MailboxIdentity {
   address: string;
-  mailboxId: string | null;
   sentItemsFolderId: string | null;
   error?: string;
 }
 
 /**
  * F17 (pregunta original del audit: "determina si sales@ es un alias de
- * hello@ o un buzón independiente"): id real del objeto usuario/buzón (vía
- * GET /users/{address}) + id real de su carpeta Sent Items. Si dos
- * direcciones devuelven el mismo mailboxId, son matemáticamente el mismo
- * buzón -- evidencia real de Graph, no una suposición. Sola lectura.
+ * hello@ o un buzón independiente"): id real de la carpeta Sent Items del
+ * buzón (Mail.ReadWrite -- el mismo permiso ya usado en el resto de este
+ * archivo, sin necesitar User.Read.All para leer el perfil de directorio).
+ * Si dos direcciones devuelven el mismo sentItemsFolderId, es
+ * matemáticamente el mismo almacén de buzón -- evidencia real de Graph,
+ * nunca una suposición. Sola lectura.
  */
 export async function resolveMailboxIdentity(mailbox: string, creds: GraphCredentials): Promise<MailboxIdentity> {
   const tokenResult = await getAccessToken(undefined, creds);
-  if ("error" in tokenResult) return { address: mailbox, mailboxId: null, sentItemsFolderId: null, error: `token: ${tokenResult.error}` };
-
-  const userResult = await graphFetch(undefined, tokenResult.accessToken, `/users/${encodeURIComponent(mailbox)}?$select=id,mail,userPrincipalName`, { method: "GET" }, undefined);
-  if ("error" in userResult) return { address: mailbox, mailboxId: null, sentItemsFolderId: null, error: `user lookup: ${userResult.error}` };
-  const user = userResult.json as { id?: string } | null;
+  if ("error" in tokenResult) return { address: mailbox, sentItemsFolderId: null, error: `token: ${tokenResult.error}` };
 
   const folderResult = await graphFetch(undefined, tokenResult.accessToken, `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems?$select=id`, { method: "GET" }, undefined);
-  if ("error" in folderResult) return { address: mailbox, mailboxId: user?.id ?? null, sentItemsFolderId: null, error: `sentitems lookup: ${folderResult.error}` };
+  if ("error" in folderResult) return { address: mailbox, sentItemsFolderId: null, error: `sentitems lookup: ${folderResult.error}` };
   const folder = folderResult.json as { id?: string } | null;
 
-  return { address: mailbox, mailboxId: user?.id ?? null, sentItemsFolderId: folder?.id ?? null };
+  return { address: mailbox, sentItemsFolderId: folder?.id ?? null };
 }
 
 export async function findMessagesBySubject(mailbox: string, subject: string, creds: GraphCredentials): Promise<{ error?: string; messages: Array<{ id: string; subject: string; sentDateTime: string | null; parentFolderId: string | null }> }> {

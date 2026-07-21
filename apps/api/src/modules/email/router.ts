@@ -81,7 +81,7 @@ emailRouter.get("/emails/diagnostic/mailbox-identity", requirePermission("approv
     }
     const creds = { tenantId: env.AZURE_TENANT_ID, clientId: env.AZURE_CLIENT_ID, clientSecret: env.AZURE_CLIENT_SECRET };
     const [sales, hello] = await Promise.all([resolveMailboxIdentity("sales@dreistaff.com", creds), resolveMailboxIdentity("hello@dreistaff.com", creds)]);
-    res.json({ sales, hello, sameMailbox: !!sales.mailboxId && sales.mailboxId === hello.mailboxId });
+    res.json({ sales, hello, sameMailbox: !!sales.sentItemsFolderId && sales.sentItemsFolderId === hello.sentItemsFolderId });
   } catch (err) {
     next(err);
   }
