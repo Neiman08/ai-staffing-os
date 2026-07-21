@@ -172,3 +172,28 @@ export const decideApprovalInputSchema = z.object({
   note: z.string().optional(),
 });
 export type DecideApprovalInput = z.infer<typeof decideApprovalInputSchema>;
+
+// F17: envío manual real desde el CRM -- "correos manuales enviados
+// desde el CRM" del pedido real. SIEMPRE sale del perfil COMMERCIAL
+// (sales@<dominio>, ver modules/email/sender-profiles.ts) -- este
+// endpoint nunca acepta un `from`/perfil de texto libre, mismo criterio
+// que el resto del envío real. Vínculos opcionales para asociar el
+// envío a un Lead/Opportunity/Company real cuando corresponda.
+export const sendManualEmailInputSchema = z.object({
+  to: z.string().min(1),
+  subject: z.string().min(1),
+  bodyText: z.string().min(1),
+  leadId: z.string().optional(),
+  opportunityId: z.string().optional(),
+  companyId: z.string().optional(),
+  contactId: z.string().optional(),
+});
+export type SendManualEmailInput = z.infer<typeof sendManualEmailInputSchema>;
+
+export const sendManualEmailResultSchema = z.object({
+  emailMessageId: z.string(),
+  status: z.enum(["SENT", "FAILED", "RETRYABLE"]),
+  providerMessageId: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+});
+export type SendManualEmailResult = z.infer<typeof sendManualEmailResultSchema>;
