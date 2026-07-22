@@ -821,3 +821,47 @@ test("opportunity recommendation: evidencia debil (sin email, sin señales) nunc
   assert.notEqual(rec.recommendation, "CREATE_OPPORTUNITY");
   assert.ok(rec.risks.length > 0);
 });
+
+// ---------- F19 Fase 1: Company.tradeKey (capacidad de modelo, sin uso todavía) ----------
+
+test("F19 Fase 1: candidato con evidencia real (EXACT) persiste tradeKey = taxonomyKey de la query", async () => {
+  const tenantId = await setupTenant("tradekey-exact");
+  // "Acme Manufacturing" (fixture default) matchea "manufacturing" por
+  // nombre -> EXACT, mismo candidato que ya usa el resto de este archivo
+  // como caso de evidencia fuerte.
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const report = await run(tenantId, manufacturingPlan(), providers);
+
+  assert.equal(report.companyValidations[0]!.businessConfidence, "EXACT");
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: report.createdCompanyIds[0]! } });
+  assert.equal(company.tradeKey, "manufacturing");
+});
+
+test("F19 Fase 1: candidato sin evidencia (WEAK) persiste tradeKey = null -- nunca se etiqueta un trade sin evidencia real", async () => {
+  const tenantId = await setupTenant("tradekey-weak");
+  // "Weak Evidence Co" -- mismo fixture que ya usa este archivo (arriba)
+  // para representar el caso "evidencia débil, sin señales" contra
+  // manufacturing.
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture({ name: "Weak Evidence Co" })]) });
+  const report = await run(tenantId, manufacturingPlan(), providers);
+
+  assert.equal(report.companyValidations[0]!.businessConfidence, "WEAK");
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: report.createdCompanyIds[0]! } });
+  assert.equal(company.tradeKey, null);
+  // F18: mismo candidato WEAK -- ambas dimensiones (comercial y trade)
+  // deben coincidir en "sin evidencia todavía", nunca una sí y la otra no.
+  assert.equal(company.commercialStatus, "DISCOVERY_CANDIDATE");
+});
+
+test("F19 Fase 1: una Company creada ANTES de este cambio (sin discovery) sigue con tradeKey = null, comportamiento intacto", async () => {
+  const tenantId = await setupTenant("tradekey-preexisting");
+  const industry = await prisma.industry.findFirstOrThrow({ where: { name: "Manufacturing" } });
+  const manual = await prisma.company.create({
+    data: { tenantId, name: "F19 Preexisting Co", industryId: industry.id, status: "PROSPECT" },
+  });
+  createdCompanyIds.push(manual.id);
+
+  const fetched = await prisma.company.findUniqueOrThrow({ where: { id: manual.id } });
+  assert.equal(fetched.tradeKey, null);
+  assert.equal(fetched.commercialStatus, "COMMERCIAL_VALIDATED");
+});

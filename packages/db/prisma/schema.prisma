@@ -584,6 +584,24 @@ model Company {
   // datos de contacto, no si el TIPO de negocio fue validado contra la
   // taxonomía pedida por la misión).
   commercialStatus        CompanyCommercialStatus   @default(COMMERCIAL_VALIDATED)
+  // F19 Fase 1 (capacidad de modelo únicamente -- ver plan aprobado,
+  // "sin cambiar comportamiento del producto"): key de
+  // BUSINESS_TAXONOMY (apps/api/.../ceo-intelligence/taxonomy.ts) que
+  // identifica el trade/sector específico de esta Company (ej.
+  // "roofing", "electrical", "data_centers") -- un nivel más granular
+  // que industryId (que solo captura el bucket amplio del CRM:
+  // Construction/Manufacturing/Warehouse-Logistics/Hospitality/General
+  // Labor). String simple a propósito, nunca un enum de Prisma ni un
+  // catálogo paralelo -- BUSINESS_TAXONOMY en código sigue siendo la
+  // única fuente de verdad de qué keys son válidas; este campo solo
+  // persiste cuál de esas keys aplica a esta Company puntual.
+  // Nullable, sin default: toda Company existente antes de F19 Fase 1
+  // queda NULL (ninguna migración/inferencia retroactiva). Se puebla
+  // automáticamente solo en Discovery (persistAcceptedCandidate,
+  // mission-executor.ts) cuando la confianza de negocio no es WEAK; F19
+  // Fase 1 deliberadamente NO agrega ningún índice ni ningún filtro que
+  // lo use -- eso queda para una fase posterior, aprobada aparte.
+  tradeKey                String?
   // Evidencia estructurada del descubrimiento/clasificación de esta
   // Company — nunca reemplaza industryId (FK real, sigue siendo la
   // fuente de verdad de la industria). Estructura versionada

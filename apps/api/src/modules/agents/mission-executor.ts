@@ -1492,6 +1492,13 @@ async function persistAcceptedCandidate(params: {
       // evaluateBusinessIdentityGate). REJECTED nunca llega acá (filtrado
       // más arriba por `if (!validation.accepted)`).
       commercialStatus: deriveCommercialStatus(businessValidation.confidence),
+      // F19 Fase 1: puebla tradeKey SOLO cuando hay evidencia real (no
+      // WEAK) de que el candidato pertenece a este taxonomyKey -- mismo
+      // criterio que commercialStatus arriba, nunca se etiqueta un
+      // trade sin evidencia. Capacidad de modelo únicamente: ningún
+      // filtro/selección/scoring lee este campo todavía (Fase 2, fuera
+      // de alcance acá).
+      tradeKey: businessValidation.confidence !== "WEAK" ? candidate.query.taxonomyKey : null,
       discoveryMetadata: {
         schemaVersion: CEO_INTENT_SCHEMA_VERSION,
         taxonomyVersion: BUSINESS_TAXONOMY_VERSION,
