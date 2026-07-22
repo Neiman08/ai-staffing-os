@@ -175,3 +175,69 @@ test("F16: las 4 estrategias (client, subcontractor, sector, trade general) coex
   assert.ok(terms.some((t) => !t.includes("qts") && /critical infrastructure|substation|industrial|data center/.test(t)), "sector strategy");
   assert.ok(terms.some((t) => t === "electrical contractor"), "trade general strategy sin cambios");
 });
+
+// ---------- F20 (auditoría PO, 2026-07-22): la expansión de cliente/sector
+// de infraestructura crítica solo puede aplicar a trades realmente
+// relacionados con data centers/mission critical -- nunca a hospitality,
+// roofing, restaurants, etc., aunque la misma instrucción mencione un
+// cliente de infraestructura crítica para OTRO propósito. ----------
+
+test("F20: una misión de hoteles que menciona 'Google' en el mismo texto NUNCA arma queries de hotel+data-center/Google -- la contaminación real reportada por el PO", () => {
+  const missionPlan = plan("Busca 20 hoteles reales en Illinois con alta probabilidad de necesitar personal, incluso los que trabajen con Google.");
+  const terms = missionPlan.searchQueries.map((q) => q.searchTerm.toLowerCase());
+  assert.ok(terms.length > 0, "la misión sí debe seguir generando queries de hotel reales");
+  for (const t of terms) {
+    assert.ok(!/google|data center|critical infrastructure|substation|industrial/.test(t), `query contaminada: "${t}"`);
+  }
+  assert.ok(missionPlan.searchQueries.every((q) => q.taxonomyKey === "hospitality"));
+});
+
+test("F20: hoteles no reciben Data Centers ni Google -- ninguna query de la taxonomía hospitality menciona vocabulario de infraestructura crítica", () => {
+  const missionPlan = plan("Busca hoteles reales en Illinois que puedan necesitar Housekeeping, para proyectos de QTS y Meta.");
+  const hospitalityTerms = missionPlan.searchQueries.filter((q) => q.taxonomyKey === "hospitality").map((q) => q.searchTerm.toLowerCase());
+  assert.ok(hospitalityTerms.length > 0);
+  for (const t of hospitalityTerms) {
+    assert.ok(!/qts|meta|google|data center|critical infrastructure|substation|industrial/.test(t), `query de hospitality contaminada: "${t}"`);
+  }
+});
+
+test("F20: roofing no recibe hoteles -- ninguna query de roofing menciona hotel/resort/lodging", () => {
+  const missionPlan = plan("Busca contratistas de roofing reales en Illinois.");
+  const terms = missionPlan.searchQueries.map((q) => q.searchTerm.toLowerCase());
+  assert.ok(terms.length > 0);
+  for (const t of terms) {
+    assert.ok(!/hotel|resort|lodging|motel|inn\b/.test(t), `query de roofing contaminada con hospitality: "${t}"`);
+  }
+});
+
+test("F20: electricistas no reciben restaurantes -- ninguna query de electrical menciona restaurant/dining", () => {
+  const missionPlan = plan("Busca contratistas eléctricos reales en Illinois.");
+  const terms = missionPlan.searchQueries.map((q) => q.searchTerm.toLowerCase());
+  assert.ok(terms.length > 0);
+  for (const t of terms) {
+    assert.ok(!/restaurant|dining/.test(t), `query de electrical contaminada con restaurants: "${t}"`);
+  }
+});
+
+test("F20: Data Centers SÍ recibe contexto de infraestructura crítica cuando el usuario lo pide explícitamente", () => {
+  const missionPlan = plan("Busca contratistas de data centers reales que trabajen en proyectos de Google en Texas.");
+  const terms = missionPlan.searchQueries.map((q) => q.searchTerm.toLowerCase());
+  assert.ok(terms.some((t) => t.includes("google")), `esperaba al menos una query con "google", tengo: ${JSON.stringify(terms)}`);
+  const dataCenterQueries = missionPlan.searchQueries.filter((q) => q.taxonomyKey === "data_centers");
+  assert.ok(dataCenterQueries.length > 0);
+});
+
+test("F20: electrical SÍ recibe expansión de cliente cuando el usuario lo pide explícitamente para ese trade (comportamiento legítimo preservado)", () => {
+  const missionPlan = plan("Busca contratistas eléctricos que trabajen en proyectos de Google en Texas.");
+  const terms = missionPlan.searchQueries.map((q) => q.searchTerm.toLowerCase());
+  assert.ok(terms.some((t) => t.includes("google") && t.includes("electrical")), `esperaba una query eléctrica con "google", tengo: ${JSON.stringify(terms)}`);
+});
+
+test("F20: una misión genérica sin ningún cliente mencionado nunca hereda vocabulario de infraestructura crítica de ningún ejemplo interno", () => {
+  const missionPlan = plan("Busca fábricas de manufactura reales en Illinois.");
+  const terms = missionPlan.searchQueries.map((q) => q.searchTerm.toLowerCase());
+  assert.ok(terms.length > 0);
+  for (const t of terms) {
+    assert.ok(!/google|meta|microsoft|amazon|aws|qts|data center|critical infrastructure|substation/.test(t), `query genérica contaminada: "${t}"`);
+  }
+});

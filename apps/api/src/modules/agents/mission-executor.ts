@@ -1022,6 +1022,26 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           stopReason = "cancelled";
         }
 
+        // F21 (estrategia de contacto por prioridad, Fase 2): persiste el
+        // canal alternativo real ya capturado en el mismo crawl (nunca un
+        // segundo request al sitio) -- resolveBestContactChannel
+        // (contact-channel.ts) lo lee al momento de generar el borrador de
+        // outreach, sin importar cuánto tiempo después corra esa misión.
+        currentDiscoveryMetadata = {
+          ...currentDiscoveryMetadata,
+          contactChannel: {
+            hasWebsite: enrichment.websiteSignals.hasWebsite,
+            crawlBlocked: enrichment.websiteSignals.crawlBlocked,
+            careersPageUrl: enrichment.websiteSignals.careersPageUrl,
+            hasContactForm: enrichment.websiteSignals.hasContactForm,
+            contactFormUrl: enrichment.websiteSignals.contactFormUrl,
+          },
+        };
+        await scopedDb.company.update({
+          where: { id: company.id },
+          data: { discoveryMetadata: currentDiscoveryMetadata as never },
+        });
+
         // F7.5: Hiring Signal Intelligence — paso opcional del plan
         // (find_hiring_signals), nunca corre si el plan no lo declaró.
         // Reutiliza EXACTAMENTE el mismo crawl que ya hizo el

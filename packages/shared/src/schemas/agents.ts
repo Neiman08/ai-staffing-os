@@ -135,7 +135,13 @@ export type AgentTaskDetail = z.infer<typeof agentTaskDetailSchema>;
 // F2: Approvals — every draftOutreach ends in one of these (F2 §9)
 // ============================================================
 
-export const approvalStatusSchema = z.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]);
+// F21 Fase 4: READY_TO_SEND/SENDING/SENT/FAILED agregados -- separación
+// aprobación/envío. PENDING/APPROVED/REJECTED/EXPIRED nunca cambian de
+// significado (compatibilidad con filas históricas) -- una fila APPROVED
+// de antes de este cambio ya fue enviada bajo el comportamiento viejo.
+// Desde este cambio, una decisión APPROVED transiciona directo a
+// READY_TO_SEND, nunca queda descansando en APPROVED.
+export const approvalStatusSchema = z.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED", "READY_TO_SEND", "SENDING", "SENT", "FAILED"]);
 export const riskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
 
 // F17: presente SOLO en la respuesta directa de decideApproval (nunca en
@@ -162,6 +168,10 @@ export const approvalRequestListItemSchema = z.object({
   decidedByLabel: z.string().nullable(),
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
+  // F21 Fase 4: quién/cuándo ejecutó la acción de ENVÍO real (sendApproval)
+  // -- siempre distinto de decidedByLabel/decidedAt (la aprobación).
+  sentByLabel: z.string().nullable(),
+  sentAt: z.string().nullable(),
   createdAt: z.string(),
   emailSendResult: approvalEmailSendResultSchema.optional(),
 });

@@ -16,6 +16,23 @@ import { getTenancyContext } from "../../../core/tenancy/context";
 import { AppError } from "../../../core/errors";
 import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
+import { resolveBestContactChannel, type ContactChannelType } from "../../ceo-intelligence/contact-channel";
+
+const BUSINESS_NAME = "DreiStaff";
+// F21 Fase 3: perfiles reales que un hotel necesita, pedidos explícitamente
+// por el PO -- el mensaje de hospitality se enfoca en estos, nunca en
+// roles genéricos de otra industria.
+const HOSPITALITY_ROLE_FOCUS = [
+  "Housekeepers",
+  "Room Attendants",
+  "Laundry Attendants",
+  "Front Desk Agents",
+  "Banquet Staff",
+  "Kitchen Staff",
+  "Maintenance",
+  "General Labor",
+];
+const CONFIRMED_HIRING_STATUSES = new Set(["CONFIRMED_HIRING", "LIKELY_HIRING"]);
 
 // F4 §14: día 1 (hoy) / día 4 / día 9 / día 18 — offsets en días desde hoy.
 const SEQUENCE_DAY_OFFSETS = [0, 4, 9, 18];
@@ -120,7 +137,10 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
       },
     },
 
-    // ---- personalizeMessage: hybrid D8, ALWAYS creates an ApprovalRequest ----
+    // ---- personalizeMessage: hybrid D8. Solo crea ApprovalRequest cuando
+    // hay un canal de EMAIL real disponible (F21 Fase 3); si no, crea una
+    // tarea comercial con el mejor canal alternativo real y nunca llama al
+    // LLM ni gasta un intento de redacción sin destinatario real. ----
     {
       ...personalizeMessageToolStub,
       async execute(input: z.infer<typeof personalizeMessageInputSchema>) {
@@ -129,7 +149,9 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
 
         const cc = await scopedDb.campaignCompany.findUnique({
           where: { id: input.campaignCompanyId },
-          include: { company: { include: { industry: true, possibleCategories: true } } },
+          include: {
+            company: { include: { industry: true, possibleCategories: true, contacts: true, contactPoints: true } },
+          },
         });
         if (!cc) throw AppError.notFound("CampaignCompany not found");
 
@@ -137,6 +159,65 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         const step = sequence[input.step];
         if (!step) {
           throw AppError.badRequest("No existe ese paso de secuencia todavía — corré planSequence primero.");
+        }
+
+        const stepLabel = STEP_LABELS[input.step] ?? "seguimiento";
+        const company = cc.company;
+        const metadata = (company.discoveryMetadata as {
+          contactChannel?: { careersPageUrl?: string | null; contactFormUrl?: string | null };
+          hiringSignal?: { hiringStatus?: string | null };
+        } | null) ?? null;
+
+        // F21 Fase 2: resuelve el mejor canal disponible ANTES de gastar
+        // ningún request al LLM -- nunca se redacta un "borrador de email"
+        // para una empresa sin ningún email real.
+        const channelResolution = resolveBestContactChannel({
+          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl })),
+          contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
+          companyEmail: company.email,
+          companyPhone: company.phone,
+          careersPageUrl: metadata?.contactChannel?.careersPageUrl ?? null,
+          contactFormUrl: metadata?.contactChannel?.contactFormUrl ?? null,
+        });
+
+        if (!channelResolution.isEmailCapable) {
+          // F21 Fase 2, regla explícita: "si no existe email, crear una
+          // tarea comercial con teléfono, formulario o canal alternativo" —
+          // nunca se elimina la Company, nunca se inventa un email para
+          // poder seguir. El paso de secuencia queda DONE (ya se procesó),
+          // sin ApprovalRequest ni consumo de LLM.
+          const channelLabel: Record<ContactChannelType, string> = {
+            VERIFIED_PERSON_EMAIL: "email personal verificado",
+            VERIFIED_ORG_EMAIL: "email organizacional verificado",
+            WEBSITE_ORG_EMAIL: "email organizacional sin verificar",
+            CONTACT_FORM: "formulario de contacto",
+            CAREERS_PAGE: "página de careers/jobs",
+            LINKEDIN: "LinkedIn",
+            PHONE: "teléfono principal",
+            NONE: "ningún canal",
+          };
+          const followUp = await followUpsService.createFollowUp({
+            entityType: "company",
+            entityId: cc.companyId,
+            type: channelResolution.channel === "PHONE" ? "CALL" : channelResolution.channel === "LINKEDIN" ? "LINKEDIN" : "CALL",
+            dueDate: new Date().toISOString(),
+            priority: "MEDIUM",
+            notes: `Sin email disponible para ${company.name} — canal alternativo: ${channelLabel[channelResolution.channel]}${channelResolution.value ? ` (${channelResolution.value})` : ""}. ${channelResolution.reason}`,
+          });
+          await scopedDb.followUp.update({
+            where: { id: followUp.id },
+            data: { campaignId: cc.campaignId, createdByAgentTaskId: deps.taskId },
+          });
+          await scopedDb.followUp.update({ where: { id: step.id }, data: { status: "DONE", completedAt: new Date() } });
+          await auditAgentAction({
+            agentInstanceId: deps.agentInstanceId,
+            action: "outreach.alternative_channel_task_created_by_agent",
+            entityType: "campaignCompany",
+            entityId: cc.id,
+            after: { channel: channelResolution.channel, value: channelResolution.value, reason: channelResolution.reason },
+          });
+
+          return { draftBody: null, subject: null, channel: channelResolution.channel, alternativeChannelTaskId: followUp.id };
         }
 
         const [recentActivity, openOpportunities] = await Promise.all([
@@ -151,19 +232,29 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
           }),
         ]);
 
-        const stepLabel = STEP_LABELS[input.step] ?? "seguimiento";
-        const prompt = `Redactá el mensaje de "${stepLabel}" (paso ${input.step + 1}/4) de una secuencia comercial por email. Es SOLO un borrador — nunca digas que ya fue enviado.
+        const hiringStatus = metadata?.hiringSignal?.hiringStatus ?? null;
+        const hiringConfirmed = hiringStatus != null && CONFIRMED_HIRING_STATUSES.has(hiringStatus);
+        const isHospitality = company.industry.name === "Hospitality";
 
-Empresa: ${cc.company.name}
-Industria: ${cc.company.industry.name}
-Ciudad/estado: ${cc.company.city ?? "—"}, ${cc.company.state ?? "—"}
-Tamaño: ${cc.company.estimatedSize ?? "desconocido"}
-Señales detectadas: ${cc.company.commercialScoreReason ?? "sin señales registradas"}
-Necesidades posibles: ${cc.company.possibleCategories.map((c) => c.name).join(", ") || "sin datos"}
+        const prompt = `Redactá el mensaje de "${stepLabel}" (paso ${input.step + 1}/4) de una secuencia comercial por email para ${BUSINESS_NAME}, una agencia de staffing. Es SOLO un borrador — nunca digas que ya fue enviado.
+
+Empresa: ${company.name}
+Industria: ${company.industry.name}
+Ciudad/estado: ${company.city ?? "—"}, ${company.state ?? "—"}
+Tamaño: ${company.estimatedSize ?? "desconocido"}
+Señal de contratación: ${hiringStatus ?? "sin evaluar"}${hiringConfirmed ? "" : " (NO confirmada — nunca afirmes que la empresa está contratando)"}
+Necesidades posibles: ${company.possibleCategories.map((c) => c.name).join(", ") || "sin datos"}
 Oportunidades abiertas: ${openOpportunities.map((o) => o.title).join(", ") || "ninguna"}
 Historial reciente: ${recentActivity.map((a) => a.subject).join("; ") || "sin actividad previa"}
+${isHospitality ? `Perfiles a enfocar (hospitality): ${HOSPITALITY_ROLE_FOCUS.join(", ")}.` : ""}
 
-Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body": "<mensaje breve, profesional, sin prometer precios ni compromisos, usando el contexto real de arriba — nunca una plantilla genérica>"}.`;
+Reglas obligatorias:
+- Estructura: asunto corto; saludo adecuado; referencia real a la empresa (nombre, ubicación o señal real de arriba — nunca un dato inventado); explicación breve de qué hace ${BUSINESS_NAME} (agencia de staffing); propuesta concreta de personal relevante a la industria; llamada a la acción sencilla (ej. coordinar una llamada breve); firma profesional.
+- Nunca afirmes que la empresa está contratando salvo que la señal de arriba esté confirmada (CONFIRMED_HIRING o LIKELY_HIRING). Si no está confirmada, usá lenguaje prudente, por ejemplo (en inglés, tal cual): "We help ${isHospitality ? "hospitality operators" : "operators like you"} maintain reliable staffing coverage during busy periods, turnover or seasonal demand."
+- Nunca prometas precios, tarifas ni compromisos.
+- Nunca inventes un dato (nombre de contacto, número de empleados, proyecto específico) que no esté en el contexto de arriba.
+
+Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body": "<mensaje completo siguiendo la estructura de arriba, en inglés>"}.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -187,6 +278,8 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           campaignCompanyId: cc.id,
           sequenceStep: input.step,
           channel: "EMAIL",
+          to: channelResolution.value,
+          contactChannelSource: channelResolution.channel,
           subject: parsed.subject,
           body: parsed.body,
         };
@@ -195,7 +288,7 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           data: {
             tenantId: ctx.tenantId,
             agentTaskId: deps.taskId,
-            summary: `Borrador (paso ${input.step + 1}/4, ${stepLabel}) para ${cc.company.name}`,
+            summary: `Borrador (paso ${input.step + 1}/4, ${stepLabel}) para ${company.name}`,
             proposedAction,
             riskLevel: "MEDIUM",
           },
@@ -213,7 +306,7 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           after: proposedAction,
         });
 
-        return { draftBody: parsed.body, subject: parsed.subject };
+        return { draftBody: parsed.body, subject: parsed.subject, channel: channelResolution.channel, alternativeChannelTaskId: null };
       },
     },
 

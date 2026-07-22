@@ -74,6 +74,9 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "hospitality group",
     ],
     websitePhrases: ["rooms", "reservations", "check-in", "housekeeping", "hospitality"],
+    // F21 (outreach de hoteles, pedido explícito del PO): "Banquet Staff",
+    // "Kitchen Staff", "Maintenance" y "General Labor" agregados -- perfiles
+    // reales que un hotel necesita además de housekeeping/front desk.
     jobTitles: [
       "Housekeeper",
       "Room Attendant",
@@ -81,8 +84,23 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "Laundry Attendant",
       "Cleaning Staff",
       "Front Desk Agent",
+      "Banquet Staff",
+      "Kitchen Staff",
+      "Maintenance",
+      "General Labor",
     ],
-    decisionMakers: ["General Manager", "Executive Housekeeper", "Housekeeping Manager", "HR Manager", "Recruiter"],
+    // F21: "Director of Human Resources"/"Talent Acquisition"/"Operations
+    // Manager" agregados -- pedido explícito del PO para outreach de hoteles.
+    decisionMakers: [
+      "General Manager",
+      "Director of Human Resources",
+      "HR Manager",
+      "Talent Acquisition",
+      "Recruiter",
+      "Operations Manager",
+      "Executive Housekeeper",
+      "Housekeeping Manager",
+    ],
     // F7.4 Parte A: "cleaning"/"property management"/"restaurant" agregados
     // -- rechazos explicitos pedidos por el PO (cleaning contractors,
     // property management sin evidencia de hotel, restaurantes).

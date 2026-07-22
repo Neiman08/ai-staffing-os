@@ -329,11 +329,27 @@ enum MemoryScope {
   ENTITY
 }
 
+// F21 Fase 4 (separación aprobación/envío, pedido explícito del PO):
+// hasta acá, decideApproval con decision=APPROVED disparaba el envío
+// real por Microsoft Graph EN EL MISMO REQUEST -- una aprobación humana
+// nunca debería enviar nada por sí sola. PENDING/APPROVED/REJECTED/
+// EXPIRED se mantienen SIN TOCAR (compatibilidad con filas históricas
+// -- una fila APPROVED de antes de este cambio YA fue enviada bajo el
+// comportamiento viejo, nunca se reinterpreta ni se reencola). A partir
+// de este deploy, decideApproval(APPROVED) transiciona directo a
+// READY_TO_SEND (nunca deja una fila descansando en APPROVED) -- el
+// envío real pasa a ser una acción explícita separada (sendApproval,
+// approvals/service.ts) que exige status=READY_TO_SEND o FAILED
+// (reintento), nunca PENDING/APPROVED/REJECTED/EXPIRED/SENDING/SENT.
 enum ApprovalStatus {
   PENDING
   APPROVED
   REJECTED
   EXPIRED
+  READY_TO_SEND
+  SENDING
+  SENT
+  FAILED
 }
 
 enum ActorType {
@@ -2129,6 +2145,13 @@ model ApprovalRequest {
   decidedById    String?
   decidedAt      DateTime?
   decisionNote   String?
+  // F21 Fase 4: quién ejecutó la acción de ENVÍO real (separada de
+  // decidedById/decidedAt, que registran la aprobación humana, nunca el
+  // envío). Null hasta que alguien realmente presiona "Enviar" -- el
+  // detalle del intento (proveedor, messageId, error) sigue viviendo en
+  // EmailMessage (F17), nunca duplicado acá.
+  sentById       String?
+  sentAt         DateTime?
   expiresAt      DateTime?
   createdAt      DateTime       @default(now())
 

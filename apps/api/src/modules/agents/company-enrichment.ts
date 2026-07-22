@@ -50,6 +50,12 @@ export interface WebsiteCrawlSignals {
   crawlBlocked: boolean;
   hasCareersPage: boolean;
   careersPageUrl: string | null;
+  // F21 (estrategia de contacto por prioridad, Fase 2): ya lo capturaba
+  // website-intelligence/extract.ts (hasContactForm/contactFormUrl) pero
+  // nunca se propagaba hasta acá -- necesario como canal alternativo
+  // cuando no hay ningún email real disponible.
+  hasContactForm: boolean;
+  contactFormUrl: string | null;
   pageTexts: Array<{ url: string; text: string }>;
   // F15: personas reales con nombre+cargo detectadas en el MISMO crawl
   // (Team/Leadership/About/Contact/Careers, ver website-intelligence/
@@ -96,6 +102,8 @@ function emptyReport(patternsFailed: string[] = [], websiteSignals?: Partial<Web
       crawlBlocked: false,
       hasCareersPage: false,
       careersPageUrl: null,
+      hasContactForm: false,
+      contactFormUrl: null,
       pageTexts: [],
       namedPeople: [],
       ...websiteSignals,
@@ -154,6 +162,8 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
     crawlBlocked: websiteResult.blockedByRobots || websiteResult.cancelled,
     hasCareersPage: websiteResult.hasCareersPage,
     careersPageUrl: websiteResult.careersPageUrl,
+    hasContactForm: websiteResult.hasContactForm,
+    contactFormUrl: websiteResult.contactFormUrl,
     pageTexts: websiteResult.pageTexts,
     namedPeople: websiteResult.namedPeople,
   };

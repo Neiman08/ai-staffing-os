@@ -11,7 +11,22 @@ import { Button } from "@/components/ui/button";
 import { formatStatusLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
-const STATUS_TABS = ["PENDING", "APPROVED", "REJECTED", "ALL"] as const;
+// F21 Fase 4: READY_TO_SEND/FAILED agregados -- separación aprobación/
+// envío. APPROVED se mantiene en la lista solo por compatibilidad con
+// filas históricas (de antes de este cambio, cuando aprobar enviaba de
+// inmediato) -- ninguna fila nueva queda descansando ahí.
+const STATUS_TABS = ["PENDING", "READY_TO_SEND", "SENT", "FAILED", "REJECTED", "ALL"] as const;
+
+const STATUS_BADGE_VARIANT: Record<string, "warning" | "success" | "danger" | "info"> = {
+  PENDING: "warning",
+  APPROVED: "info",
+  READY_TO_SEND: "info",
+  SENDING: "info",
+  SENT: "success",
+  FAILED: "danger",
+  REJECTED: "danger",
+  EXPIRED: "danger",
+};
 
 function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
   const { toast } = useToast();
@@ -26,6 +41,10 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
     // cuando el destinatario es un email de departamento (info@/hr@/careers@)
     // -- ausente en approvals generados antes de este fix.
     recipientKind?: "person" | "organizational";
+    // F21 Fase 3: presente en los borradores generados por
+    // personalizeMessage desde este cambio -- el canal real que resolvió
+    // el destinatario (ver contact-channel.ts).
+    contactChannelSource?: string;
   };
 
   const decide = useMutation({
@@ -35,28 +54,49 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
         body: JSON.stringify({ decision }),
       }),
     onSuccess: (result) => {
-      // F17: emailSendResult solo viene poblado en la respuesta directa
-      // de este POST (nunca en el listado) -- es el único momento real
-      // en que se sabe si Microsoft Graph confirmó el envío, así que se
-      // muestra acá mismo, nunca se inventa un "enviado" optimista.
-      if (result.emailSendResult) {
-        const r = result.emailSendResult;
-        if (r.status === "SENT") {
-          toast({ title: "Email enviado", description: `Confirmado por Microsoft Graph (id ${r.providerMessageId ?? "—"}).`, variant: "success" });
-        } else {
-          toast({
-            title: r.status === "RETRYABLE" ? "Email no enviado (reintentable)" : "Email no enviado",
-            description: r.errorMessage ?? "Error desconocido del proveedor.",
-            variant: "error",
-          });
-        }
-      } else {
-        toast({ title: "Decisión registrada", variant: "success" });
-      }
+      // F21 Fase 4: decidir NUNCA envía nada -- APPROVED solo deja el
+      // borrador en READY_TO_SEND, listo para el botón "Enviar" separado
+      // de abajo. Nunca se muestra un toast de "email enviado" acá.
+      toast({
+        title: result.status === "READY_TO_SEND" ? "Aprobado — listo para enviar" : "Decisión registrada",
+        variant: "success",
+      });
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
     onError: (err) => toast({ title: "No se pudo registrar la decisión", description: String(err), variant: "error" }),
   });
+
+  // F21 Fase 4: única acción que realmente envía un email -- separada a
+  // propósito de "decide", requiere status READY_TO_SEND o FAILED
+  // (reintento) en el backend (sendApproval, approvals/service.ts), que
+  // además garantiza idempotencia real (nunca un doble envío aunque se
+  // haga doble clic).
+  const send = useMutation({
+    mutationFn: () => apiFetch<ApprovalRequestListItem>(`/approvals/${approval.id}/send`, { method: "POST" }),
+    onSuccess: (result) => {
+      const r = result.emailSendResult;
+      if (r?.status === "SENT") {
+        toast({ title: "Email enviado", description: `Confirmado por Microsoft Graph (id ${r.providerMessageId ?? "—"}).`, variant: "success" });
+      } else if (r) {
+        toast({
+          title: r.status === "RETRYABLE" ? "Email no enviado (reintentable)" : "Email no enviado",
+          description: r.errorMessage ?? "Error desconocido del proveedor.",
+          variant: "error",
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
+    onError: (err) => toast({ title: "No se pudo enviar", description: String(err), variant: "error" }),
+  });
+
+  const handleSend = () => {
+    // El botón "Enviar" es la única acción de todo este flujo que
+    // dispara un correo real e irreversible -- confirmación explícita
+    // antes de disparar el request, nunca un solo clic accidental.
+    if (window.confirm(`¿Enviar este email a "${action.to ?? "el destinatario resuelto"}" ahora? Esta acción no se puede deshacer.`)) {
+      send.mutate();
+    }
+  };
 
   return (
     <Card>
@@ -70,13 +110,7 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
               </Link>
             )}
           </div>
-          <Badge
-            variant={
-              approval.status === "PENDING" ? "warning" : approval.status === "APPROVED" ? "success" : "danger"
-            }
-          >
-            {formatStatusLabel(approval.status)}
-          </Badge>
+          <Badge variant={STATUS_BADGE_VARIANT[approval.status] ?? "warning"}>{formatStatusLabel(approval.status)}</Badge>
         </div>
         {action.to && (
           <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
@@ -86,11 +120,13 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
                 pantalla donde un humano decide aprobar o no el envío. */}
             {action.recipientKind === "organizational" && <Badge variant="info">Contacto organizacional</Badge>}
             {action.recipientKind === "person" && <Badge variant="success">Persona identificada</Badge>}
+            {action.contactChannelSource && <Badge variant="info">Canal: {action.contactChannelSource}</Badge>}
           </p>
         )}
         {action.subject && <p className="font-medium">{action.subject}</p>}
         {action.body && <p className="whitespace-pre-wrap text-muted-foreground">{action.body}</p>}
-        {approval.status === "PENDING" ? (
+
+        {approval.status === "PENDING" && (
           <div className="flex gap-2 pt-1">
             <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate("APPROVED")}>
               Aprobar
@@ -99,14 +135,40 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
               Rechazar
             </Button>
           </div>
-        ) : (
+        )}
+
+        {approval.status === "READY_TO_SEND" && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button size="sm" disabled={send.isPending} onClick={handleSend}>
+              Enviar
+            </Button>
+            <span className="text-xs text-muted-foreground">Aprobado — pendiente de tu confirmación explícita para enviar.</span>
+          </div>
+        )}
+
+        {approval.status === "FAILED" && (
+          <div className="flex items-center gap-2 pt-1">
+            <Button size="sm" variant="outline" disabled={send.isPending} onClick={handleSend}>
+              Reintentar envío
+            </Button>
+            <span className="text-xs text-danger">El intento de envío anterior falló — nunca se reintenta automáticamente.</span>
+          </div>
+        )}
+
+        {approval.status === "SENT" && (
+          <p className="text-xs text-muted-foreground">
+            Enviado{approval.sentByLabel ? ` por ${approval.sentByLabel}` : ""}
+            {approval.sentAt ? ` el ${new Date(approval.sentAt).toLocaleString()}` : ""}.
+          </p>
+        )}
+
+        {(approval.status === "REJECTED" || approval.status === "EXPIRED" || approval.status === "APPROVED") &&
           approval.decidedByLabel && (
             <p className="text-xs text-muted-foreground">
               Decidido por {approval.decidedByLabel}
               {approval.decisionNote ? ` — "${approval.decisionNote}"` : ""}
             </p>
-          )
-        )}
+          )}
       </CardContent>
     </Card>
   );

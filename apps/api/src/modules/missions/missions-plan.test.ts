@@ -84,7 +84,8 @@ test("POST /missions/plan as ceo@titan.dev creates a real PLANNED mission, disco
   assert.ok(detail.ceoIntent!.companyTypes.includes("hotel"));
   assert.equal(detail.ceoIntent!.restrictions.allowCampaignCreation, false);
   assert.ok(detail.missionPlan);
-  assert.deepEqual(detail.missionPlan!.requiredSteps, ["discover_companies"]);
+  // F18: validate_business_type ya no es opcional -- ver mission-planner.ts.
+  assert.deepEqual(detail.missionPlan!.requiredSteps, ["discover_companies", "validate_business_type"]);
   assert.equal(detail.childTasks.length, 0);
   assert.equal(detail.selectedCompanies.length, 0);
 });

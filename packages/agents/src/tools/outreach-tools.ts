@@ -36,11 +36,15 @@ export const personalizeMessageInputSchema = z.object({
 });
 export const personalizeMessageTool: AgentTool<
   z.infer<typeof personalizeMessageInputSchema>,
-  { draftBody: string; subject?: string }
+  // F21 Fase 2/3: null cuando no hay ningún canal de email real disponible
+  // -- en ese caso se crea una tarea comercial alternativa
+  // (alternativeChannelTaskId) en vez de un ApprovalRequest, y nunca se
+  // llama al LLM.
+  { draftBody: string | null; subject?: string | null; channel: string; alternativeChannelTaskId: string | null }
 > = {
   name: "personalizeMessage",
   description:
-    "Redacta el mensaje del paso de secuencia que corresponde, usando el contexto real de la empresa (industria, señales, historial). Siempre termina en ApprovalRequest.",
+    "Redacta el mensaje del paso de secuencia que corresponde, usando el contexto real de la empresa (industria, señales, historial) -- SOLO cuando hay un canal de email real disponible (termina en ApprovalRequest); si no, crea una tarea comercial con el mejor canal alternativo real.",
   inputSchema: personalizeMessageInputSchema,
   execute: notImplemented(),
 };

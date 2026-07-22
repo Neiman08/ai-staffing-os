@@ -195,7 +195,13 @@ test("selectTargetCompanies excludes a company already TARGETED in another ACTIV
 
 test("planSequence is idempotent and personalizeMessage always creates a PENDING ApprovalRequest (real OpenAI calls)", async () => {
   const companyId = await importTestCompany("Sequence Co", "Manufacturing");
-  await prisma.company.update({ where: { id: companyId }, data: { commercialScore: 90 } });
+  // F21 Fase 2/3: personalizeMessage ya no redacta un borrador de email
+  // sin un canal de email real disponible (ver contact-channel.ts) --
+  // este test verifica idempotencia de planSequence + creación del
+  // draft, así que la fixture necesita un email real para seguir
+  // ejercitando ese camino (antes "siempre" creaba un ApprovalRequest
+  // sin importar el canal, ya no es el comportamiento correcto).
+  await prisma.company.update({ where: { id: companyId }, data: { commercialScore: 90, email: "contact@sequenceco.example" } });
 
   const campaign = await prisma.campaign.create({
     data: { tenantId: "tenant-titan", name: `Sequence Campaign ${Date.now()}`, status: "ACTIVE" },

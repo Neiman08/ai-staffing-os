@@ -102,6 +102,25 @@ function buildSectorQueries(entry: BusinessTaxonomyEntry): string[] {
   );
 }
 
+// F20 (auditoría PO, 2026-07-22 -- hallazgo real: una misión de hoteles
+// terminó con queries "hotel for Google data center", "critical
+// infrastructure hotel", "substation hotel" porque la expansión de
+// cliente/sector de abajo se aplicaba a TODA entrada no genérica
+// matcheada, sin importar si esa entrada tenía algo que ver con
+// infraestructura crítica). Única fuente de verdad: la misma
+// `relatedIndustries` que ya declara cada entrada de BUSINESS_TAXONOMY
+// -- nunca un catálogo paralelo. Una entrada es elegible para expansión
+// de cliente/sector SOLO si ella misma es "data_centers"/"mission_critical",
+// o si explícitamente declara esas keys entre sus relatedIndustries (ej.
+// "electrical"/"industrial_automation" sí las declaran -- son trades que
+// realmente sirven ese tipo de proyecto; "hospitality"/"roofing" no).
+const CRITICAL_INFRASTRUCTURE_TAXONOMY_KEYS = new Set(["data_centers", "mission_critical"]);
+
+function isCriticalInfrastructureRelevant(entry: BusinessTaxonomyEntry): boolean {
+  if (CRITICAL_INFRASTRUCTURE_TAXONOMY_KEYS.has(entry.key)) return true;
+  return entry.relatedIndustries.some((related) => CRITICAL_INFRASTRUCTURE_TAXONOMY_KEYS.has(related));
+}
+
 function buildSearchQueries(intent: StructuredIntent) {
   const queries: MissionPlan["searchQueries"] = [];
   const matchedEntries = intent.matchedTaxonomyKeys.map((key) => getTaxonomyEntry(key)).filter((e) => e !== undefined);
@@ -121,8 +140,12 @@ function buildSearchQueries(intent: StructuredIntent) {
   // genéricas -- "construction company for QTS" sería demasiado amplio.
   // Sin ningún trade específico detectado, no hay base real para
   // construir la query (nunca se inventa "QTS company" a secas).
+  // F20: además, solo entradas relevantes a infraestructura crítica
+  // (isCriticalInfrastructureRelevant) -- una misión que mezcla "hoteles"
+  // y "contratistas para Google" en la misma instrucción nunca debe
+  // expandir la parte de hoteles con vocabulario de data centers.
   if (intent.criticalInfrastructureClients.length > 0) {
-    const specificNonGeneric = specificFirst.filter((e) => !e.isGenericFallback);
+    const specificNonGeneric = specificFirst.filter((e) => !e.isGenericFallback && isCriticalInfrastructureRelevant(e));
 
     // Estrategia 1: client-related + subcontractor -- por cada cliente
     // detectado, por cada trade real matcheado.

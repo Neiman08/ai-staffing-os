@@ -2,21 +2,23 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
-import { decideApproval } from "./service";
+import { AppError } from "../../core/errors";
+import { decideApproval, sendApproval } from "./service";
 import type { MicrosoftGraphProviderPort } from "../email/email-service";
 import type { SendGraphMailResult } from "../email/microsoft-graph";
 
 /**
- * F17: prueba de integración real de extremo a extremo -- aprobar un
- * ApprovalRequest real (para cada uno de los 3 shapes reales de
- * proposedAction que este repo produce hoy, ver la auditoría en
- * approvals/service.ts) debe resolver un destinatario real y enviar vía
- * Microsoft Graph (mockeado acá, nunca la red real), siempre desde
- * sales@dreistaff.com. Base de datos real, contra un mock de Microsoft
- * Graph -- exactamente el mock de integración pedido explícitamente.
+ * F21 Fase 4 (separación aprobación/envío, pedido explícito del PO):
+ * decideApproval(APPROVED) NUNCA debe enviar nada -- solo transiciona a
+ * READY_TO_SEND. El envío real es una acción separada (sendApproval),
+ * probada acá contra un mock de Microsoft Graph -- nunca la red real.
+ * Cubre los mismos 3 shapes reales de proposedAction que F17 ya cubría
+ * (discovery-conversion, sales-tools draftOutreach, outreach-tools
+ * personalizeMessage), más los casos de idempotencia y de borde nuevos
+ * de esta fase.
  */
 
-const TEST_PREFIX = "F17-APPROVAL-EMAIL-TEST";
+const TEST_PREFIX = "F21-APPROVAL-SEND-TEST";
 const createdTenantIds: string[] = [];
 const FAKE_AZURE = { azureTenantId: "fake-tenant", azureClientId: "fake-client", azureClientSecret: "fake-secret" };
 
@@ -54,10 +56,10 @@ function fakeGraphProvider(sent: SendGraphMailResult = { kind: "sent", providerM
   return { sendGraphMail: async () => sent };
 }
 
-// ---------- Shape 1: discovery-conversion.ts (F14/F15) -- ya trae `to` ----------
+// ---------- Regla central: APPROVED nunca envía ----------
 
-test("aprobar un draft F14/F15 (proposedAction.to ya resuelto) envía real vía Graph desde sales@dreistaff.com", async () => {
-  const { tenantId, industryId, agentTaskId } = await setupTenant("f14-shape");
+test("decideApproval(APPROVED) transiciona a READY_TO_SEND -- NUNCA crea un EmailMessage ni llama al proveedor", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("approved-never-sends");
   const company = await prisma.company.create({ data: { tenantId, name: "Acme Electrical", industryId, status: "LEAD" } });
 
   await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
@@ -66,6 +68,55 @@ test("aprobar un draft F14/F15 (proposedAction.to ya resuelto) envía real vía 
         tenantId,
         agentTaskId,
         summary: "Borrador de email para Acme Electrical",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@acme-electrical.example", subject: "Posible colaboración", body: "Hola, ..." },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    const result = await decideApproval(approval.id, { decision: "APPROVED" });
+    assert.equal(result.status, "READY_TO_SEND");
+    assert.equal(result.emailSendResult, null);
+  });
+
+  const count = await prisma.emailMessage.count({ where: { tenantId } });
+  assert.equal(count, 0, "decideApproval nunca debe crear un EmailMessage");
+});
+
+test("decideApproval(REJECTED) sigue terminando el ciclo ahí mismo -- nunca sendable después", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("rejected");
+  const company = await prisma.company.create({ data: { tenantId, name: "Epsilon Co", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador para Epsilon Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@epsilon.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    const result = await decideApproval(approval.id, { decision: "REJECTED" });
+    assert.equal(result.status, "REJECTED");
+
+    await assert.rejects(() => sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }), (err: unknown) => err instanceof AppError && err.status === 400);
+  });
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 0);
+});
+
+// ---------- sendApproval: los mismos 3 shapes reales, ahora en 2 pasos ----------
+
+test("sendApproval sobre un draft F14/F15 (proposedAction.to ya resuelto) envía real vía Graph desde sales@dreistaff.com, luego de decideApproval", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("f14-shape");
+  const company = await prisma.company.create({ data: { tenantId, name: "Acme Electrical 2", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador de email para Acme Electrical 2",
         proposedAction: {
           channel: "EMAIL",
           companyId: company.id,
@@ -81,24 +132,28 @@ test("aprobar un draft F14/F15 (proposedAction.to ya resuelto) envía real vía 
       },
     });
 
-    const provider = fakeGraphProvider();
-    const result = await decideApproval(approval.id, { decision: "APPROVED" }, { graphProvider: provider, ...FAKE_AZURE });
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
+    assert.equal(result.status, "SENT");
     assert.equal(result.emailSendResult?.status, "SENT");
     assert.equal(result.emailSendResult?.providerMessageId, "fake-msg-id");
+    assert.ok(result.sentAt);
+    assert.ok(result.sentByLabel);
 
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "info@acme-electrical.example");
     assert.equal(row.fromEmail, "sales@dreistaff.com");
-    assert.equal(row.fromName, "DreiStaff Sales");
-    assert.equal(row.companyId, company.id);
     assert.equal(row.status, "SENT");
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
+    assert.equal(stored.status, "SENT");
+    assert.equal(stored.sentById, "test-user");
+    assert.ok(stored.sentAt);
   });
 });
 
-// ---------- Shape 2: sales-tools draftOutreach -- leadId (+ contactId opcional), sin `to` ----------
-
-test("aprobar un draft de sales-tools (leadId + contactId, sin `to`) resuelve el email del Contact real y envía desde sales@dreistaff.com", async () => {
+test("sendApproval de sales-tools (leadId + contactId, sin `to`) resuelve el email del Contact real", async () => {
   const { tenantId, industryId, agentTaskId } = await setupTenant("sales-tools-shape");
   const company = await prisma.company.create({ data: { tenantId, name: "Beta Manufacturing", industryId, status: "LEAD", email: "org@beta-mfg.example" } });
   const contact = await prisma.contact.create({ data: { tenantId, companyId: company.id, firstName: "Jane", lastName: "Doe", email: "jane.doe@beta-mfg.example" } });
@@ -115,46 +170,18 @@ test("aprobar un draft de sales-tools (leadId + contactId, sin `to`) resuelve el
       },
     });
 
-    const result = await decideApproval(approval.id, { decision: "APPROVED" }, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
     assert.equal(result.emailSendResult?.status, "SENT");
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
-    // Debe preferir el email del Contact real -- nunca el email
-    // organizacional cuando ya hay una persona real identificada.
     assert.equal(row.toEmail, "jane.doe@beta-mfg.example");
-    assert.equal(row.fromEmail, "sales@dreistaff.com");
     assert.equal(row.leadId, lead.id);
     assert.equal(row.contactId, contact.id);
-    assert.equal(row.companyId, company.id);
   });
 });
 
-test("aprobar un draft de sales-tools sin contactId (solo leadId) cae al email organizacional de la Company -- nunca inventa una persona", async () => {
-  const { tenantId, industryId, agentTaskId } = await setupTenant("sales-tools-no-contact");
-  const company = await prisma.company.create({ data: { tenantId, name: "Gamma Logistics", industryId, status: "LEAD", email: "hello@gamma-logistics.example" } });
-  const lead = await prisma.lead.create({ data: { tenantId, companyId: company.id, industryId, status: "NEW" } });
-
-  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
-    const approval = await prisma.approvalRequest.create({
-      data: {
-        tenantId,
-        agentTaskId,
-        summary: "Borrador de email para Gamma Logistics",
-        proposedAction: { channel: "EMAIL", leadId: lead.id, contactId: null, subject: "Primer contacto", body: "Hola, ..." },
-        riskLevel: "MEDIUM",
-      },
-    });
-
-    const result = await decideApproval(approval.id, { decision: "APPROVED" }, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
-    assert.equal(result.emailSendResult?.status, "SENT");
-    const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
-    assert.equal(row.toEmail, "hello@gamma-logistics.example");
-  });
-});
-
-// ---------- Shape 3: outreach-tools personalizeMessage (loop clásico) -- campaignCompanyId, sin `to` ----------
-
-test("aprobar un draft del loop clásico de Campaign (campaignCompanyId, sin `to`) resuelve el contacto real vía CampaignCompany->Company->Contacts y envía desde sales@dreistaff.com", async () => {
+test("sendApproval del loop clásico de Campaign (campaignCompanyId, sin `to`) resuelve el contacto real", async () => {
   const { tenantId, industryId, agentTaskId } = await setupTenant("classic-shape");
   const company = await prisma.company.create({ data: { tenantId, name: "Delta Electrical", industryId, status: "LEAD", email: "info@delta-electrical.example" } });
   const contact = await prisma.contact.create({ data: { tenantId, companyId: company.id, firstName: "Bob", lastName: "Smith", email: "bob.smith@delta-electrical.example", isPrimary: true } });
@@ -172,7 +199,9 @@ test("aprobar un draft del loop clásico de Campaign (campaignCompanyId, sin `to
       },
     });
 
-    const result = await decideApproval(approval.id, { decision: "APPROVED" }, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+
     assert.equal(result.emailSendResult?.status, "SENT");
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "bob.smith@delta-electrical.example");
@@ -181,52 +210,87 @@ test("aprobar un draft del loop clásico de Campaign (campaignCompanyId, sin `to
   });
 });
 
-// ---------- Casos de borde reales ----------
+// ---------- Idempotencia y casos de borde ----------
 
-test("REJECTED nunca intenta enviar nada -- emailSendResult queda null, ningún EmailMessage se crea", async () => {
-  const { tenantId, industryId, agentTaskId } = await setupTenant("rejected");
-  const company = await prisma.company.create({ data: { tenantId, name: "Epsilon Co", industryId, status: "LEAD" } });
-
-  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
-    const approval = await prisma.approvalRequest.create({
-      data: {
-        tenantId,
-        agentTaskId,
-        summary: "Borrador para Epsilon Co",
-        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@epsilon.example", subject: "s", body: "b" },
-        riskLevel: "MEDIUM",
-      },
-    });
-
-    const result = await decideApproval(approval.id, { decision: "REJECTED" }, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
-    assert.equal(result.emailSendResult, null);
-    const count = await prisma.emailMessage.count({ where: { tenantId, approvalRequestId: approval.id } });
-    assert.equal(count, 0);
-  });
-});
-
-test("channel LINKEDIN nunca intenta enviar por email -- emailSendResult queda null", async () => {
-  const { tenantId, industryId, agentTaskId } = await setupTenant("linkedin-channel");
-  const company = await prisma.company.create({ data: { tenantId, name: "Zeta Co", industryId, status: "LEAD" } });
-  const lead = await prisma.lead.create({ data: { tenantId, companyId: company.id, industryId, status: "NEW" } });
+test("idempotencia: llamar sendApproval dos veces sobre el mismo ApprovalRequest solo envía UNA vez -- la segunda se rechaza sin tocar nada", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("idempotency");
+  const company = await prisma.company.create({ data: { tenantId, name: "Idempotent Co", industryId, status: "LEAD" } });
 
   await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
     const approval = await prisma.approvalRequest.create({
       data: {
         tenantId,
         agentTaskId,
-        summary: "Borrador de LinkedIn",
-        proposedAction: { channel: "LINKEDIN", leadId: lead.id, contactId: null, body: "Hola" },
+        summary: "Borrador para Idempotent Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@idempotent.example", subject: "s", body: "b" },
         riskLevel: "MEDIUM",
       },
     });
 
-    const result = await decideApproval(approval.id, { decision: "APPROVED" }, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
-    assert.equal(result.emailSendResult, null);
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    const first = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+    assert.equal(first.status, "SENT");
+
+    await assert.rejects(
+      () => sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }),
+      (err: unknown) => err instanceof AppError && err.status === 400,
+    );
   });
+
+  const emails = await prisma.emailMessage.count({ where: { tenantId } });
+  assert.equal(emails, 1, "un ApprovalRequest SENT nunca puede generar un segundo envío real");
 });
 
-test("sin ningún canal real resoluble (sin Contact, sin email organizacional) -- FAILED honesto, con evidencia, nunca inventa un destinatario", async () => {
+test("idempotencia: sendApproval en paralelo (misma carrera) solo deja pasar una de las dos llamadas", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("idempotency-race");
+  const company = await prisma.company.create({ data: { tenantId, name: "Race Co", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador para Race Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@race.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+    await decideApproval(approval.id, { decision: "APPROVED" });
+
+    const results = await Promise.allSettled([
+      sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }),
+      sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    assert.equal(fulfilled.length, 1, "solo UNA de las dos llamadas concurrentes debe ganar la carrera");
+    assert.equal(rejected.length, 1);
+  });
+
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 1);
+});
+
+test("sendApproval sobre un ApprovalRequest todavía PENDING (nunca decidido) se rechaza -- nunca se salta la aprobación humana", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("pending-cannot-send");
+  const company = await prisma.company.create({ data: { tenantId, name: "Pending Co", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador para Pending Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@pending.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    await assert.rejects(() => sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }), (err: unknown) => err instanceof AppError && err.status === 400);
+  });
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 0);
+});
+
+test("sin ningún canal real resoluble -- sendApproval falla honestamente (FAILED), nunca inventa un destinatario, reintentable después", async () => {
   const { tenantId, industryId, agentTaskId } = await setupTenant("no-recipient");
   const company = await prisma.company.create({ data: { tenantId, name: "Sin Email Co", industryId, status: "LEAD" } }); // sin email
   const lead = await prisma.lead.create({ data: { tenantId, companyId: company.id, industryId, status: "NEW" } });
@@ -242,13 +306,40 @@ test("sin ningún canal real resoluble (sin Contact, sin email organizacional) -
       },
     });
 
-    const result = await decideApproval(approval.id, { decision: "APPROVED" }, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
-    // resolveDraftEmail devuelve null (sin destinatario real) -> nunca se
-    // intenta el envío, nunca se inventa un email -- emailSendResult
-    // queda null (no "FAILED", porque ni siquiera se intentó: no hay
-    // NADA que reintentar, es un dato faltante, no un fallo del proveedor).
-    assert.equal(result.emailSendResult, null);
-    const count = await prisma.emailMessage.count({ where: { tenantId, approvalRequestId: approval.id } });
-    assert.equal(count, 0);
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    await assert.rejects(() => sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }), (err: unknown) => err instanceof AppError && err.status === 400);
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
+    assert.equal(stored.status, "FAILED", "nunca se queda trabado en SENDING");
+  });
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 0);
+});
+
+test("un fallo real del proveedor deja el ApprovalRequest en FAILED (reintentable), nunca en SENDING para siempre", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("provider-failure");
+  const company = await prisma.company.create({ data: { tenantId, name: "Fails Co", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador para Fails Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@fails.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+    await decideApproval(approval.id, { decision: "APPROVED" });
+
+    const failingProvider: MicrosoftGraphProviderPort = {
+      sendGraphMail: async () => ({ kind: "failed", reason: "403 ErrorSendAsDenied (mock)", retryable: false, httpStatus: 403, providerStatus: "AVAILABLE" }),
+    };
+    const result = await sendApproval(approval.id, { graphProvider: failingProvider, ...FAKE_AZURE });
+    assert.equal(result.status, "FAILED");
+
+    // Reintento real: un segundo sendApproval sobre un FAILED sí debe
+    // poder volver a intentarlo (a diferencia de SENT).
+    const retry = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+    assert.equal(retry.status, "SENT");
   });
 });

@@ -30,3 +30,16 @@ approvalsRouter.post("/approvals/:id/decide", requirePermission("approvals.decid
     next(err);
   }
 });
+
+// F21 Fase 4: acción EXPLÍCITA y separada de /decide -- decidir APPROVED
+// nunca envía nada (ver approvals/service.ts), solo este endpoint puede
+// disparar un envío real, y solo cuando el ApprovalRequest ya está
+// READY_TO_SEND (o FAILED, reintento). Nunca acepta body -- no hay nada
+// que un caller pueda parametrizar en un envío real.
+approvalsRouter.post("/approvals/:id/send", requirePermission("approvals.decide"), async (req, res, next) => {
+  try {
+    res.json(await approvalsService.sendApproval(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});

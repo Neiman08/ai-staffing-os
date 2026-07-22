@@ -9,7 +9,7 @@ function toListItem(
   approval: Awaited<ReturnType<typeof scopedDb.approvalRequest.findMany>>[number] & {
     agentTask: { type: string };
   },
-  decidedByLabels: Map<string, string>,
+  userLabels: Map<string, string>,
   emailSendResult?: ApprovalEmailSendResult,
 ): ApprovalRequestListItem {
   return {
@@ -20,9 +20,13 @@ function toListItem(
     proposedAction: approval.proposedAction,
     riskLevel: approval.riskLevel,
     status: approval.status,
-    decidedByLabel: approval.decidedById ? (decidedByLabels.get(approval.decidedById) ?? "Unknown user") : null,
+    decidedByLabel: approval.decidedById ? (userLabels.get(approval.decidedById) ?? "Unknown user") : null,
     decidedAt: approval.decidedAt?.toISOString() ?? null,
     decisionNote: approval.decisionNote,
+    // F21 Fase 4: quién/cuándo ejecutó la acción de ENVÍO real -- distinto
+    // de decidedBy/decidedAt (la aprobación humana, nunca el envío).
+    sentByLabel: approval.sentById ? (userLabels.get(approval.sentById) ?? "Unknown user") : null,
+    sentAt: approval.sentAt?.toISOString() ?? null,
     createdAt: approval.createdAt.toISOString(),
     emailSendResult,
   };
@@ -126,25 +130,27 @@ export async function listApprovals(status?: string): Promise<ApprovalRequestLis
     orderBy: { createdAt: "desc" },
   });
 
-  const decidedByLabels = await labelUsers(approvals.filter((a) => a.decidedById).map((a) => a.decidedById!));
+  const userIds = new Set<string>();
+  for (const a of approvals) {
+    if (a.decidedById) userIds.add(a.decidedById);
+    if (a.sentById) userIds.add(a.sentById);
+  }
+  const userLabels = await labelUsers(Array.from(userIds));
 
-  return approvals.map((a) => toListItem(a, decidedByLabels));
+  return approvals.map((a) => toListItem(a, userLabels));
 }
 
-export interface DecideApprovalDeps {
-  // Inyección para tests -- nunca se llama a Microsoft Graph real en un
-  // test unitario/integración. Default: el módulo real (email-service.ts).
-  graphProvider?: Parameters<typeof sendEmail>[0]["graphProvider"];
-  // Mismo criterio que peopleDataLabsApiKey/hunterApiKey en contact-
-  // enrichment.ts -- "" fuerza el camino "no configurado" en un test sin
-  // depender de env.AZURE_* real; un valor fake fuerza el camino
-  // "configurado" para probar el proveedor mockeado de punta a punta.
-  azureTenantId?: string;
-  azureClientId?: string;
-  azureClientSecret?: string;
-}
-
-export async function decideApproval(id: string, input: DecideApprovalInput, deps: DecideApprovalDeps = {}): Promise<ApprovalRequestListItem> {
+/**
+ * F21 Fase 4 (separación aprobación/envío, pedido explícito del PO):
+ * decidir un ApprovalRequest NUNCA envía nada, sin importar la decisión.
+ * REJECTED sigue terminando el ciclo de vida ahí mismo (nunca se envía
+ * un borrador rechazado). APPROVED transiciona directo a READY_TO_SEND
+ * -- "aprobado" y "listo para enviar" son el mismo hecho descrito dos
+ * veces (ver comentario en schema.prisma), nunca dos pasos humanos
+ * separados -- pero el envío real sigue siendo una acción EXPLÍCITA
+ * distinta (sendApproval, más abajo), nunca disparada acá.
+ */
+export async function decideApproval(id: string, input: DecideApprovalInput): Promise<ApprovalRequestListItem> {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
@@ -154,10 +160,12 @@ export async function decideApproval(id: string, input: DecideApprovalInput, dep
     throw AppError.badRequest(`This approval request was already decided (${approval.status})`);
   }
 
+  const resultingStatus = input.decision === "APPROVED" ? "READY_TO_SEND" : "REJECTED";
+
   const updated = await scopedDb.approvalRequest.update({
     where: { id },
     data: {
-      status: input.decision,
+      status: resultingStatus,
       decidedById: ctx.userId,
       decidedAt: new Date(),
       decisionNote: input.note,
@@ -181,50 +189,121 @@ export async function decideApproval(id: string, input: DecideApprovalInput, dep
       action: "approval.decided",
       entityType: "approvalRequest",
       entityId: id,
-      after: { decision: input.decision, note: input.note } as never,
+      after: { decision: input.decision, note: input.note, resultingStatus } as never,
     },
   });
 
-  // F17: el envío real -- SOLO en APPROVED, nunca en REJECTED. Todo
-  // outreach comercial (Approval Requests/campañas/secuencias/
-  // seguimiento de Leads y Opportunities) sale exclusivamente desde el
-  // perfil COMMERCIAL (sales@<dominio>, ver sender-profiles.ts) -- nunca
-  // otro remitente, sin importar qué shape tenga proposedAction. Un
-  // fallo real del proveedor NUNCA revierte la decisión ya tomada por el
-  // humano (eso ya se persistió arriba) -- queda registrado como
-  // FAILED/RETRYABLE en EmailMessage, con evidencia, y se refleja en la
-  // respuesta para que la UI lo muestre de inmediato.
-  let emailSendResult: ApprovalEmailSendResult = null;
-  if (input.decision === "APPROVED") {
-    const draft = await resolveDraftEmail(updated.proposedAction);
-    if (draft) {
-      try {
-        const sent = await sendEmail({
-          senderProfile: "commercial",
-          to: draft.to,
-          subject: draft.subject,
-          bodyText: draft.bodyText,
-          approvalRequestId: id,
-          leadId: draft.leadId,
-          opportunityId: draft.opportunityId,
-          companyId: draft.companyId,
-          contactId: draft.contactId,
-          taskId: updated.agentTaskId,
-          graphProvider: deps.graphProvider,
-          azureTenantId: deps.azureTenantId,
-          azureClientId: deps.azureClientId,
-          azureClientSecret: deps.azureClientSecret,
-        });
-        emailSendResult = { status: sent.status, providerMessageId: sent.providerMessageId, errorMessage: sent.errorMessage };
-      } catch (err) {
-        // Error de programación/uso real (ej. `to` con formato inválido
-        // en datos viejos) -- se registra igual como fallo real, nunca
-        // tumba la respuesta de la aprobación ya decidida.
-        emailSendResult = { status: "FAILED", providerMessageId: null, errorMessage: err instanceof Error ? err.message : "unknown error" };
-      }
-    }
+  const decidedByLabels = await labelUsers([ctx.userId]);
+  return toListItem(updated, decidedByLabels, null);
+}
+
+export interface SendApprovalDeps {
+  // Inyección para tests -- nunca se llama a Microsoft Graph real en un
+  // test unitario/integración. Default: el módulo real (email-service.ts).
+  graphProvider?: Parameters<typeof sendEmail>[0]["graphProvider"];
+  azureTenantId?: string;
+  azureClientId?: string;
+  azureClientSecret?: string;
+}
+
+/**
+ * F21 Fase 4: única función que realmente envía un email -- acción
+ * EXPLÍCITA y separada de decideApproval, exige status=READY_TO_SEND o
+ * FAILED (reintento real tras un fallo de proveedor). Idempotencia real:
+ * la transición a SENDING es un UPDATE condicional en la MISMA
+ * operación atómica que la lectura de status (updateMany con el status
+ * esperado en el WHERE) -- dos clicks simultáneos del mismo humano (o
+ * dos requests concurrentes cualquiera) nunca pueden ambos pasar esa
+ * guarda: el segundo encuentra 0 filas afectadas y se rechaza ahí mismo,
+ * antes de intentar ningún envío real. Un ApprovalRequest SENT nunca
+ * vuelve a pasar esa guarda -- no está en el conjunto de status
+ * aceptados.
+ */
+export async function sendApproval(id: string, deps: SendApprovalDeps = {}): Promise<ApprovalRequestListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.approvalRequest.findUnique({ where: { id }, include: { agentTask: true } });
+  if (!existing) throw AppError.notFound("Approval request not found");
+
+  const SENDABLE_STATUSES = ["READY_TO_SEND", "FAILED"] as const;
+  if (!(SENDABLE_STATUSES as readonly string[]).includes(existing.status)) {
+    throw AppError.badRequest(
+      `This approval request cannot be sent from status ${existing.status} -- solo READY_TO_SEND o FAILED (reintento) son enviables.`,
+    );
   }
 
-  const decidedByLabels = await labelUsers([ctx.userId]);
-  return toListItem(updated, decidedByLabels, emailSendResult);
+  // Guarda de idempotencia real -- ver comentario de arriba. `count`
+  // debe ser exactamente 1 para que ESTE request sea el que gana la
+  // carrera; cualquier otro valor (0 = alguien más ya la movió a SENDING/
+  // SENT/otro estado entre el findUnique de arriba y acá) aborta sin
+  // tocar nada más.
+  const claim = await scopedDb.approvalRequest.updateMany({
+    where: { id, status: { in: [...SENDABLE_STATUSES] } },
+    data: { status: "SENDING" },
+  });
+  if (claim.count !== 1) {
+    throw AppError.badRequest("This approval request is already being sent or was already sent by another request.");
+  }
+
+  const draft = await resolveDraftEmail(existing.proposedAction);
+  if (!draft) {
+    // Vuelve a FAILED (nunca se queda trabada en SENDING) -- caso real:
+    // proposedAction sin `to` resoluble (dato viejo/canal no-EMAIL).
+    await scopedDb.approvalRequest.update({ where: { id }, data: { status: "FAILED" } });
+    throw AppError.badRequest("No se pudo resolver un destinatario de email real para este borrador -- revisar el canal de contacto.");
+  }
+
+  let emailSendResult: ApprovalEmailSendResult;
+  let finalStatus: "SENT" | "FAILED";
+  try {
+    const sent = await sendEmail({
+      senderProfile: "commercial",
+      to: draft.to,
+      subject: draft.subject,
+      bodyText: draft.bodyText,
+      approvalRequestId: id,
+      leadId: draft.leadId,
+      opportunityId: draft.opportunityId,
+      companyId: draft.companyId,
+      contactId: draft.contactId,
+      taskId: existing.agentTaskId,
+      graphProvider: deps.graphProvider,
+      azureTenantId: deps.azureTenantId,
+      azureClientId: deps.azureClientId,
+      azureClientSecret: deps.azureClientSecret,
+    });
+    emailSendResult = { status: sent.status, providerMessageId: sent.providerMessageId, errorMessage: sent.errorMessage };
+    finalStatus = sent.status === "SENT" ? "SENT" : "FAILED";
+  } catch (err) {
+    // Error de programación/uso real -- se registra igual como fallo
+    // real, nunca deja el ApprovalRequest trabado en SENDING.
+    emailSendResult = { status: "FAILED", providerMessageId: null, errorMessage: err instanceof Error ? err.message : "unknown error" };
+    finalStatus = "FAILED";
+  }
+
+  const updated = await scopedDb.approvalRequest.update({
+    where: { id },
+    data: {
+      status: finalStatus,
+      sentById: finalStatus === "SENT" ? ctx.userId : existing.sentById,
+      sentAt: finalStatus === "SENT" ? new Date() : existing.sentAt,
+    },
+    include: { agentTask: true },
+  });
+
+  await scopedDb.auditLog.create({
+    data: {
+      tenantId: ctx.tenantId,
+      actorType: "HUMAN",
+      actorId: ctx.userId,
+      action: "approval.send_attempted",
+      entityType: "approvalRequest",
+      entityId: id,
+      after: { finalStatus, emailSendResult } as never,
+    },
+  });
+
+  const sentByLabels = await labelUsers([ctx.userId]);
+  return toListItem(updated, sentByLabels, emailSendResult);
 }
