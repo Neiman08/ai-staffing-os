@@ -190,6 +190,65 @@ export function decideCompanyConversion(evidence: ConversionEvidence): Conversio
   };
 }
 
+// F18: mismo vocabulario que Company.commercialStatus (schema.prisma) —
+// reexportado acá porque conversion-policy.ts es la única fuente de
+// verdad de "qué confianza de negocio habilita conversión comercial",
+// nunca duplicado como un if suelto en mission-executor.ts o en los
+// servicios de Lead/Opportunity.
+export type CompanyCommercialStatus = "DISCOVERY_CANDIDATE" | "COMMERCIAL_VALIDATED";
+
+/**
+ * F18: única función que decide si una confianza de Business Validation
+ * (business-validation.ts) alcanza para que la Company resultante sea
+ * comercialmente elegible. WEAK y REJECTED (identidad de negocio dudosa
+ * o explícitamente rechazada) nunca lo son -- pueden seguir
+ * persistiéndose como Company (Discovery es deliberadamente amplio) pero
+ * quedan marcadas DISCOVERY_CANDIDATE, nunca COMMERCIAL_VALIDATED. Se
+ * llama una sola vez, en persistAcceptedCandidate (mission-executor.ts),
+ * en el momento en que se conoce la confianza real.
+ */
+export function deriveCommercialStatus(businessConfidence: BusinessConfidence): CompanyCommercialStatus {
+  return businessConfidence === "WEAK" || businessConfidence === "REJECTED" ? "DISCOVERY_CANDIDATE" : "COMMERCIAL_VALIDATED";
+}
+
+export interface BusinessIdentityGateDecision {
+  allowed: boolean;
+  rule: "BUSINESS_IDENTITY_VALIDATED" | "BUSINESS_IDENTITY_UNVALIDATED";
+  reason: string;
+}
+
+/**
+ * F18: gate OBLIGATORIO de identidad de negocio -- se evalúa en el único
+ * punto de creación de Lead/Opportunity (leadsService.createLead/
+ * convertLead, opportunitiesService.createOpportunity), sin importar el
+ * caller (REST API manual, agente de misión, conversión de Lead) — así
+ * ningún caller puede saltárselo. Es DELIBERADAMENTE un subconjunto de
+ * decideCompanyConversion: solo la dimensión de identidad de negocio
+ * (equivalente a su regla 1, BLOCKED_OR_DUBIOUS_IDENTITY). Nunca exige
+ * evidencia de canal/hiring signal acá -- el pipeline clásico de
+ * misiones (mission-orchestrator.ts) nunca calculó esa evidencia por
+ * diseño, y exigirla acá bloquearía la creación de Lead para CUALQUIER
+ * empresa bien clasificada, no solo las mal clasificadas. Esa evidencia
+ * completa sigue siendo exclusiva de decideCompanyConversion, ya
+ * aplicada en discovery-conversion.ts cuando convertToCommercialActions
+ * está activo.
+ */
+export function evaluateBusinessIdentityGate(commercialStatus: CompanyCommercialStatus): BusinessIdentityGateDecision {
+  if (commercialStatus === "DISCOVERY_CANDIDATE") {
+    return {
+      allowed: false,
+      rule: "BUSINESS_IDENTITY_UNVALIDATED",
+      reason:
+        "Esta Company todavía es un candidato de Discovery (confianza de negocio WEAK/REJECTED al momento de descubrirla) -- nunca se crea Lead ni Opportunity hasta que se valide su tipo de negocio (reclasificación manual o nueva evidencia).",
+    };
+  }
+  return {
+    allowed: true,
+    rule: "BUSINESS_IDENTITY_VALIDATED",
+    reason: "Tipo de negocio validado -- elegible para conversión comercial.",
+  };
+}
+
 export interface DraftEligibility {
   eligible: boolean;
   reason: string;

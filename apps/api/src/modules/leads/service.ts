@@ -14,6 +14,19 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
+import { evaluateBusinessIdentityGate } from "../ceo-intelligence/conversion-policy";
+
+// F18: único chokepoint real de creación de Lead — REST API manual
+// (router.ts), agentes (sales-tools.impl.ts) y conversión de Lead
+// (convertLead, abajo) pasan todos por acá o por createOpportunity. Un
+// caller nunca puede saltarse este gate porque no hay otra forma de
+// crear un Lead/Opportunity con Company existente en el código.
+async function assertCompanyCommerciallyEligible(companyId: string): Promise<void> {
+  const company = await scopedDb.company.findUnique({ where: { id: companyId }, select: { commercialStatus: true } });
+  if (!company) throw AppError.notFound("Company not found");
+  const gate = evaluateBusinessIdentityGate(company.commercialStatus);
+  if (!gate.allowed) throw AppError.badRequest(gate.reason);
+}
 
 async function nextFollowUpsFor(leadIds: string[]) {
   if (leadIds.length === 0) return new Map<string, { id: string; type: string; dueDate: Date }>();
@@ -139,6 +152,8 @@ export async function createLead(input: CreateLeadInput) {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
+  if (input.companyId) await assertCompanyCommerciallyEligible(input.companyId);
+
   const lead = await scopedDb.lead.create({
     data: {
       tenantId: ctx.tenantId,
@@ -224,6 +239,12 @@ export async function convertLead(id: string, input: ConvertLeadInput): Promise<
     companyId = company.id;
     await logActivity({ entityType: "company", entityId: company.id, type: "SYSTEM", subject: "Company created from converted lead" });
   } else {
+    // F18: Company preexistente -- puede ser un candidato de Discovery
+    // sin validar (ver Company.commercialStatus), a diferencia de la
+    // rama de arriba (Company recién creada a mano por un humano acá
+    // mismo, que nace COMMERCIAL_VALIDATED por default). Nunca se
+    // convierte un Lead de una empresa así hasta que se reclasifique.
+    await assertCompanyCommerciallyEligible(companyId);
     const company = await scopedDb.company.findUnique({ where: { id: companyId } });
     if (company && company.status === "LEAD") {
       await scopedDb.company.update({ where: { id: companyId }, data: { status: "PROSPECT" } });

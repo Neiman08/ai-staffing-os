@@ -17,6 +17,7 @@ import {
   type DiscoveryCandidateLike,
 } from "../ceo-intelligence/discovery-identity";
 import { validateBusinessCandidate, BUSINESS_VALIDATION_VERSION, type BusinessValidationConfidenceLevel } from "../ceo-intelligence/business-validation";
+import { deriveCommercialStatus } from "../ceo-intelligence/conversion-policy";
 import { computeHiringConfidence, type HiringConfidenceTier } from "../ceo-intelligence/hiring-confidence";
 import { detectClientOwnerMatch } from "../ceo-intelligence/critical-infrastructure-clients";
 import { createQueuedTask } from "./task-executor";
@@ -1484,6 +1485,13 @@ async function persistAcceptedCandidate(params: {
       verificationStatus: "CONFIRMED",
       confidenceScore,
       lastVerifiedAt: now,
+      // F18: WEAK (ninguna señal de evidencia matcheó nada) persiste como
+      // DISCOVERY_CANDIDATE -- visible para investigación humana, pero
+      // excluido de toda selección de campaña/misión y bloqueado en el
+      // chokepoint de creación de Lead/Opportunity (conversion-policy.ts,
+      // evaluateBusinessIdentityGate). REJECTED nunca llega acá (filtrado
+      // más arriba por `if (!validation.accepted)`).
+      commercialStatus: deriveCommercialStatus(businessValidation.confidence),
       discoveryMetadata: {
         schemaVersion: CEO_INTENT_SCHEMA_VERSION,
         taxonomyVersion: BUSINESS_TAXONOMY_VERSION,

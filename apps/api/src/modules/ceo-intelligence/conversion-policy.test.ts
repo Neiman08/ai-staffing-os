@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideCompanyConversion, evaluateDraftEligibility, type ConversionEvidence } from "./conversion-policy";
+import {
+  decideCompanyConversion,
+  evaluateDraftEligibility,
+  deriveCommercialStatus,
+  evaluateBusinessIdentityGate,
+  type ConversionEvidence,
+  type BusinessConfidence,
+} from "./conversion-policy";
 
 function evidence(overrides: Partial<ConversionEvidence> = {}): ConversionEvidence {
   return {
@@ -170,4 +177,50 @@ test("draft: Opportunity creada pero sin ningún canal de email verificado -> nu
   const r = evaluateDraftEligibility({ opportunityCreated: true, hasVerifiedOrgEmail: false, hasRealPersonContactWithEmail: false });
   assert.equal(r.eligible, false);
   assert.match(r.reason, /llamada|investigación|manual/i);
+});
+
+// ---------- F18: Discovery vs. Conversión Comercial ----------
+// Hallazgo real: una misión de hoteles terminó con Companies de Data
+// Centers (CoreSite, Equinix, Aligned...) archivadas como si fueran
+// Hospitality, porque confianza WEAK (ninguna evidencia positiva, pero
+// tampoco negativa) se aceptaba igual como Company comercial. Estas
+// pruebas fijan la regla nueva: WEAK/REJECTED nunca son comercialmente
+// elegibles, sin importar qué industria pidió la misión.
+
+const ALL_CONFIDENCE_LEVELS: BusinessConfidence[] = ["EXACT", "STRONG", "APPROXIMATE", "WEAK", "REJECTED"];
+
+test("deriveCommercialStatus: EXACT/STRONG/APPROXIMATE -> COMMERCIAL_VALIDATED", () => {
+  for (const level of ["EXACT", "STRONG", "APPROXIMATE"] as const) {
+    assert.equal(deriveCommercialStatus(level), "COMMERCIAL_VALIDATED", `esperaba COMMERCIAL_VALIDATED para ${level}`);
+  }
+});
+
+test("deriveCommercialStatus: WEAK/REJECTED -> DISCOVERY_CANDIDATE (nunca comercial)", () => {
+  for (const level of ["WEAK", "REJECTED"] as const) {
+    assert.equal(deriveCommercialStatus(level), "DISCOVERY_CANDIDATE", `esperaba DISCOVERY_CANDIDATE para ${level}`);
+  }
+});
+
+test("evaluateBusinessIdentityGate: DISCOVERY_CANDIDATE nunca es elegible para Lead/Opportunity", () => {
+  const decision = evaluateBusinessIdentityGate("DISCOVERY_CANDIDATE");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.rule, "BUSINESS_IDENTITY_UNVALIDATED");
+});
+
+test("evaluateBusinessIdentityGate: COMMERCIAL_VALIDATED es elegible", () => {
+  const decision = evaluateBusinessIdentityGate("COMMERCIAL_VALIDATED");
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.rule, "BUSINESS_IDENTITY_VALIDATED");
+});
+
+test("cadena completa: cualquier confianza WEAK, sin importar la industria pedida, nunca llega a ser elegible para Lead/Opportunity", () => {
+  for (const level of ALL_CONFIDENCE_LEVELS) {
+    const status = deriveCommercialStatus(level);
+    const gate = evaluateBusinessIdentityGate(status);
+    if (level === "WEAK" || level === "REJECTED") {
+      assert.equal(gate.allowed, false, `${level} nunca debería ser elegible`);
+    } else {
+      assert.equal(gate.allowed, true, `${level} debería ser elegible`);
+    }
+  }
 });

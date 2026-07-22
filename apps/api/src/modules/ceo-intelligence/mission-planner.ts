@@ -19,7 +19,15 @@ const DEFAULT_MAX_COMPANIES = 50;
 const DEFAULT_MAX_COST_USD = 3;
 const DEFAULT_MAX_DURATION_MINUTES = 60;
 
-const ALWAYS_REQUIRED_STEPS = new Set<MissionPlanStep>(["discover_companies"]);
+// F18: validate_business_type deja de ser opcional -- toda misión que
+// descubre empresas (discover_companies) DEBE validar el tipo de
+// negocio antes de que el resultado sea comercialmente elegible (ver
+// conversion-policy.ts, deriveCommercialStatus/evaluateBusinessIdentityGate).
+// El propio intérprete (intent-interpreter.ts:buildPlannedSteps) ya
+// empuja ambos pasos juntos siempre, así que esto solo hace explícito
+// en el contrato lo que el código ya hace: nunca hay discover_companies
+// sin validate_business_type.
+const ALWAYS_REQUIRED_STEPS = new Set<MissionPlanStep>(["discover_companies", "validate_business_type"]);
 
 /**
  * F14 (refinamiento de calidad, 2026-07-19): orden específico-primero,

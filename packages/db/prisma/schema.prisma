@@ -533,6 +533,25 @@ enum CompanyVerificationStatus {
   INFERRED
 }
 
+// F18: separación arquitectónica Discovery vs. Conversión Comercial —
+// Discovery (executeDiscoveryPlan) es deliberadamente amplio y puede
+// persistir candidatos con confianza de negocio WEAK (business-
+// validation.ts) para investigación humana posterior; el CRM/pipeline
+// comercial (campañas, Lead, Opportunity) nunca debe verlos hasta que un
+// humano los reclasifique o llegue evidencia real que suba la confianza.
+// DISCOVERY_CANDIDATE = persistido solo para investigación, EXCLUIDO de
+// toda selección de campaña/misión y bloqueado en el chokepoint de
+// creación de Lead/Opportunity (conversion-policy.ts,
+// evaluateBusinessIdentityGate). COMMERCIAL_VALIDATED es el default —
+// preserva el comportamiento de toda Company ya existente (manual, seed,
+// o descubierta con confianza EXACT/STRONG/APPROXIMATE) sin necesidad de
+// backfill; ver docs de limpieza de datos para las filas ya
+// mal-clasificadas antes de este fix.
+enum CompanyCommercialStatus {
+  DISCOVERY_CANDIDATE
+  COMMERCIAL_VALIDATED
+}
+
 model Company {
   id                      String                    @id @default(cuid())
   tenantId                String
@@ -560,6 +579,11 @@ model Company {
   verificationStatus      CompanyVerificationStatus @default(UNVERIFIED)
   confidenceScore         Float? // 0–1, solo cuando verificationStatus != UNVERIFIED
   lastVerifiedAt          DateTime?
+  // F18: ver CompanyCommercialStatus arriba — dimensión de elegibilidad
+  // COMERCIAL, distinta de verificationStatus (que mide completitud de
+  // datos de contacto, no si el TIPO de negocio fue validado contra la
+  // taxonomía pedida por la misión).
+  commercialStatus        CompanyCommercialStatus   @default(COMMERCIAL_VALIDATED)
   // Evidencia estructurada del descubrimiento/clasificación de esta
   // Company — nunca reemplaza industryId (FK real, sigue siendo la
   // fuente de verdad de la industria). Estructura versionada
@@ -593,6 +617,7 @@ model Company {
   @@index([tenantId, status])
   @@index([tenantId, state])
   @@index([tenantId, origin])
+  @@index([tenantId, commercialStatus])
 }
 
 // F4.6: mismo espíritu que CompanyVerificationStatus — UNVERIFIED es el

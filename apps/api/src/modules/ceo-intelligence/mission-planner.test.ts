@@ -12,10 +12,9 @@ function plan(rawInstruction: string) {
   return result;
 }
 
-test("un plan de descubrimiento declara discover_companies como el único paso requerido", () => {
+test("un plan de descubrimiento declara discover_companies y validate_business_type como pasos requeridos (F18: ya no es opcional)", () => {
   const missionPlan = plan("Busca hoteles que necesiten housekeeping en Chicago.");
-  assert.deepEqual(missionPlan.requiredSteps, ["discover_companies"]);
-  assert.ok(missionPlan.optionalSteps.includes("validate_business_type"));
+  assert.deepEqual(missionPlan.requiredSteps, ["discover_companies", "validate_business_type"]);
   assert.ok(missionPlan.optionalSteps.includes("find_contacts"));
 });
 

@@ -217,6 +217,9 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
             estimatedSize: sizes ? { in: sizes as never } : undefined,
             commercialScore: campaign.minScore != null ? { gte: campaign.minScore } : undefined,
             id: { notIn: excludedElsewhere.map((c) => c.companyId) },
+            // F18: nunca ofrecer candidatos de Discovery sin validar como
+            // target de campaña -- ver Company.commercialStatus.
+            commercialStatus: "COMMERCIAL_VALIDATED",
             ...(targetCategoryIds.length > 0
               ? { possibleCategories: { some: { id: { in: targetCategoryIds } } } }
               : {}),

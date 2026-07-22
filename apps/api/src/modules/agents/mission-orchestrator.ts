@@ -530,6 +530,13 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
             industryId: industry?.id ?? undefined,
             state: interpreted.state ?? undefined,
             city: interpreted.city ?? undefined,
+            // F18: DISCOVERY_CANDIDATE (confianza de negocio WEAK/REJECTED
+            // al momento de descubrirla) nunca es supply comercial válido
+            // -- excluida acá además del gate obligatorio en
+            // leadsService.createLead/opportunitiesService.createOpportunity,
+            // para no gastar score_company/create_lead en candidatos que
+            // el gate va a bloquear de todos modos.
+            commercialStatus: "COMMERCIAL_VALIDATED",
           },
           orderBy: [{ commercialScore: "desc" }, { createdAt: "asc" }],
           take: perCampaignVolume,

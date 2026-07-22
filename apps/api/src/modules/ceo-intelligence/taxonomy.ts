@@ -86,7 +86,30 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // F7.4 Parte A: "cleaning"/"property management"/"restaurant" agregados
     // -- rechazos explicitos pedidos por el PO (cleaning contractors,
     // property management sin evidencia de hotel, restaurantes).
-    negativeKeywords: ["staffing agency", "recruiting agency", "travel agency", "cleaning", "property management", "restaurant"],
+    // F18 (auditoría PO, 2026-07-22): rechazos explícitos de industrias
+    // distintas que no deben mezclarse nunca con Hospitality -- hallazgo
+    // real: candidatos de Data Centers/Construction/Industrial/Electrical/
+    // Manufacturing/Logistics terminaron en una misión de hoteles. La
+    // defensa estructural real es Company.commercialStatus (ver
+    // conversion-policy.ts) -- esto es una segunda capa (defensa en
+    // profundidad), nunca la única.
+    negativeKeywords: [
+      "staffing agency",
+      "recruiting agency",
+      "travel agency",
+      "cleaning",
+      "property management",
+      "restaurant",
+      "data center",
+      "colocation",
+      "critical facilities",
+      "electrical contractor",
+      "general contractor",
+      "manufacturing plant",
+      "distribution center",
+      "industrial automation",
+      "trucking company",
+    ],
     relatedIndustries: ["janitorial", "commercial_cleaning"],
     validations: [
       "El sitio menciona reservas/habitaciones/check-in",
@@ -134,7 +157,9 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     decisionMakers: ["Plant Manager", "Operations Manager", "Production Manager", "HR Manager", "Recruiter"],
     // F7.4 Parte A: "consulting" agregado -- rechazo explicito pedido por
     // el PO ("Rechazar: consulting; staffing; pure logistics; ...").
-    negativeKeywords: ["staffing agency", "logistics only", "pure distribution", "consulting"],
+    // F18: "hotel"/"resort" agregados -- defensa en profundidad cruzada
+    // con Hospitality (ver taxonomy.ts §hospitality).
+    negativeKeywords: ["staffing agency", "logistics only", "pure distribution", "consulting", "hotel", "resort"],
     relatedIndustries: ["food_manufacturing", "beverage_manufacturing", "packaging", "industrial_automation"],
     validations: ["El sitio muestra evidencia real de producción/planta", "No es una oficina corporativa sin planta"],
     isGenericFallback: true,
@@ -222,7 +247,8 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     websitePhrases: ["warehouse", "fulfillment", "storage facility", "distribution center", "shipping", "receiving"],
     jobTitles: ["Forklift Operator", "Warehouse Associate", "Material Handler", "Order Picker"],
     decisionMakers: ["Warehouse Manager", "Operations Manager", "HR Manager", "Recruiter"],
-    negativeKeywords: ["retail store", "office only"],
+    // F18: defensa en profundidad cruzada con Hospitality.
+    negativeKeywords: ["retail store", "office only", "hotel", "resort"],
     relatedIndustries: ["distribution", "transportation", "manufacturing"],
     validations: ["El sitio muestra evidencia de operación de almacén/fulfillment"],
     isGenericFallback: true,
@@ -238,7 +264,8 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     websitePhrases: ["distribution center", "supply chain", "logistics"],
     jobTitles: ["Forklift Operator", "Warehouse Associate", "Material Handler", "Delivery Driver"],
     decisionMakers: ["Operations Manager", "Warehouse Manager", "HR Manager", "Recruiter"],
-    negativeKeywords: ["pure manufacturing only"],
+    // F18: defensa en profundidad cruzada con Hospitality.
+    negativeKeywords: ["pure manufacturing only", "hotel", "resort"],
     relatedIndustries: ["warehousing", "transportation"],
     validations: ["El sitio muestra evidencia de operación de distribución/logística"],
     isGenericFallback: true,
@@ -442,7 +469,8 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     websitePhrases: ["industrial automation", "controls integration", "PLC programming"],
     jobTitles: ["Controls Technician", "Maintenance Technician", "Automation Technician"],
     decisionMakers: ["Owner", "President", "Operations Manager", "Project Manager", "HR Manager"],
-    negativeKeywords: ["staffing agency", "software company only"],
+    // F18: defensa en profundidad cruzada con Hospitality.
+    negativeKeywords: ["staffing agency", "software company only", "hotel", "resort"],
     relatedIndustries: ["manufacturing", "electrical", "data_centers"],
     validations: ["El sitio ofrece integración/automatización industrial real"],
     isGenericFallback: false,
@@ -458,7 +486,10 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     websitePhrases: ["data center", "colocation", "uptime", "critical facilities"],
     jobTitles: ["Electrician", "Electricista", "Data Center Technician", "Maintenance Technician"],
     decisionMakers: ["Facilities Manager", "Operations Manager", "Project Manager", "HR Manager"],
-    negativeKeywords: ["staffing agency", "software/cloud company only (no physical facility)"],
+    // F18 (auditoría PO, 2026-07-22): "hotel"/"resort"/"restaurant"
+    // agregados -- hallazgo real, dirección inversa del mismo bug (una
+    // misión de hoteles nunca debe traer Data Centers, y viceversa).
+    negativeKeywords: ["staffing agency", "software/cloud company only (no physical facility)", "hotel", "resort", "restaurant"],
     relatedIndustries: ["mission_critical", "electrical", "industrial_automation"],
     validations: ["El sitio muestra evidencia de una instalación física real de data center"],
     isGenericFallback: false,
@@ -474,7 +505,8 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     websitePhrases: ["mission critical", "critical facilities", "uptime"],
     jobTitles: ["Electrician", "Maintenance Technician", "Facilities Technician"],
     decisionMakers: ["Facilities Manager", "Operations Manager", "Project Manager", "HR Manager"],
-    negativeKeywords: ["staffing agency"],
+    // F18: defensa en profundidad cruzada con Hospitality.
+    negativeKeywords: ["staffing agency", "hotel", "resort"],
     relatedIndustries: ["data_centers", "electrical", "industrial_automation"],
     validations: ["El sitio muestra evidencia real de instalaciones críticas/mission critical"],
     isGenericFallback: false,

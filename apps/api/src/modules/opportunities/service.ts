@@ -13,6 +13,7 @@ import { buildCursorArgs, toCursorPage } from "../../core/pagination";
 import { logActivity } from "../../core/activity-log";
 import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
+import { evaluateBusinessIdentityGate } from "../ceo-intelligence/conversion-policy";
 
 const PIPELINE_STAGES = ["MEETING_SCHEDULED", "PROPOSAL_SENT", "NEGOTIATION", "WON", "LOST"] as const;
 
@@ -130,6 +131,12 @@ export async function createOpportunity(input: CreateOpportunityInput) {
 
   const company = await scopedDb.company.findUnique({ where: { id: input.companyId } });
   if (!company) throw AppError.notFound("Company not found");
+
+  // F18: único chokepoint real de creación de Opportunity — ver el mismo
+  // gate en leadsService (leads/service.ts). Ningún caller (REST API,
+  // agente, conversión de Lead) puede saltárselo.
+  const gate = evaluateBusinessIdentityGate(company.commercialStatus);
+  if (!gate.allowed) throw AppError.badRequest(gate.reason);
 
   const opportunity = await scopedDb.opportunity.create({
     data: {
