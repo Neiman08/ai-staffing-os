@@ -24,7 +24,7 @@ export function Header() {
       <Container className="flex h-16 items-center justify-between">
         <Link to="/" className="flex items-center gap-2.5 font-semibold">
           <img src="/logo-icon.png" alt="" className="h-10 w-auto sm:h-11" />
-          <span className="text-lg tracking-tight">{branding?.brandName ?? "…"}</span>
+          {branding?.brandName && <span className="text-lg tracking-tight">{branding.brandName}</span>}
         </Link>
 
         <nav className="hidden items-center gap-8 md:flex">
