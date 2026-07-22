@@ -46,6 +46,21 @@ import { publicRouter } from "./modules/public/router";
 import { authWebhookRouter } from "./modules/auth/webhook.router";
 import { analyticsRouter } from "./modules/analytics/router";
 
+/**
+ * F17 (dominio propio, transición): "https://a.com, https://b.com" ->
+ * ["https://a.com", "https://b.com"]. Un valor sin coma sigue
+ * devolviendo un array de un solo elemento -- compatible hacia atrás
+ * con cualquier configuración existente de APP_ORIGIN/MARKETING_ORIGIN.
+ * Exportada (no solo inline en createApp) para poder probar el parseo
+ * real sin tener que levantar un servidor completo por cada caso.
+ */
+export function parseOriginList(value: string): string[] {
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
 export function createApp() {
   const app = express();
 
@@ -94,7 +109,16 @@ export function createApp() {
   // sobreescribe APP_ORIGIN/MARKETING_ORIGIN con las URLs reales del
   // servicio (ej. https://ai-staffing-os-web.onrender.com) como
   // variables de entorno del servicio de apps/api.
-  const allowedOrigins = [env.APP_ORIGIN, env.MARKETING_ORIGIN];
+  //
+  // F17 (dominio propio, transición): cada variable ahora acepta una
+  // lista separada por comas (ej. "https://app.dreistaff.com,
+  // https://ai-staffing-os-web.onrender.com") -- una única URL sin coma
+  // sigue funcionando exactamente igual que antes (split produce un
+  // array de un solo elemento), así que esto es 100% compatible hacia
+  // atrás. Permite tener el dominio propio y el dominio de Render de
+  // Render activos al mismo tiempo durante la migración de dominio, sin
+  // perder acceso técnico/rollback a las URLs viejas.
+  const allowedOrigins = [env.APP_ORIGIN, env.MARKETING_ORIGIN].flatMap(parseOriginList);
   app.use(
     cors({
       origin(origin, callback) {

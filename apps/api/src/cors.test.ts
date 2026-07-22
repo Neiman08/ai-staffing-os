@@ -1,12 +1,30 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
-import { createApp } from "./app";
+import { createApp, parseOriginList } from "./app";
 
 // F4.9 §10: cors() abierto (F0-F4.8) reemplazado por un allowlist
 // explícito (APP_ORIGIN/MARKETING_ORIGIN, ver core/env.ts + app.ts) —
 // este test verifica el comportamiento real, no solo que el código
 // compile.
+
+// F17 (dominio propio, transición): APP_ORIGIN/MARKETING_ORIGIN ahora
+// aceptan una lista separada por comas -- prueba el parseo real en vez
+// de solo confiar en que compile.
+test("parseOriginList: un solo origen sin coma devuelve un array de un elemento (compatibilidad hacia atrás)", () => {
+  assert.deepEqual(parseOriginList("https://app.dreistaff.com"), ["https://app.dreistaff.com"]);
+});
+
+test("parseOriginList: lista separada por comas devuelve todos los orígenes, sin espacios extra", () => {
+  assert.deepEqual(parseOriginList("https://app.dreistaff.com, https://ai-staffing-os-web.onrender.com"), [
+    "https://app.dreistaff.com",
+    "https://ai-staffing-os-web.onrender.com",
+  ]);
+});
+
+test("parseOriginList: comas repetidas o espacios en blanco nunca producen orígenes vacíos", () => {
+  assert.deepEqual(parseOriginList("https://a.com,, https://b.com,  "), ["https://a.com", "https://b.com"]);
+});
 let server: Server;
 let baseUrl: string;
 
