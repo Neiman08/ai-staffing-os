@@ -2190,6 +2190,13 @@ model AgentTask {
   correlationId String?
   causationId   String?
 
+  // F25.2 Fase 3 (ADR-0001): prioridad explícita para el claim de la
+  // cola -- default 0 (todo lo existente y toda tarea nueva sin
+  // prioridad especial queda igual que hoy). Mayor número = mayor
+  // prioridad, desempate por attempt (menos reintentos primero) y
+  // createdAt (más vieja primero) -- ver postgres-queue.ts.
+  priority Int @default(0)
+
   @@index([tenantId, status])
   @@index([agentInstanceId, createdAt])
   @@index([status, nextAttemptAt])
