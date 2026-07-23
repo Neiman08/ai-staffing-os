@@ -111,6 +111,13 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // defensa estructural real es Company.commercialStatus (ver
     // conversion-policy.ts) -- esto es una segunda capa (defensa en
     // profundidad), nunca la única.
+    // F23 (auditoría PO, 2026-07-23): hallazgo real -- "Tri-Rivers
+    // Datacenter" (compuesto, sin espacio) nunca matcheaba "data center"
+    // (dos palabras) y terminó clasificado como Hospitality con confianza
+    // APPROXIMATE, generando un borrador real de outreach para un data
+    // center. "datacenter"/"serverfarm"/"server farm"/"colo" agregados --
+    // variantes reales de la misma industria que "data center"/
+    // "colocation" ya cubrían, nunca cubiertas por esas dos solas.
     negativeKeywords: [
       "staffing agency",
       "recruiting agency",
@@ -119,7 +126,11 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "property management",
       "restaurant",
       "data center",
+      "datacenter",
       "colocation",
+      "colo",
+      "server farm",
+      "serverfarm",
       "critical facilities",
       "electrical contractor",
       "general contractor",

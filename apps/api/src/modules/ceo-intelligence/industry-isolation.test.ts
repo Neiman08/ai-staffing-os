@@ -93,3 +93,52 @@ test("defensa en profundidad: un hotel es REJECTED explícitamente contra data_c
   assert.equal(result.confidence, "REJECTED");
   assert.equal(result.accepted, false);
 });
+
+// ---------- F23 (auditoría PO, 2026-07-23): "Tri-Rivers Datacenter" real
+// -- terminó clasificado como Hospitality (confianza APPROXIMATE) porque
+// "datacenter" (una sola palabra, sin espacio) nunca matcheaba "data
+// center" (dos palabras). Regresión directa: ninguna variante real del
+// nombre de un data center puede clasificar como Hospitality, sin
+// importar el espaciado/abreviación. ----------
+
+test("regresión real: 'Tri-Rivers Datacenter' (el caso real reportado) es REJECTED contra hospitality, nunca más APPROXIMATE", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Tri-Rivers Datacenter", taxonomyKey: "hospitality" }));
+  assert.equal(result.confidence, "REJECTED");
+  assert.equal(result.accepted, false);
+});
+
+test("ninguna variante real de 'data center' (compuesta, abreviada, o con sinónimos) puede clasificar como Hospitality", () => {
+  const variants = [
+    "Acme Datacenter",
+    "Acme Data Center",
+    "Acme Data Centers",
+    "Acme Colocation Services",
+    "Acme Colo Facility",
+    "Acme Server Farm",
+    "Acme Serverfarm",
+  ];
+  for (const name of variants) {
+    const result = validateBusinessCandidate(baseInput({ candidateName: name, taxonomyKey: "hospitality" }));
+    assert.equal(result.confidence, "REJECTED", `"${name}" debería ser REJECTED contra hospitality, fue ${result.confidence}`);
+    assert.equal(result.accepted, false, `"${name}" nunca debería quedar accepted=true contra hospitality`);
+  }
+});
+
+test("'colo' como palabra completa se rechaza, pero nunca genera falsos positivos dentro de otra palabra (ej. 'Colorado')", () => {
+  const rejected = validateBusinessCandidate(baseInput({ candidateName: "Midwest Colo Solutions", taxonomyKey: "hospitality" }));
+  assert.equal(rejected.confidence, "REJECTED");
+
+  // "Colorado" contiene la substring "colo" pero NUNCA debe activar el
+  // rechazo -- containsWord exige límite de palabra real (text-normalize.ts).
+  const legitimate = validateBusinessCandidate(
+    baseInput({ candidateName: "Colorado Grand Hotel", taxonomyKey: "hospitality" }),
+  );
+  assert.notEqual(legitimate.confidence, "REJECTED");
+});
+
+test("un candidato de data center sigue siendo aceptado (nunca rechazado) contra su propia taxonomía real (data_centers)", () => {
+  // La regla es cruzada -- nunca debe bloquear una misión que SÍ busca
+  // data centers legítimamente.
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Tri-Rivers Datacenter", taxonomyKey: "data_centers" }));
+  assert.notEqual(result.confidence, "REJECTED");
+});
