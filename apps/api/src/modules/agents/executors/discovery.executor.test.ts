@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
-import { DEFAULT_MISSION_RESTRICTIONS } from "@ai-staffing-os/agents";
+import { DEFAULT_MISSION_RESTRICTIONS, DEFAULT_POLICY_ENVELOPE } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../../../core/tenancy/context";
 import type { MissionPlan } from "../../ceo-intelligence/contracts";
 import { createDiscoveryExecutor } from "./discovery.executor";
@@ -59,6 +59,19 @@ function basePlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
   };
 }
 
+function fakeContext(tenantId: string, agentInstanceId: string) {
+  return {
+    tenantId,
+    agentInstanceId,
+    taskId: "task_test",
+    triggeredBy: "AGENT" as const,
+    correlationId: "mission_test",
+    causationId: null,
+    capabilities: [],
+    policyEnvelope: DEFAULT_POLICY_ENVELOPE,
+  };
+}
+
 test("createDiscoveryExecutor declara taskType/stage consistentes con el catálogo real", () => {
   const executor = createDiscoveryExecutor();
   assert.equal(executor.taskType, "discover_companies");
@@ -70,35 +83,11 @@ test("execute() sobre un plan sin discover_companies delega a executeDiscoveryPl
   const executor = createDiscoveryExecutor();
 
   const result = await runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, () =>
-    executor.execute(
-      {
-        tenantId,
-        agentInstanceId,
-        taskId: "task_test",
-        triggeredBy: "AGENT",
-        correlationId: "mission_test",
-        causationId: null,
-        capabilities: [],
-        policyEnvelope: {
-          autonomyLevel: 1,
-          dailyEmailLimit: 0,
-          perDomainLimit: 0,
-          allowedIndustries: "ALL",
-          allowedRegions: "ALL",
-          approvedSenderIdentity: null,
-          allowedSendWindows: [],
-          contactVerificationRequirement: "CONFIRMED_OR_VERIFIED",
-          humanApprovalRequirement: "ALWAYS",
-          meetingBookingPermission: false,
-          replyAutomationPermission: false,
-          maxLLMCost: 0,
-          maxDiscoveryCost: 0,
-          maxEnrichmentAttempts: 0,
-          prohibitedActions: [],
-        },
-      },
-      { missionTaskId, plan: basePlan({ steps: [] }), restrictions: DEFAULT_MISSION_RESTRICTIONS },
-    ),
+    executor.execute(fakeContext(tenantId, agentInstanceId), {
+      missionTaskId,
+      plan: basePlan({ steps: [] }),
+      restrictions: DEFAULT_MISSION_RESTRICTIONS,
+    }),
   );
 
   assert.equal(result.success, true);
@@ -123,35 +112,12 @@ test("execute() convierte una falla real de executeDiscoveryPlan en un AgentResu
   // mismo AppError.unauthorized() que dispararía en producción si el
   // Orchestrator tuviera un bug y ejecutara una tarea fuera de su
   // wrapper de tenancy.
-  const result = await executor.execute(
-    {
-      tenantId,
-      agentInstanceId,
-      taskId: "task_test",
-      triggeredBy: "AGENT",
-      correlationId: "mission_test",
-      causationId: null,
-      capabilities: [],
-      policyEnvelope: {
-        autonomyLevel: 1,
-        dailyEmailLimit: 0,
-        perDomainLimit: 0,
-        allowedIndustries: "ALL",
-        allowedRegions: "ALL",
-        approvedSenderIdentity: null,
-        allowedSendWindows: [],
-        contactVerificationRequirement: "CONFIRMED_OR_VERIFIED",
-        humanApprovalRequirement: "ALWAYS",
-        meetingBookingPermission: false,
-        replyAutomationPermission: false,
-        maxLLMCost: 0,
-        maxDiscoveryCost: 0,
-        maxEnrichmentAttempts: 0,
-        prohibitedActions: [],
-      },
-    },
-    { missionTaskId, plan, restrictions: DEFAULT_MISSION_RESTRICTIONS, googlePlacesApiKey: "fake-key-for-tests" },
-  );
+  const result = await executor.execute(fakeContext(tenantId, agentInstanceId), {
+    missionTaskId,
+    plan,
+    restrictions: DEFAULT_MISSION_RESTRICTIONS,
+    googlePlacesApiKey: "fake-key-for-tests",
+  });
 
   assert.equal(result.success, false);
   if (result.success) return;
