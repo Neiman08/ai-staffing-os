@@ -34,8 +34,10 @@ const PLACEHOLDER_DOMAINS = ["example.com", "example.org", "yourdomain.com", "do
 
 // Proveedores de email gratuito/personal -- una empresa real PUEDE
 // usarlos, pero nunca son evidencia de dominio propio, así que nunca
-// pueden llegar a VERIFIED (ver regla explícita del PO).
-const FREE_EMAIL_PROVIDERS = [
+// pueden llegar a VERIFIED (ver regla explícita del PO). Exportado (F24)
+// para que contact-channel.ts reutilice la misma lista al excluir
+// dominios personales de los tiers organizacionales -- nunca duplicada.
+export const FREE_EMAIL_PROVIDERS = [
   "gmail.com",
   "yahoo.com",
   "hotmail.com",

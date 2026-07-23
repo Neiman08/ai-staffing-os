@@ -97,6 +97,80 @@ test("NONE: sin ningún canal real -- nunca inventa un email/nombre/canal, la Co
   assert.equal(r.isEmailCapable, false);
 });
 
+// ---------- F24 (auditoría de producción): scoring de calidad, casos reales ----------
+
+test("Essence Suites (real): entre 3 variantes VERIFIED del mismo alias, elige la limpia y descarta las contaminadas con teléfono", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contactPoints: [
+        { email: "states7084033300romance@essencesuites.com", verificationStatus: "VERIFIED" },
+        { email: "7084033300romance@essencesuites.com", verificationStatus: "VERIFIED" },
+        { email: "romance@essencesuites.com", verificationStatus: "VERIFIED" },
+      ],
+    }),
+  );
+  assert.equal(r.channel, "VERIFIED_ORG_EMAIL");
+  assert.equal(r.value, "romance@essencesuites.com");
+});
+
+test("The Guesthouse Hotel (real): entre 4 variantes VERIFIED, descarta la contaminada y elige la más corta entre las limpias", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contactPoints: [
+        { email: "564-9568stay@theguesthousehotel.com", verificationStatus: "VERIFIED" },
+        { email: "eventevents@theguesthousehotel.com", verificationStatus: "VERIFIED" },
+        { email: "events@theguesthousehotel.com", verificationStatus: "VERIFIED" },
+        { email: "stay@theguesthousehotel.com", verificationStatus: "VERIFIED" },
+      ],
+    }),
+  );
+  assert.equal(r.channel, "VERIFIED_ORG_EMAIL");
+  assert.equal(r.value, "stay@theguesthousehotel.com");
+});
+
+test("Urban Collective Boutique Hotel (real): única variante disponible está contaminada -- se descarta y degrada de tier en vez de usarla", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contactPoints: [{ email: "226.8686bookings@urbancollectivehotel.com", verificationStatus: "VERIFIED" }],
+      contactFormUrl: "https://urbancollectivehotel.com/contact",
+    }),
+  );
+  assert.notEqual(r.channel, "VERIFIED_ORG_EMAIL");
+  assert.notEqual(r.value, "226.8686bookings@urbancollectivehotel.com");
+  assert.equal(r.channel, "CONTACT_FORM");
+});
+
+test("Ruebel Hotel (real): dos emails gmail.com RISKY -- ninguno alcanza un tier de email, nunca se usa un proveedor personal como canal organizacional", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contactPoints: [
+        { email: "ruebeltl@gmail.com", verificationStatus: "RISKY" },
+        { email: "ruebelmo@gmail.com", verificationStatus: "RISKY" },
+      ],
+      companyPhone: "555-0199",
+    }),
+  );
+  assert.equal(r.isEmailCapable, false);
+  assert.equal(r.channel, "PHONE");
+});
+
+test("un local-part con pocos dígitos (año, extensión corta) nunca se marca como contaminado", () => {
+  const r = resolveBestContactChannel(baseInput({ contactPoints: [{ email: "sales2024@acme.com", verificationStatus: "VERIFIED" }] }));
+  assert.equal(r.channel, "VERIFIED_ORG_EMAIL");
+  assert.equal(r.value, "sales2024@acme.com");
+});
+
+test("contacto personal (tier 1) contaminado con teléfono también se descarta, cae al siguiente tier disponible", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "5551234567jane@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null }],
+      contactPoints: [{ email: "info@acme.com", verificationStatus: "VERIFIED" }],
+    }),
+  );
+  assert.equal(r.channel, "VERIFIED_ORG_EMAIL");
+  assert.equal(r.value, "info@acme.com");
+});
+
 test("isEmailCapableChannel refleja exactamente los 3 primeros tiers, nunca los 4 canales alternativos", () => {
   assert.equal(isEmailCapableChannel("VERIFIED_PERSON_EMAIL"), true);
   assert.equal(isEmailCapableChannel("VERIFIED_ORG_EMAIL"), true);

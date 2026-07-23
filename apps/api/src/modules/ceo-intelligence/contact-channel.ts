@@ -23,6 +23,8 @@
  * motivo de eliminación).
  */
 
+import { FREE_EMAIL_PROVIDERS } from "./email-trust";
+
 export type ContactChannelType =
   | "VERIFIED_PERSON_EMAIL"
   | "VERIFIED_ORG_EMAIL"
@@ -73,28 +75,91 @@ export interface ContactChannelInput {
   companyLinkedinUrl: string | null;
 }
 
+// F24 (auditoría de producción, hallazgo real): el crawler de Website
+// Intelligence a veces concatena un número de teléfono adyacente en el
+// texto de la página con el email real que le sigue (sin espacio de por
+// medio) -- ej. "romance@essencesuites.com" terminaba guardado también
+// como "7084033300romance@essencesuites.com" y "states7084033300romance@
+// essencesuites.com". Ambas variantes contaminadas quedaban con el mismo
+// verificationStatus que la limpia, y `contactPoints[0]` (orden de
+// inserción, no de calidad) podía elegir cualquiera de las tres. Esta
+// regex detecta una corrida de 6+ dígitos (con separadores . o - entre
+// ellos tolerados) en CUALQUIER posición del local-part -- ni un año de
+// 4 dígitos ni una extensión corta de 2-3 dígitos disparan un falso
+// positivo, pero un teléfono real (7-10 dígitos, con o sin separadores)
+// siempre lo hace.
+const PHONE_CONTAMINATION_RE = /(?:\d[.\-]?){6,}/;
+
+function localPart(email: string): string {
+  return email.split("@")[0] ?? "";
+}
+
+function domainPart(email: string): string {
+  return (email.split("@")[1] ?? "").toLowerCase();
+}
+
+function isPhoneContaminated(email: string): boolean {
+  return PHONE_CONTAMINATION_RE.test(localPart(email));
+}
+
+function isFreeEmailProvider(email: string): boolean {
+  return (FREE_EMAIL_PROVIDERS as readonly string[]).includes(domainPart(email));
+}
+
+/**
+ * F24: dentro de un mismo tier, elige el mejor candidato real por
+ * scoring en vez de confiar en el orden del array (que es orden de
+ * inserción/crawl, no de calidad):
+ *   1. Descarta cualquier email contaminado con una secuencia telefónica
+ *      -- nunca se usa, ni siquiera como último recurso (nunca se
+ *      inventa/corrige, se prefiere degradar de tier antes que enviar a
+ *      un alias roto).
+ *   2. Opcionalmente descarta proveedores de email personal/gratuito
+ *      (gmail.com...) -- nunca es evidencia de dominio propio de la
+ *      empresa (mismo criterio que email-trust.ts).
+ *   3. Entre los que sobreviven, prefiere el local-part más corto --
+ *      cuando dos variantes representan el mismo alias real (ej.
+ *      "romance@" vs "7084033300romance@"), la más corta es casi
+ *      siempre la limpia. Empate final: orden alfabético, para que el
+ *      resultado sea determinista sin importar el orden de entrada.
+ */
+function pickBestEmail(candidates: string[], opts: { excludeFreeProviders: boolean }): string | null {
+  const clean = candidates.filter((email) => email && !isPhoneContaminated(email) && (!opts.excludeFreeProviders || !isFreeEmailProvider(email)));
+  if (clean.length === 0) return null;
+  return clean.slice().sort((a, b) => localPart(a).length - localPart(b).length || a.localeCompare(b))[0]!;
+}
+
 export function resolveBestContactChannel(input: ContactChannelInput): ContactChannelResolution {
-  const verifiedPersonEmail = input.contacts.find((c) => c.email && c.emailVerificationStatus === "VERIFIED");
+  const verifiedPersonEmail = pickBestEmail(
+    input.contacts.filter((c) => c.email && c.emailVerificationStatus === "VERIFIED").map((c) => c.email!),
+    { excludeFreeProviders: false },
+  );
   if (verifiedPersonEmail) {
     return {
       channel: "VERIFIED_PERSON_EMAIL",
-      value: verifiedPersonEmail.email,
+      value: verifiedPersonEmail,
       reason: "Contacto personal real con email verificado -- el canal más confiable disponible.",
       isEmailCapable: true,
     };
   }
 
-  const verifiedOrgEmail = input.contactPoints.find((cp) => cp.verificationStatus === "VERIFIED");
+  const verifiedOrgEmail = pickBestEmail(
+    input.contactPoints.filter((cp) => cp.verificationStatus === "VERIFIED").map((cp) => cp.email),
+    { excludeFreeProviders: true },
+  );
   if (verifiedOrgEmail) {
     return {
       channel: "VERIFIED_ORG_EMAIL",
-      value: verifiedOrgEmail.email,
+      value: verifiedOrgEmail,
       reason: "Email organizacional (info@/hr@/careers@...) verificado.",
       isEmailCapable: true,
     };
   }
 
-  const websiteOrgEmail = input.contactPoints[0]?.email ?? input.companyEmail;
+  const websiteOrgEmail = pickBestEmail(
+    [...input.contactPoints.map((cp) => cp.email), ...(input.companyEmail ? [input.companyEmail] : [])],
+    { excludeFreeProviders: true },
+  );
   if (websiteOrgEmail) {
     return {
       channel: "WEBSITE_ORG_EMAIL",
