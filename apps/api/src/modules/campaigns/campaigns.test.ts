@@ -193,6 +193,37 @@ test("selectTargetCompanies excludes a company already TARGETED in another ACTIV
   );
 });
 
+// F24 (auditoría de producción): 8 Companies de seed.ts (origin=DEMO_SEED)
+// tenían commercialScore/commercialStatus válidos y podían, en teoría,
+// ser seleccionadas por una campaña real -- nunca deben poder serlo.
+test("selectTargetCompanies nunca selecciona una Company con origin=DEMO_SEED, aunque cumpla el resto de los criterios", async () => {
+  const companyId = await importTestCompany("Demo Seed Exclusion Co");
+  const uniqueCity = `DemoSeedCity${Date.now()}`;
+  await prisma.company.update({
+    where: { id: companyId },
+    data: { commercialScore: 95, city: uniqueCity, origin: "DEMO_SEED" },
+  });
+
+  const campaign = await prisma.campaign.create({
+    data: { tenantId: "tenant-titan", name: `Demo Seed Campaign ${Date.now()}`, status: "ACTIVE", city: uniqueCity },
+  });
+  createdCampaignIds.push(campaign.id);
+
+  const select = await fetch(`${baseUrl}/api/v1/campaigns/${campaign.id}/tasks`, {
+    method: "POST",
+    headers: SALES_HEADERS,
+    body: JSON.stringify({ type: "select_target_companies", input: {} }),
+  });
+  const selectBody = (await select.json()) as { id: string };
+  const settled = await waitForSettled(selectBody.id);
+  assert.equal(settled.status, "DONE");
+  assert.deepEqual(
+    (settled.output as { companyIds: string[] }).companyIds,
+    [],
+    "una Company origin=DEMO_SEED nunca debe seleccionarse como target de campaña",
+  );
+});
+
 test("planSequence is idempotent and personalizeMessage always creates a PENDING ApprovalRequest (real OpenAI calls)", async () => {
   const companyId = await importTestCompany("Sequence Co", "Manufacturing");
   // F21 Fase 2/3: personalizeMessage ya no redacta un borrador de email

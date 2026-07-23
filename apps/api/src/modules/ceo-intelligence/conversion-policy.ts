@@ -213,9 +213,17 @@ export function deriveCommercialStatus(businessConfidence: BusinessConfidence): 
 
 export interface BusinessIdentityGateDecision {
   allowed: boolean;
-  rule: "BUSINESS_IDENTITY_VALIDATED" | "BUSINESS_IDENTITY_UNVALIDATED";
+  rule: "BUSINESS_IDENTITY_VALIDATED" | "BUSINESS_IDENTITY_UNVALIDATED" | "DEMO_SEED_ORIGIN";
   reason: string;
 }
+
+/**
+ * F24 (auditoría de producción): mismo vocabulario que Company.origin
+ * (schema.prisma) -- reexportado acá porque conversion-policy.ts es la
+ * fuente de verdad de "qué compañías pueden entrar al pipeline
+ * comercial", nunca duplicado como un if suelto en otro archivo.
+ */
+export type CompanyOriginValue = "DEMO_SEED" | "MANUAL" | "CSV_IMPORT" | "EXTERNAL_DISCOVERY" | "API_PROVIDER";
 
 /**
  * F18: gate OBLIGATORIO de identidad de negocio -- se evalúa en el único
@@ -232,8 +240,22 @@ export interface BusinessIdentityGateDecision {
  * completa sigue siendo exclusiva de decideCompanyConversion, ya
  * aplicada en discovery-conversion.ts cuando convertToCommercialActions
  * está activo.
+ *
+ * F24 (auditoría de producción, hallazgo real: 8 Companies de
+ * packages/db/prisma/seed.ts terminaron con ApprovalRequest reales en
+ * producción): `origin` se agrega como segunda dimensión OBLIGATORIA --
+ * datos sintéticos nunca son comercialmente elegibles, sin importar su
+ * commercialStatus (el seed los crea COMMERCIAL_VALIDATED por default).
+ * Chequeado primero porque es la condición más barata y definitiva.
  */
-export function evaluateBusinessIdentityGate(commercialStatus: CompanyCommercialStatus): BusinessIdentityGateDecision {
+export function evaluateBusinessIdentityGate(commercialStatus: CompanyCommercialStatus, origin?: CompanyOriginValue | string): BusinessIdentityGateDecision {
+  if (origin === "DEMO_SEED") {
+    return {
+      allowed: false,
+      rule: "DEMO_SEED_ORIGIN",
+      reason: "Esta Company es un dato de prueba/seed (origin=DEMO_SEED) -- nunca puede entrar al pipeline comercial real, sin importar su commercialStatus.",
+    };
+  }
   if (commercialStatus === "DISCOVERY_CANDIDATE") {
     return {
       allowed: false,

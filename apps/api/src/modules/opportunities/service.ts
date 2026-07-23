@@ -135,7 +135,7 @@ export async function createOpportunity(input: CreateOpportunityInput) {
   // F18: único chokepoint real de creación de Opportunity — ver el mismo
   // gate en leadsService (leads/service.ts). Ningún caller (REST API,
   // agente, conversión de Lead) puede saltárselo.
-  const gate = evaluateBusinessIdentityGate(company.commercialStatus);
+  const gate = evaluateBusinessIdentityGate(company.commercialStatus, company.origin);
   if (!gate.allowed) throw AppError.badRequest(gate.reason);
 
   const opportunity = await scopedDb.opportunity.create({

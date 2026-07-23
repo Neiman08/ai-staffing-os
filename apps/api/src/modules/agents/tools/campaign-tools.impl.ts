@@ -220,6 +220,13 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
             // F18: nunca ofrecer candidatos de Discovery sin validar como
             // target de campaña -- ver Company.commercialStatus.
             commercialStatus: "COMMERCIAL_VALIDATED",
+            // F24 (auditoría de producción, pedido explícito del PO):
+            // datos de seed/fixture (packages/db/prisma/seed.ts) nunca
+            // deben poder seleccionarse como target de una campaña real
+            // -- bloqueado en el ORIGEN de la selección, no solo en
+            // lectura (ver también evaluateBusinessIdentityGate para el
+            // chokepoint de Lead/Opportunity).
+            origin: { not: "DEMO_SEED" },
             ...(targetCategoryIds.length > 0
               ? { possibleCategories: { some: { id: { in: targetCategoryIds } } } }
               : {}),

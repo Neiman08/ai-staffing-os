@@ -22,9 +22,9 @@ import { evaluateBusinessIdentityGate } from "../ceo-intelligence/conversion-pol
 // caller nunca puede saltarse este gate porque no hay otra forma de
 // crear un Lead/Opportunity con Company existente en el código.
 async function assertCompanyCommerciallyEligible(companyId: string): Promise<void> {
-  const company = await scopedDb.company.findUnique({ where: { id: companyId }, select: { commercialStatus: true } });
+  const company = await scopedDb.company.findUnique({ where: { id: companyId }, select: { commercialStatus: true, origin: true } });
   if (!company) throw AppError.notFound("Company not found");
-  const gate = evaluateBusinessIdentityGate(company.commercialStatus);
+  const gate = evaluateBusinessIdentityGate(company.commercialStatus, company.origin);
   if (!gate.allowed) throw AppError.badRequest(gate.reason);
 }
 

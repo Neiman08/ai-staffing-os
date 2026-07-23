@@ -213,6 +213,23 @@ test("evaluateBusinessIdentityGate: COMMERCIAL_VALIDATED es elegible", () => {
   assert.equal(decision.rule, "BUSINESS_IDENTITY_VALIDATED");
 });
 
+// F24 (auditoría de producción): 8 Companies con origin=DEMO_SEED
+// (packages/db/prisma/seed.ts) terminaron con ApprovalRequest reales en
+// producción porque nada chequeaba origin en este gate -- regresión
+// directa contra ese hallazgo.
+test("evaluateBusinessIdentityGate: origin=DEMO_SEED nunca es elegible, sin importar commercialStatus", () => {
+  const decision = evaluateBusinessIdentityGate("COMMERCIAL_VALIDATED", "DEMO_SEED");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.rule, "DEMO_SEED_ORIGIN");
+});
+
+test("evaluateBusinessIdentityGate: origin real (API_PROVIDER/MANUAL/etc.) no se ve afectado", () => {
+  for (const origin of ["API_PROVIDER", "MANUAL", "CSV_IMPORT", "EXTERNAL_DISCOVERY", undefined]) {
+    const decision = evaluateBusinessIdentityGate("COMMERCIAL_VALIDATED", origin);
+    assert.equal(decision.allowed, true, `origin=${origin} no debería bloquear`);
+  }
+});
+
 test("cadena completa: cualquier confianza WEAK, sin importar la industria pedida, nunca llega a ser elegible para Lead/Opportunity", () => {
   for (const level of ALL_CONFIDENCE_LEVELS) {
     const status = deriveCommercialStatus(level);
