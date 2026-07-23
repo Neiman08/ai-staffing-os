@@ -315,6 +315,40 @@ enum AgentTaskStatus {
   AWAITING_APPROVAL
   DONE
   FAILED
+
+  // F25.2 Fase 1 (ADR-0004): agregados de forma aditiva -- ningún valor
+  // existente cambia de significado. CLAIMED = lease tomado, aún no
+  // corre; RETRY_SCHEDULED = falla reintentable esperando nextAttemptAt;
+  // BLOCKED = política/datos insuficientes, terminal pero no es un
+  // "error" (nunca reintenta); CANCELED = cancelación explícita.
+  // FAILED sigue siendo el estado muerto/terminal, como ya lo usa
+  // task-executor.ts hoy.
+  CLAIMED
+  RETRY_SCHEDULED
+  BLOCKED
+  CANCELED
+  // Falla clasificada HUMAN_ACTION_REQUIRED (ver AgentErrorCategory) --
+  // no es un bug ni una política que bloquea, es una tarea que necesita
+  // que un humano decida algo antes de continuar (Fase 5, Human Review
+  // Center). Se agrega ahora junto al resto del vocabulario de Fase 1
+  // porque recordTaskFailure ya necesita mapear a este valor.
+  HUMAN_REVIEW
+}
+
+// F25.2 Fase 1 (ADR-0004): espeja AGENT_ERROR_CATEGORIES de
+// packages/agents/src/core/AgentError.ts -- única fuente de verdad
+// semántica es ese archivo TS, este enum solo persiste el mismo valor.
+enum AgentErrorCategory {
+  RETRYABLE_NETWORK
+  RETRYABLE_PROVIDER
+  RETRYABLE_RATE_LIMIT
+  RETRYABLE_TIMEOUT
+  INVALID_INPUT
+  POLICY_BLOCKED
+  DATA_INSUFFICIENT
+  PERMANENT_PROVIDER_ERROR
+  HUMAN_ACTION_REQUIRED
+  UNKNOWN
 }
 
 enum TaskTrigger {
@@ -2134,8 +2168,32 @@ model AgentTask {
   createdAt       DateTime          @default(now())
   completedAt     DateTime?
 
+  // F25.2 Fase 1 (ADR-0004): lease/heartbeat/retry -- todas nullable u
+  // con default seguro, ningún row existente cambia (claimedAt=null,
+  // attempt=0, maxAttempts=3 se aplican vía @default a filas nuevas;
+  // filas existentes quedan con NULL/0 tras el backfill, ver migration.sql).
+  claimedAt          DateTime?
+  claimedBy          String? // worker id (proceso), no un usuario -- distinto de triggeredBy
+  leaseExpiresAt     DateTime?
+  attempt            Int                 @default(0)
+  maxAttempts        Int                 @default(3)
+  nextAttemptAt      DateTime?
+  lastErrorCategory  AgentErrorCategory?
+  canceledAt         DateTime?
+  canceledBy         String?
+
+  // F25.2 Fase 1: trazabilidad -- correlationId agrupa todas las tareas
+  // de una misma misión/workflow, causationId apunta al eventId que
+  // disparó esta tarea (ver AgentEventEnvelope). Ambos nullable: tareas
+  // pre-F25.2 y tareas disparadas directamente por un usuario (sin
+  // evento causante) son válidas sin ellos.
+  correlationId String?
+  causationId   String?
+
   @@index([tenantId, status])
   @@index([agentInstanceId, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, correlationId])
 }
 
 model AgentMemory {

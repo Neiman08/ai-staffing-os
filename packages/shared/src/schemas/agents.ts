@@ -16,7 +16,21 @@ export type AgentInstanceListItem = z.infer<typeof agentInstanceListItemSchema>;
 // F2: AgentTask invocation, status and approvals
 // ============================================================
 
-export const agentTaskStatusSchema = z.enum(["QUEUED", "RUNNING", "AWAITING_APPROVAL", "DONE", "FAILED"]);
+// F25.2 Fase 1: CLAIMED/RETRY_SCHEDULED/BLOCKED/CANCELED/HUMAN_REVIEW
+// agregados de forma aditiva junto al enum real (ver AgentTaskStatus en
+// schema.prisma) -- los 5 valores originales conservan su significado.
+export const agentTaskStatusSchema = z.enum([
+  "QUEUED",
+  "RUNNING",
+  "AWAITING_APPROVAL",
+  "DONE",
+  "FAILED",
+  "CLAIMED",
+  "RETRY_SCHEDULED",
+  "BLOCKED",
+  "CANCELED",
+  "HUMAN_REVIEW",
+]);
 export type AgentTaskStatusValue = z.infer<typeof agentTaskStatusSchema>;
 
 export const taskTriggerSchema = z.enum(["USER", "EVENT", "AGENT", "SCHEDULE"]);
