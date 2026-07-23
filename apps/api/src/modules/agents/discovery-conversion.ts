@@ -1,4 +1,5 @@
 import type { MissionRestrictions } from "@ai-staffing-os/agents";
+import { Prisma } from "@ai-staffing-os/db";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
@@ -7,6 +8,8 @@ import { logAuditEvent } from "../../core/audit-log";
 import * as leadsService from "../leads/service";
 import * as opportunitiesService from "../opportunities/service";
 import { decideCompanyConversion, evaluateDraftEligibility, type ConversionEvidence, type ConversionDecision, type DraftEligibility } from "../ceo-intelligence/conversion-policy";
+import { evaluateDraftCreationGate, type DraftCreationBlockReason } from "../ceo-intelligence/draft-creation-gate";
+import { hasActiveApprovalForCompany } from "../approvals/service";
 
 /**
  * F14: convierte UNA Company ya descubierta (con evidencia ya reunida
@@ -31,7 +34,17 @@ import { decideCompanyConversion, evaluateDraftEligibility, type ConversionEvide
  */
 export interface ConvertDiscoveredCompanyParams {
   taskId: string;
-  company: { id: string; name: string; industryId: string };
+  company: {
+    id: string;
+    name: string;
+    industryId: string;
+    // F24 (auditoría de producción): el Draft (no el Lead/Opportunity,
+    // que igual sirven para revisión humana) se bloquea cuando la
+    // Company fue marcada como posible cliente final -- ver
+    // draft-creation-gate.ts.
+    isClientOwnerCandidate: boolean;
+    opportunityRecommendation: string | null;
+  };
   restrictions: MissionRestrictions;
   evidence: ConversionEvidence;
   /** Mejor email organizacional VERIFIED disponible (nunca RISKY/INVALID) -- ver company-enrichment.ts. */
@@ -48,6 +61,8 @@ export interface ConvertDiscoveredCompanyResult {
   draftEligibility: DraftEligibility | null;
   draftCreated: boolean;
   draftBlockedByRestriction: boolean;
+  /** F24: DEMO_SEED/DUPLICATE_ACTIVE/CLIENT_OWNER_REVIEW -- null si el gate nunca bloqueó nada (no aplica cuando draftBlockedByRestriction ya es true). */
+  draftBlockedByGate: DraftCreationBlockReason | null;
   approvalRequestId: string | null;
 }
 
@@ -87,6 +102,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
   let draftEligibility: DraftEligibility | null = null;
   let draftCreated = false;
   let draftBlockedByRestriction = false;
+  let draftBlockedByGate: DraftCreationBlockReason | null = null;
   let approvalRequestId: string | null = null;
 
   if (decision.createLead) {
@@ -142,38 +158,86 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
           draftBlockedByRestriction = true;
         } else {
           const to = params.bestRealContact?.email ?? params.bestVerifiedOrgEmail!;
-          // F15: organizacional cuando no hay Contact real con email --
-          // aunque bestRealContact exista sin email, el canal real usado
-          // es igual el organizacional (`to` ya cayó al org email arriba).
-          const recipientKind: DraftRecipientKind = params.bestRealContact?.email ? "person" : "organizational";
-          const { subject, body } = buildOutreachDraft(params.company.name, params.bestRealContact?.firstName ?? null, recipientKind);
-          const approval = await scopedDb.approvalRequest.create({
-            data: {
-              tenantId: ctx.tenantId,
-              agentTaskId: params.taskId,
-              summary: `Borrador de email para ${params.company.name}`,
-              proposedAction: {
-                channel: "EMAIL",
-                companyId: params.company.id,
-                leadId,
-                opportunityId,
-                contactId: params.bestRealContact?.contactId ?? null,
-                recipientKind,
-                to,
-                subject,
-                body,
-              },
-              riskLevel: "MEDIUM",
-            },
+
+          // F24 (auditoría de producción, endurecimiento del pipeline):
+          // mismo chokepoint que outreach-tools.impl.ts/sales-tools.impl.ts
+          // -- el email ya está garantizado acá (evaluateDraftEligibility
+          // arriba), así que el gate solo puede bloquear por duplicado
+          // activo o client-owner-candidate/MANUAL_REVIEW (DEMO_SEED ya
+          // quedó cubierto transitivamente: createLead/createOpportunity,
+          // arriba, ya lo hubieran rechazado).
+          const gate = evaluateDraftCreationGate({
+            companyOrigin: "API_PROVIDER", // ya pasó por createLead/createOpportunity -- DEMO_SEED nunca llega hasta acá
+            isClientOwnerCandidate: params.company.isClientOwnerCandidate,
+            opportunityRecommendation: params.company.opportunityRecommendation,
+            channel: { isEmailCapable: true, channel: "WEBSITE_ORG_EMAIL", reason: "ya resuelto por evaluateDraftEligibility" },
+            hasActiveDuplicateApproval: await hasActiveApprovalForCompany(params.company.id),
           });
-          draftCreated = true;
-          approvalRequestId = approval.id;
-          await logAuditEvent({
-            action: "outreach.drafted_by_agent",
-            entityType: "approvalRequest",
-            entityId: approval.id,
-            after: { companyId: params.company.id, opportunityId, to },
-          });
+
+          if (!gate.allowed) {
+            draftBlockedByGate = gate.blockReason;
+            if (gate.companyBlockReasonToPersist) {
+              await scopedDb.company.update({
+                where: { id: params.company.id },
+                data: { outreachBlockedReason: gate.companyBlockReasonToPersist, outreachBlockedAt: new Date() },
+              });
+            }
+            await logAuditEvent({
+              action: "outreach.draft_blocked_by_gate",
+              entityType: "company",
+              entityId: params.company.id,
+              after: { blockReason: gate.blockReason, reason: gate.reason },
+            });
+          } else {
+            // F15: organizacional cuando no hay Contact real con email --
+            // aunque bestRealContact exista sin email, el canal real usado
+            // es igual el organizacional (`to` ya cayó al org email arriba).
+            const recipientKind: DraftRecipientKind = params.bestRealContact?.email ? "person" : "organizational";
+            const { subject, body } = buildOutreachDraft(params.company.name, params.bestRealContact?.firstName ?? null, recipientKind);
+            try {
+              const approval = await scopedDb.approvalRequest.create({
+                data: {
+                  tenantId: ctx.tenantId,
+                  agentTaskId: params.taskId,
+                  companyId: params.company.id,
+                  summary: `Borrador de email para ${params.company.name}`,
+                  proposedAction: {
+                    channel: "EMAIL",
+                    companyId: params.company.id,
+                    leadId,
+                    opportunityId,
+                    contactId: params.bestRealContact?.contactId ?? null,
+                    recipientKind,
+                    to,
+                    subject,
+                    body,
+                  },
+                  riskLevel: "MEDIUM",
+                },
+              });
+              draftCreated = true;
+              approvalRequestId = approval.id;
+              await logAuditEvent({
+                action: "outreach.drafted_by_agent",
+                entityType: "approvalRequest",
+                entityId: approval.id,
+                after: { companyId: params.company.id, opportunityId, to },
+              });
+            } catch (err) {
+              // F24 (Fase 2): perdió la carrera contra el índice único parcial.
+              if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+                draftBlockedByGate = "DUPLICATE_ACTIVE";
+                await logAuditEvent({
+                  action: "outreach.draft_blocked_by_gate",
+                  entityType: "company",
+                  entityId: params.company.id,
+                  after: { blockReason: "DUPLICATE_ACTIVE", reason: "Condición de carrera detectada por el índice único de la base de datos." },
+                });
+              } else {
+                throw err;
+              }
+            }
+          }
         }
       }
     }
@@ -194,6 +258,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
     draftEligibility,
     draftCreated,
     draftBlockedByRestriction,
+    draftBlockedByGate,
     approvalRequestId,
   };
 }

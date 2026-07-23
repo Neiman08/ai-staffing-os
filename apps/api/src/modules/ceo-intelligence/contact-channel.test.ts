@@ -97,6 +97,26 @@ test("NONE: sin ningún canal real -- nunca inventa un email/nombre/canal, la Co
   assert.equal(r.isEmailCapable, false);
 });
 
+test("un contacto CONFIRMED (import manual/CSV, provisto explícitamente por un humano) cuenta como tier 1 aunque emailVerificationStatus nunca haya sido verificado", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "pat@testpipeline.example", emailVerificationStatus: "NOT_VERIFIED", linkedinUrl: null, verificationStatus: "CONFIRMED" }],
+    }),
+  );
+  assert.equal(r.channel, "VERIFIED_PERSON_EMAIL");
+  assert.equal(r.value, "pat@testpipeline.example");
+  assert.equal(r.isEmailCapable, true);
+});
+
+test("un contacto INFERRED/UNVERIFIED (scraping, sin confirmar) NUNCA cuenta como tier 1 -- distingue explícitamente de CONFIRMED", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "guess@acme.com", emailVerificationStatus: "NOT_VERIFIED", linkedinUrl: null, verificationStatus: "INFERRED" }],
+    }),
+  );
+  assert.notEqual(r.channel, "VERIFIED_PERSON_EMAIL");
+});
+
 // ---------- F24 (auditoría de producción): scoring de calidad, casos reales ----------
 
 test("Essence Suites (real): entre 3 variantes VERIFIED del mismo alias, elige la limpia y descarta las contaminadas con teléfono", () => {

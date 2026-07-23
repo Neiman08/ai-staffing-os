@@ -11,12 +11,16 @@ import {
   type AgentTool,
   type LLMProvider,
 } from "@ai-staffing-os/agents";
+import { Prisma } from "@ai-staffing-os/db";
+import { DEFAULT_EMAIL_SIGNATURE } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { AppError } from "../../../core/errors";
 import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
 import { resolveBestContactChannel, type ContactChannelType } from "../../ceo-intelligence/contact-channel";
+import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
+import { hasActiveApprovalForCompany } from "../../approvals/service";
 
 const BUSINESS_NAME = "DreiStaff";
 // F21 Fase 3: perfiles reales que un hotel necesita, pedidos explícitamente
@@ -172,7 +176,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         // gastar ningún request al LLM -- nunca se redacta un "borrador
         // de email" para una empresa sin ningún email real.
         const channelResolution = resolveBestContactChannel({
-          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl })),
+          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus })),
           contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
           companyEmail: company.email,
           companyPhone: company.phone,
@@ -181,7 +185,21 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
           companyLinkedinUrl: metadata?.contactChannel?.linkedinUrl ?? null,
         });
 
-        if (!channelResolution.isEmailCapable) {
+        // F24 (auditoría de producción, endurecimiento del pipeline):
+        // chokepoint único antes de gastar cualquier request al LLM --
+        // ver draft-creation-gate.ts para las 4 causas reales que puede
+        // bloquear (DEMO_SEED, duplicado activo, client-owner-candidate/
+        // MANUAL_REVIEW, sin canal de contacto).
+        const discoveryMeta = (company.discoveryMetadata as { isClientOwnerCandidate?: boolean; opportunityRecommendation?: { recommendation?: string } } | null) ?? null;
+        const gate = evaluateDraftCreationGate({
+          companyOrigin: company.origin,
+          isClientOwnerCandidate: !!discoveryMeta?.isClientOwnerCandidate,
+          opportunityRecommendation: discoveryMeta?.opportunityRecommendation?.recommendation ?? null,
+          channel: channelResolution,
+          hasActiveDuplicateApproval: await hasActiveApprovalForCompany(cc.companyId),
+        });
+
+        if (!gate.allowed && gate.blockReason === "NEEDS_ENRICHMENT") {
           // F21 Fase 2, regla explícita: "si no existe email, crear una
           // tarea comercial con teléfono, formulario o canal alternativo" —
           // nunca se elimina la Company, nunca se inventa un email para
@@ -210,6 +228,10 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
             data: { campaignId: cc.campaignId, createdByAgentTaskId: deps.taskId },
           });
           await scopedDb.followUp.update({ where: { id: step.id }, data: { status: "DONE", completedAt: new Date() } });
+          await scopedDb.company.update({
+            where: { id: cc.companyId },
+            data: { outreachBlockedReason: "NEEDS_ENRICHMENT", outreachBlockedAt: new Date() },
+          });
           await auditAgentAction({
             agentInstanceId: deps.agentInstanceId,
             action: "outreach.alternative_channel_task_created_by_agent",
@@ -219,6 +241,30 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
           });
 
           return { draftBody: null, subject: null, channel: channelResolution.channel, alternativeChannelTaskId: followUp.id };
+        }
+
+        if (!gate.allowed) {
+          // DEMO_SEED / DUPLICATE_ACTIVE / CLIENT_OWNER_REVIEW: el
+          // problema no es "falta un dato", es que esta Company entera
+          // no debe recibir outreach automático todavía -- nunca se crea
+          // una tarea de "llamar por teléfono" (no aplica), solo se deja
+          // el paso resuelto y auditado.
+          if (gate.companyBlockReasonToPersist) {
+            await scopedDb.company.update({
+              where: { id: cc.companyId },
+              data: { outreachBlockedReason: gate.companyBlockReasonToPersist, outreachBlockedAt: new Date() },
+            });
+          }
+          await scopedDb.followUp.update({ where: { id: step.id }, data: { status: "DONE", completedAt: new Date() } });
+          await auditAgentAction({
+            agentInstanceId: deps.agentInstanceId,
+            action: "outreach.draft_blocked_by_gate",
+            entityType: "campaignCompany",
+            entityId: cc.id,
+            after: { blockReason: gate.blockReason, reason: gate.reason },
+          });
+
+          return { draftBody: null, subject: null, channel: channelResolution.channel, alternativeChannelTaskId: null };
         }
 
         const [recentActivity, openOpportunities] = await Promise.all([
@@ -250,12 +296,15 @@ Historial reciente: ${recentActivity.map((a) => a.subject).join("; ") || "sin ac
 ${isHospitality ? `Perfiles a enfocar (hospitality): ${HOSPITALITY_ROLE_FOCUS.join(", ")}.` : ""}
 
 Reglas obligatorias:
-- Estructura: asunto corto; saludo adecuado; referencia real a la empresa (nombre, ubicación o señal real de arriba — nunca un dato inventado); explicación breve de qué hace ${BUSINESS_NAME} (agencia de staffing); propuesta concreta de personal relevante a la industria; llamada a la acción sencilla (ej. coordinar una llamada breve); firma profesional.
+- Estructura: asunto corto; saludo adecuado; referencia real a la empresa (nombre, ubicación o señal real de arriba — nunca un dato inventado); explicación breve de qué hace ${BUSINESS_NAME} (agencia de staffing); propuesta concreta de personal relevante a la industria; llamada a la acción sencilla (ej. coordinar una llamada breve); firma.
 - Nunca afirmes que la empresa está contratando salvo que la señal de arriba esté confirmada (CONFIRMED_HIRING o LIKELY_HIRING). Si no está confirmada, usá lenguaje prudente, por ejemplo (en inglés, tal cual): "We help ${isHospitality ? "hospitality operators" : "operators like you"} maintain reliable staffing coverage during busy periods, turnover or seasonal demand."
 - Nunca prometas precios, tarifas ni compromisos.
 - Nunca inventes un dato (nombre de contacto, número de empleados, proyecto específico) que no esté en el contexto de arriba.
+- Nunca te presentes como una persona con nombre propio (nunca escribas frases como "My name is [something]" o similar) -- escribí en nombre del equipo de ${BUSINESS_NAME}, nunca de un individuo sin nombre real.
+- Termina el mensaje EXACTAMENTE con esta firma, sin modificarla ni traducirla, y nunca uses ningún placeholder entre corchetes en ninguna parte del mensaje (ej. "[Your Name]", "[Your Position]"):
+${DEFAULT_EMAIL_SIGNATURE}
 
-Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body": "<mensaje completo siguiendo la estructura de arriba, en inglés>"}.`;
+Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body": "<mensaje completo siguiendo la estructura de arriba, en inglés, terminando con la firma exacta de arriba>"}.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -285,15 +334,37 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           body: parsed.body,
         };
 
-        await scopedDb.approvalRequest.create({
-          data: {
-            tenantId: ctx.tenantId,
-            agentTaskId: deps.taskId,
-            summary: `Borrador (paso ${input.step + 1}/4, ${stepLabel}) para ${company.name}`,
-            proposedAction,
-            riskLevel: "MEDIUM",
-          },
-        });
+        try {
+          await scopedDb.approvalRequest.create({
+            data: {
+              tenantId: ctx.tenantId,
+              agentTaskId: deps.taskId,
+              companyId: cc.companyId,
+              summary: `Borrador (paso ${input.step + 1}/4, ${stepLabel}) para ${company.name}`,
+              proposedAction,
+              riskLevel: "MEDIUM",
+            },
+          });
+        } catch (err) {
+          // F24 (Fase 2): perdió la carrera contra el índice único
+          // parcial (otro request creó un ApprovalRequest activo para
+          // esta misma Company entre el chequeo de hasActiveApprovalForCompany
+          // y este create) -- nunca un error 500 real, es el mismo
+          // resultado que hasActiveDuplicateApproval hubiera detectado
+          // con timing perfecto.
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+            await scopedDb.followUp.update({ where: { id: step.id }, data: { status: "DONE", completedAt: new Date() } });
+            await auditAgentAction({
+              agentInstanceId: deps.agentInstanceId,
+              action: "outreach.draft_blocked_by_gate",
+              entityType: "campaignCompany",
+              entityId: cc.id,
+              after: { blockReason: "DUPLICATE_ACTIVE", reason: "Condición de carrera detectada por el índice único de la base de datos." },
+            });
+            return { draftBody: null, subject: null, channel: channelResolution.channel, alternativeChannelTaskId: null };
+          }
+          throw err;
+        }
         // Marca el paso como "preparado" (DONE) — no como "enviado", eso
         // sigue dependiendo de la aprobación humana. Evita que el
         // scheduler (F4 §14) vuelva a redactar el mismo paso en la

@@ -53,6 +53,15 @@ export interface ContactChannelContactInput {
   email: string | null;
   emailVerificationStatus: string | null;
   linkedinUrl: string | null;
+  // F24 (auditoría de producción): Contact.verificationStatus (procedencia
+  // del CONTACTO, no de la entregabilidad del email) -- "CONFIRMED"
+  // significa que un humano proveyó este contacto explícitamente (ej.
+  // CSV/import manual), nunca inferido/scrapeado. Un contacto humano-
+  // confirmado con email es tan confiable como uno con emailVerificationStatus
+  // VERIFIED aunque ningún proveedor de verificación lo haya tocado
+  // todavía -- nunca se equipara un contacto INFERRED/UNVERIFIED (scraping)
+  // con uno que un humano tipeó a mano.
+  verificationStatus?: string | null;
 }
 
 export interface ContactChannelContactPointInput {
@@ -131,14 +140,16 @@ function pickBestEmail(candidates: string[], opts: { excludeFreeProviders: boole
 
 export function resolveBestContactChannel(input: ContactChannelInput): ContactChannelResolution {
   const verifiedPersonEmail = pickBestEmail(
-    input.contacts.filter((c) => c.email && c.emailVerificationStatus === "VERIFIED").map((c) => c.email!),
+    input.contacts
+      .filter((c) => c.email && (c.emailVerificationStatus === "VERIFIED" || c.verificationStatus === "CONFIRMED"))
+      .map((c) => c.email!),
     { excludeFreeProviders: false },
   );
   if (verifiedPersonEmail) {
     return {
       channel: "VERIFIED_PERSON_EMAIL",
       value: verifiedPersonEmail,
-      reason: "Contacto personal real con email verificado -- el canal más confiable disponible.",
+      reason: "Contacto personal real con email verificado o explícitamente confirmado por un humano -- el canal más confiable disponible.",
       isEmailCapable: true,
     };
   }

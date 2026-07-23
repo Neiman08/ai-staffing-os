@@ -1303,7 +1303,17 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           }
           conversion = await convertDiscoveredCompany({
             taskId: childTask.id,
-            company: { id: company.id, name: candidate.raw.name!, industryId: industry.id },
+            company: {
+              id: company.id,
+              name: candidate.raw.name!,
+              industryId: industry.id,
+              // F24 (auditoría de producción): mismos valores ya
+              // calculados arriba en este mismo loop (líneas ~983 y
+              // ~1236) -- nunca se recalculan, solo se pasan al gate de
+              // creación de Draft (draft-creation-gate.ts).
+              isClientOwnerCandidate: clientOwnerMatchesForCandidate.length > 0,
+              opportunityRecommendation: opportunityRecommendation.recommendation,
+            },
             restrictions: params.restrictions,
             evidence: {
               businessConfidence: validation.confidence,

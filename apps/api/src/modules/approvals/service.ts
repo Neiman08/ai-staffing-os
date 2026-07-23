@@ -14,6 +14,40 @@ import { AppError } from "../../core/errors";
 import { sendEmail } from "../email/email-service";
 import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
 
+// F24: un ApprovalRequest "activo" todavía puede terminar en un envío
+// real -- SENT/FAILED/REJECTED/EXPIRED ya cerraron su ciclo de vida
+// (FAILED es reintentable pero desde el MISMO registro, nunca crea uno
+// nuevo). Mismo conjunto que el índice único parcial de la migración
+// f24_draft_creation_gate -- si se cambia acá, hay que cambiar el SQL
+// también.
+export const ACTIVE_APPROVAL_STATUSES = ["PENDING", "READY_TO_SEND", "SENDING"] as const;
+
+/**
+ * F24 (Fase 2, protección contra duplicados): ¿ya existe un
+ * ApprovalRequest activo para esta Company? Chequeo de aplicación --
+ * primera línea de defensa, rápida y con buen mensaje de error. La
+ * garantía REAL contra condiciones de carrera es el índice único parcial
+ * de la migración (ApprovalRequest_tenantId_companyId_active_unique);
+ * este chequeo solo evita gastar un request al LLM cuando ya se sabe de
+ * antemano que la creación va a fallar.
+ */
+export async function hasActiveApprovalForCompany(companyId: string): Promise<boolean> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+  const existing = await scopedDb.approvalRequest.findFirst({
+    where: { companyId, status: { in: [...ACTIVE_APPROVAL_STATUSES] } },
+    select: { id: true },
+  });
+  return !!existing;
+}
+
+// F24: código único de error Postgres para "unique_violation" -- se usa
+// para reconocer, en los 3 call sites de creación de Draft, cuando la
+// carrera fue perdida contra el índice único parcial de arriba (el
+// chequeo de aplicación de hasActiveApprovalForCompany no alcanzó a
+// verla porque otro request ganó entre el check y el create).
+export const UNIQUE_VIOLATION_ERROR_CODE = "P2002";
+
 function extractBody(proposedAction: unknown): string {
   if (!proposedAction || typeof proposedAction !== "object") return "";
   const pa = proposedAction as Record<string, unknown>;

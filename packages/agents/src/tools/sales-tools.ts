@@ -84,7 +84,14 @@ export const draftOutreachInputSchema = z.object({
   leadId: z.string(),
   channel: z.enum(["EMAIL", "LINKEDIN"]),
 });
-export const draftOutreachTool: AgentTool<z.infer<typeof draftOutreachInputSchema>, { draftBody: string }> = {
+export const draftOutreachTool: AgentTool<
+  z.infer<typeof draftOutreachInputSchema>,
+  // F24: null cuando el gate de creación de borrador (draft-creation-gate.ts)
+  // bloqueó la redacción -- DEMO_SEED, duplicado activo, client-owner-
+  // candidate/MANUAL_REVIEW, o sin canal de contacto real. Mismo criterio
+  // que personalizeMessage (outreach-tools.ts) desde F21 Fase 2.
+  { draftBody: string | null; blockReason?: string | null }
+> = {
   name: "draftOutreach",
   description: "Redacta un borrador de mensaje de contacto inicial. Requiere AUTO_WITH_APPROVAL antes de enviarse.",
   inputSchema: draftOutreachInputSchema,

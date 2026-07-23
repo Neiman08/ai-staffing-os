@@ -66,6 +66,12 @@ export async function importCompanies(input: ImportCompaniesInput): Promise<Impo
           email: row.contactEmail,
           title: row.contactTitle,
           isPrimary: true,
+          // F24: un humano tipeó este contacto explícitamente en el CSV --
+          // CONFIRMED (procedencia), nunca INFERRED (nunca fue scrapeado/
+          // adivinado). Distinto de emailVerificationStatus (entregabilidad),
+          // que sigue reservado exclusivamente a proveedores reales de
+          // verificación -- ver contact-channel.ts.
+          verificationStatus: row.contactEmail ? "CONFIRMED" : undefined,
         },
       });
       await logActivity({

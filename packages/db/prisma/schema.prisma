@@ -568,6 +568,17 @@ enum CompanyCommercialStatus {
   COMMERCIAL_VALIDATED
 }
 
+// F24 (auditoría de producción, endurecimiento del pipeline autónomo) --
+// ver Company.outreachBlockedReason. Deliberadamente NO incluye
+// DEMO_SEED ni DUPLICATE: esos dos ya son 100% identificables por campos
+// que ya existen (Company.origin, y un ApprovalRequest activo por
+// companyId) -- agregar un valor acá para lo mismo sería un estado
+// redundante, exactamente lo que se pidió evitar.
+enum OutreachBlockReason {
+  NEEDS_ENRICHMENT
+  CLIENT_OWNER_REVIEW
+}
+
 model Company {
   id                      String                    @id @default(cuid())
   tenantId                String
@@ -645,6 +656,20 @@ model Company {
   incidents               OperationalIncident[]
   portalUsers             User[] // F10.1: usuarios de Client Portal (CLIENT_ADMIN/CLIENT_MANAGER) de esta Company
   clientJobRequests       ClientJobRequest[] // F10.3
+  approvalRequests        ApprovalRequest[] // F24
+  // F24 (auditoría de producción): estado EXPLÍCITO de "por qué el
+  // pipeline autónomo no puede generar un borrador de outreach para
+  // esta Company todavía" -- nunca se usa para clasificar DEMO_SEED
+  // (origin ya lo identifica) ni duplicados activos (un ApprovalRequest
+  // ya en curso lo identifica) -- solo para los dos casos que de otra
+  // forma no quedarían registrados en ningún lado: falta de canal de
+  // contacto real (NEEDS_ENRICHMENT) y candidato a "dueño del cliente
+  // final, no contratista" (CLIENT_OWNER_REVIEW, ver
+  // isClientOwnerCandidate/opportunityRecommendation en
+  // discoveryMetadata). Null = sin bloqueo conocido. Ver
+  // evaluateDraftCreationGate (ceo-intelligence/draft-creation-gate.ts).
+  outreachBlockedReason   OutreachBlockReason?
+  outreachBlockedAt       DateTime?
   createdAt               DateTime                  @default(now())
   updatedAt               DateTime                  @updatedAt
 
@@ -2154,8 +2179,19 @@ model ApprovalRequest {
   sentAt         DateTime?
   expiresAt      DateTime?
   createdAt      DateTime       @default(now())
+  // F24 (auditoría de producción, endurecimiento del pipeline): antes de
+  // esto, el vínculo con la Company vivía SOLO adentro del Json
+  // proposedAction (en 3 shapes distintos, ninguno indexable) -- no
+  // existía forma real de preguntar "¿ya hay un borrador activo para
+  // esta Company?" sin parsear JSON en cada fila. Nullable a propósito:
+  // ninguna fila existente se backfillea (quedan companyId=NULL, fuera
+  // del índice único parcial de abajo) -- el pipeline empieza a
+  // poblarlo desde ahora, sin migración de datos históricos.
+  companyId      String?
+  company        Company?       @relation(fields: [companyId], references: [id])
 
   @@index([tenantId, status])
+  @@index([tenantId, companyId])
 }
 
 // ================= ENVÍO DE EMAIL (Microsoft Graph) =================

@@ -12,6 +12,39 @@ const COMPLIANCE_HEADERS = { "x-dev-user": "compliance@titan.dev", "content-type
 
 const createdLeadIds: string[] = [];
 const createdTaskIds: string[] = [];
+const createdCompanyIds: string[] = [];
+
+// F24 (auditoría de producción): evaluateBusinessIdentityGate ahora
+// rechaza origin=DEMO_SEED para createLead/createOpportunity -- los
+// tests de creación de Lead ya no pueden usar company-01 (seed real,
+// "Midwest Data Center Builders", origin=DEMO_SEED). Réplica mínima de
+// sus atributos relevantes (industria activa + LARGE + contacto de
+// decisión) pero con origin real, para que las aserciones de score
+// sigan siendo significativas.
+async function createRealTestCompany() {
+  const industry = await prisma.industry.findFirstOrThrow({ where: { name: "Construction" } });
+  const company = await prisma.company.create({
+    data: {
+      tenantId: "tenant-titan",
+      name: `Agents Test Co ${Date.now()}`,
+      industryId: industry.id,
+      status: "CLIENT",
+      city: "Chicago",
+      state: "IL",
+      estimatedSize: "LARGE",
+      commercialScore: 85,
+      origin: "API_PROVIDER",
+      // F21/F24: draft_outreach ahora exige un canal de contacto real
+      // (resolveBestContactChannel) -- companyEmail alcanza para el tier
+      // 3 (WEBSITE_ORG_EMAIL, email-capable), igual que company-01 nunca
+      // necesitó antes de que ese gate existiera.
+      email: "contact@agentstestco.example",
+      contacts: { create: [{ tenantId: "tenant-titan", firstName: "Robert", lastName: "Hayes", title: "Project Director", decisionRole: "PROJECT_MANAGER" }] },
+    },
+  });
+  createdCompanyIds.push(company.id);
+  return company.id;
+}
 
 before(async () => {
   const app = createApp();
@@ -35,6 +68,10 @@ after(async () => {
     await prisma.approvalRequest.deleteMany({ where: { agentTaskId: { in: createdTaskIds } } });
     await prisma.auditLog.deleteMany({ where: { action: { in: ["approval.decided"] } } });
     await prisma.agentTask.deleteMany({ where: { id: { in: createdTaskIds } } });
+  }
+  if (createdCompanyIds.length) {
+    await prisma.contact.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
+    await prisma.company.deleteMany({ where: { id: { in: createdCompanyIds } } });
   }
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -115,9 +152,10 @@ test("budget guard: an exhausted monthly budget fails the task before calling Op
 });
 
 test("createLead: agent-created leads are marked with createdByAgentTaskId and aiScoreReason", async () => {
+  const companyId = await createRealTestCompany();
   const task = await invokeSalesTask({
     type: "create_lead",
-    input: { companyId: "company-01", source: "referral" },
+    input: { companyId, source: "referral" },
   });
   const settled = await waitForSettled(task.id);
   assert.equal(settled.status, "DONE");
@@ -150,7 +188,8 @@ test("scoreCompany: hybrid score is in range and persists a rationale (eval-styl
 });
 
 test("draftOutreach: never sends anything, always ends in a PENDING ApprovalRequest (real OpenAI call)", async () => {
-  const leadTask = await invokeSalesTask({ type: "create_lead", input: { companyId: "company-01", source: "referral" } });
+  const companyId = await createRealTestCompany();
+  const leadTask = await invokeSalesTask({ type: "create_lead", input: { companyId, source: "referral" } });
   const leadSettled = await waitForSettled(leadTask.id);
   const leadId = (leadSettled.output as { leadId: string }).leadId;
   createdLeadIds.push(leadId);

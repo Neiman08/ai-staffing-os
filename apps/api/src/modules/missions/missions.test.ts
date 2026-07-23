@@ -15,6 +15,7 @@ const SALES_HEADERS = { "x-dev-user": "sales@titan.dev", "content-type": "applic
 const COMPLIANCE_HEADERS = { "x-dev-user": "compliance@titan.dev", "content-type": "application/json" };
 
 const createdMissionIds: string[] = [];
+const createdCompanyIds: string[] = [];
 
 before(async () => {
   const app = createApp();
@@ -83,6 +84,14 @@ after(async () => {
   for (const id of createdMissionIds) {
     await cleanupMission(id).catch((err) => console.error(`cleanup failed for mission ${id}:`, err));
   }
+  // F24: cleanupMission ya borra cualquier Company que la misión haya
+  // seleccionado (vía el output de select_target_companies) -- este
+  // catch cubre el caso en que la selección nunca llegó a correr (falla
+  // temprana del test) y la Company de prueba quedaría huérfana.
+  for (const id of createdCompanyIds) {
+    await prisma.contact.deleteMany({ where: { companyId: id } }).catch(() => {});
+    await prisma.company.delete({ where: { id } }).catch(() => {});
+  }
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
@@ -137,6 +146,31 @@ test("F12.4: POST /missions tiene missionLaunchLimiter montado (real, mismo rout
 });
 
 test("launchMission interprets a real instruction, runs the fixed pipeline, and always ends in an ApprovalRequest (real OpenAI calls)", async () => {
+  // F24 (auditoría de producción): selectTargetCompanies ahora excluye
+  // origin=DEMO_SEED -- este test dependía de que el seed real
+  // (company-05, Prairie Manufacturing Co., justamente DEMO_SEED) fuera
+  // seleccionable como target de campaña. Se reemplaza por una Company
+  // real equivalente (misma industria/estado/categoría/tamaño), creada
+  // fresca en cada corrida para que el pipeline tenga algo real que
+  // seleccionar.
+  const industry = await prisma.industry.findFirstOrThrow({ where: { name: "Manufacturing" } });
+  const category = await prisma.jobCategory.findFirstOrThrow({ where: { name: "General Labor" } });
+  const testCompany = await prisma.company.create({
+    data: {
+      tenantId: "tenant-titan",
+      name: `Missions Test Manufacturing Co ${Date.now()}`,
+      industryId: industry.id,
+      status: "LEAD",
+      state: "IL",
+      estimatedSize: "MEDIUM",
+      commercialScore: 70,
+      origin: "API_PROVIDER",
+      email: "contact@missionstestmfg.example",
+      possibleCategories: { connect: [{ id: category.id }] },
+    },
+  });
+  createdCompanyIds.push(testCompany.id);
+
   const res = await fetch(`${baseUrl}/api/v1/missions`, {
     method: "POST",
     headers: SALES_HEADERS,
@@ -165,18 +199,12 @@ test("launchMission interprets a real instruction, runs the fixed pipeline, and 
   // interpretDailyDirective ya corrió síncrono al crear la misión — el
   // resto de la secuencia corre async. F13 (auditoría PO, 2026-07-19):
   // hallazgo real al validar contra una base de datos genuinamente
-  // fresca -- la empresa seleccionada (company-05, Prairie Manufacturing
-  // Co.) nunca tuvo un Lead real en el seed (solo una Opportunity de
-  // demo sin Lead asociado), así que el pipeline SIEMPRE crea 6 hijos
-  // reales acá (create_campaign, select_target_companies, create_lead,
-  // create_opportunity, plan_sequence, personalize_message), nunca 4.
-  // Contra la base de dev persistente esto quedaba enmascarado por
-  // corridas anteriores de este mismo test, que ya le habían creado un
-  // Lead a esa empresa (create_lead se saltea si ya existe) -- ahí el
-  // conteo SÍ daba 4, por casualidad de estado acumulado, no por diseño.
-  // Esperar solo 4 dejaba pasar el chequeo antes de que
-  // personalize_message (el que de verdad importa acá) hubiera
-  // terminado de verdad.
+  // fresca -- la empresa seleccionada nunca tenía un Lead real (F24: la
+  // Company de prueba ahora se crea fresca en cada corrida, así que esto
+  // vale siempre, por diseño, no por casualidad), así que el pipeline
+  // SIEMPRE crea 6 hijos reales acá (create_campaign,
+  // select_target_companies, create_lead, create_opportunity,
+  // plan_sequence, personalize_message), nunca 4.
   await waitForMissionChildren(body.id, 6, 45_000);
 
   const detailRes = await fetch(`${baseUrl}/api/v1/missions/${body.id}`, { headers: SALES_HEADERS });

@@ -23,6 +23,7 @@ import {
   type AgentTool,
   type LLMProvider,
 } from "@ai-staffing-os/agents";
+import { Prisma } from "@ai-staffing-os/db";
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { logActivity } from "../../../core/activity-log";
@@ -31,6 +32,10 @@ import * as leadsService from "../../leads/service";
 import * as opportunitiesService from "../../opportunities/service";
 import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
+import { DEFAULT_EMAIL_SIGNATURE } from "@ai-staffing-os/shared";
+import { resolveBestContactChannel } from "../../ceo-intelligence/contact-channel";
+import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
+import { hasActiveApprovalForCompany } from "../../approvals/service";
 
 const COMPANY_SIZE_ORDER = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"] as const;
 
@@ -404,7 +409,7 @@ Responde ÚNICAMENTE con un JSON de la forma {"adjustment": <número entre -10 y
 
         const lead = await scopedDb.lead.findUnique({
           where: { id: input.leadId },
-          include: { company: { include: { contacts: true } }, industry: true },
+          include: { company: { include: { contacts: true, contactPoints: true } }, industry: true },
         });
         if (!lead) throw AppError.notFound("Lead not found");
 
@@ -413,6 +418,73 @@ Responde ÚNICAMENTE con un JSON de la forma {"adjustment": <número entre -10 y
           lead.company?.contacts.find((c) => c.decisionRole) ??
           lead.company?.contacts[0];
 
+        // F24 (auditoría de producción, endurecimiento del pipeline):
+        // este era el ÚNICO de los 3 call sites de creación de Draft sin
+        // NINGÚN chequeo de canal de contacto -- causa directa de los
+        // borradores sin destinatario resoluble encontrados en la
+        // auditoría. Mismo chokepoint que outreach-tools.impl.ts/
+        // discovery-conversion.ts.
+        if (lead.company) {
+          const company = lead.company;
+          const discoveryMeta = (company.discoveryMetadata as {
+            contactChannel?: { careersPageUrl?: string | null; contactFormUrl?: string | null; linkedinUrl?: string | null };
+            isClientOwnerCandidate?: boolean;
+            opportunityRecommendation?: { recommendation?: string };
+          } | null) ?? null;
+
+          const channelForGate =
+            input.channel === "EMAIL"
+              ? resolveBestContactChannel({
+                  contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus })),
+                  contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
+                  companyEmail: company.email,
+                  companyPhone: company.phone,
+                  careersPageUrl: discoveryMeta?.contactChannel?.careersPageUrl ?? null,
+                  contactFormUrl: discoveryMeta?.contactChannel?.contactFormUrl ?? null,
+                  companyLinkedinUrl: discoveryMeta?.contactChannel?.linkedinUrl ?? null,
+                })
+              : // channel === "LINKEDIN": el gate de email no aplica -- se
+                // exige, en cambio, evidencia real de LinkedIn (de un
+                // Contact o corporativo del sitio), nunca inventado.
+                (() => {
+                  const linkedinUrl = contact?.linkedinUrl ?? discoveryMeta?.contactChannel?.linkedinUrl ?? null;
+                  return linkedinUrl
+                    ? { isEmailCapable: true, channel: "LINKEDIN" as const, value: linkedinUrl, reason: "LinkedIn real disponible." }
+                    : { isEmailCapable: false, channel: "NONE" as const, value: null, reason: "Sin LinkedIn real disponible para esta empresa/contacto." };
+                })();
+
+          const gate = evaluateDraftCreationGate({
+            companyOrigin: company.origin,
+            isClientOwnerCandidate: !!discoveryMeta?.isClientOwnerCandidate,
+            opportunityRecommendation: discoveryMeta?.opportunityRecommendation?.recommendation ?? null,
+            channel: channelForGate,
+            hasActiveDuplicateApproval: await hasActiveApprovalForCompany(company.id),
+          });
+
+          if (!gate.allowed) {
+            if (gate.companyBlockReasonToPersist) {
+              await scopedDb.company.update({
+                where: { id: company.id },
+                data: { outreachBlockedReason: gate.companyBlockReasonToPersist, outreachBlockedAt: new Date() },
+              });
+            }
+            await auditAgentAction({
+              agentInstanceId: deps.agentInstanceId,
+              action: "outreach.draft_blocked_by_gate",
+              entityType: "lead",
+              entityId: lead.id,
+              after: { blockReason: gate.blockReason, reason: gate.reason },
+            });
+            return { draftBody: null, blockReason: gate.blockReason };
+          }
+        }
+
+        // F24 (auditoría de producción, hallazgo real): sin una firma
+        // CONCRETA en el prompt, el LLM caía en placeholders sin llenar
+        // ("[Tu Nombre]", "[Tu Cargo]"...) -- el bloqueo de F23 los
+        // atrapaba correctamente, pero nunca deberían generarse. Se le
+        // da la firma exacta y permitida (misma que usa el editor de
+        // Approvals) en vez de pedirle "una firma profesional" genérica.
         const prompt = `Redacta un borrador de primer contacto por ${input.channel} para este lead. Es SOLO un borrador — nunca digas que ya fue enviado.
 
 Empresa: ${lead.company?.name ?? "Empresa sin identificar"}
@@ -421,7 +493,7 @@ Ubicación: ${lead.city ?? "—"}, ${lead.state ?? "—"}
 Contacto: ${contact ? `${contact.firstName} ${contact.lastName}${contact.title ? `, ${contact.title}` : ""}` : "sin contacto identificado todavía — dirígete a la empresa en general"}
 Por qué es una buena oportunidad: ${lead.aiScoreReason ?? "sin score todavía"}
 
-Responde ÚNICAMENTE con un JSON de la forma {${input.channel === "EMAIL" ? '"subject": "<asunto corto>", ' : ""}"body": "<mensaje breve, profesional, sin prometer precios ni compromisos>"}.`;
+${input.channel === "EMAIL" ? `Nunca te presentes como una persona con nombre propio (nunca escribas frases como "Mi nombre es [algo]" o similar) -- escribe en nombre del equipo de DreiStaff, nunca de un individuo sin nombre real. Termina el mensaje EXACTAMENTE con esta firma, sin modificarla ni traducirla, y nunca uses ningún placeholder entre corchetes en ninguna parte del mensaje (ej. "[Tu Nombre]", "[Tu Cargo]"):\n${DEFAULT_EMAIL_SIGNATURE}\n\n` : ""}Responde ÚNICAMENTE con un JSON de la forma {${input.channel === "EMAIL" ? '"subject": "<asunto corto>", ' : ""}"body": "<mensaje breve, profesional, sin prometer precios ni compromisos${input.channel === "EMAIL" ? ", terminando con la firma exacta de arriba" : ""}>"}.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -450,15 +522,31 @@ Responde ÚNICAMENTE con un JSON de la forma {${input.channel === "EMAIL" ? '"su
           body: parsed.body,
         };
 
-        await scopedDb.approvalRequest.create({
-          data: {
-            tenantId: ctx.tenantId,
-            agentTaskId: deps.taskId,
-            summary: `Borrador de ${input.channel === "EMAIL" ? "email" : "LinkedIn"} para ${lead.company?.name ?? "lead sin empresa"}`,
-            proposedAction,
-            riskLevel: "MEDIUM",
-          },
-        });
+        try {
+          await scopedDb.approvalRequest.create({
+            data: {
+              tenantId: ctx.tenantId,
+              agentTaskId: deps.taskId,
+              companyId: lead.companyId,
+              summary: `Borrador de ${input.channel === "EMAIL" ? "email" : "LinkedIn"} para ${lead.company?.name ?? "lead sin empresa"}`,
+              proposedAction,
+              riskLevel: "MEDIUM",
+            },
+          });
+        } catch (err) {
+          // F24 (Fase 2): perdió la carrera contra el índice único parcial.
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+            await auditAgentAction({
+              agentInstanceId: deps.agentInstanceId,
+              action: "outreach.draft_blocked_by_gate",
+              entityType: "lead",
+              entityId: lead.id,
+              after: { blockReason: "DUPLICATE_ACTIVE", reason: "Condición de carrera detectada por el índice único de la base de datos." },
+            });
+            return { draftBody: null, blockReason: "DUPLICATE_ACTIVE" };
+          }
+          throw err;
+        }
         await auditAgentAction({
           agentInstanceId: deps.agentInstanceId,
           action: "outreach.drafted_by_agent",
