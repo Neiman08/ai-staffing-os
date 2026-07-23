@@ -2,6 +2,7 @@ import { Router } from "express";
 import { agentTaskQuerySchema, invokeSalesAgentInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
 import * as agentsService from "./service";
+import { getMissionTimeline, getOrchestratorHealth } from "./observability";
 
 /**
  * DESVIACIÓN DOCUMENTADA: 02_F0_PROMPT.md (Paso 1) no lista un módulo
@@ -45,6 +46,25 @@ agentsRouter.get("/agents/tasks", requirePermission("agents.view"), async (req, 
 agentsRouter.get("/agents/tasks/:id", requirePermission("agents.view"), async (req, res, next) => {
   try {
     res.json(await agentsService.getAgentTaskDetail(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F25.2 Fase 9: observabilidad -- timeline de una misión/workflow (todas
+// las AgentTask + DomainEvent que comparten correlationId, ver
+// observability.ts) y salud cross-tenant de la cola/outbox.
+agentsRouter.get("/agents/missions/:correlationId/timeline", requirePermission("agents.view"), async (req, res, next) => {
+  try {
+    res.json(await getMissionTimeline(req.params.correlationId!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+agentsRouter.get("/agents/orchestrator/health", requirePermission("agents.view"), async (_req, res, next) => {
+  try {
+    res.json(await getOrchestratorHealth());
   } catch (err) {
     next(err);
   }

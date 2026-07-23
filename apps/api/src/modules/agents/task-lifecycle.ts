@@ -6,6 +6,7 @@ import {
 } from "@ai-staffing-os/agents";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
+import { logger } from "../../core/logger";
 
 /**
  * F25.2 Fase 1: transiciones de estado durables para AgentTask, sobre las
@@ -61,7 +62,7 @@ export async function claimTask(taskId: string, workerId: string, leaseMs: numbe
     throw new AppError(409, "AGENT_TASK_NOT_CLAIMABLE", `AgentTask ${taskId} no es reclamable (status=${task.status})`);
   }
 
-  return scopedDb.agentTask.update({
+  const claimed = await scopedDb.agentTask.update({
     where: { id: taskId },
     data: {
       status: "CLAIMED",
@@ -70,6 +71,8 @@ export async function claimTask(taskId: string, workerId: string, leaseMs: numbe
       leaseExpiresAt: new Date(now.getTime() + leaseMs),
     },
   });
+  logger.info("agent_task_claimed", { taskId, workerId, type: claimed.type, correlationId: claimed.correlationId, attempt: claimed.attempt });
+  return claimed;
 }
 
 /** CLAIMED -> RUNNING, conserva el lease tal cual (no lo renueva). */
@@ -98,7 +101,7 @@ export async function heartbeatTask(taskId: string, workerId: string, leaseMs: n
 }
 
 export async function recordTaskSuccess(taskId: string, output: unknown, extra?: { tokensUsed?: number; costUsd?: number }) {
-  return scopedDb.agentTask.update({
+  const task = await scopedDb.agentTask.update({
     where: { id: taskId },
     data: {
       status: "DONE",
@@ -109,6 +112,8 @@ export async function recordTaskSuccess(taskId: string, output: unknown, extra?:
       ...clearedLeaseFields(),
     },
   });
+  logger.info("agent_task_completed", { taskId, type: task.type, correlationId: task.correlationId, attempt: task.attempt });
+  return task;
 }
 
 export interface RecordTaskFailureResult {
@@ -143,6 +148,7 @@ export async function recordTaskFailure(taskId: string, error: unknown): Promise
         ...clearedLeaseFields(),
       },
     });
+    logger.warn("agent_task_retry_scheduled", { taskId, type: task.type, correlationId: task.correlationId, category, attempt: task.attempt, nextAttemptAt: task.nextAttemptAt?.toISOString() });
     return { task, category, retryScheduled: true };
   }
 
@@ -159,6 +165,7 @@ export async function recordTaskFailure(taskId: string, error: unknown): Promise
       ...clearedLeaseFields(),
     },
   });
+  logger.error("agent_task_terminal_failure", { taskId, type: task.type, correlationId: task.correlationId, category, status: terminalStatus, message });
   return { task, category, retryScheduled: false };
 }
 
@@ -176,7 +183,7 @@ export async function cancelTask(taskId: string, canceledBy: string, reason?: st
   if (TERMINAL_STATUSES.has(task.status)) {
     throw new AppError(409, "AGENT_TASK_ALREADY_TERMINAL", `AgentTask ${taskId} ya está en un estado terminal (status=${task.status}), no se puede cancelar`);
   }
-  return scopedDb.agentTask.update({
+  const canceled = await scopedDb.agentTask.update({
     where: { id: taskId },
     data: {
       status: "CANCELED",
@@ -187,6 +194,8 @@ export async function cancelTask(taskId: string, canceledBy: string, reason?: st
       ...clearedLeaseFields(),
     },
   });
+  logger.warn("agent_task_canceled", { taskId, type: canceled.type, correlationId: canceled.correlationId, canceledBy, reason });
+  return canceled;
 }
 
 /**
