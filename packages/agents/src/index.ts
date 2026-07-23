@@ -25,6 +25,12 @@ export * from "./core/idempotency";
 export * from "./core/correlation";
 export * from "./core/capability-check";
 
+// F25 Fase H -- prototipo local/dry-run del Orchestrator. Nunca toca
+// Postgres/LLM/proveedores externos, ver docstring de DryRunOrchestrator.
+export * from "./orchestrator/InMemoryTaskStore";
+export * from "./orchestrator/InMemoryEventBus";
+export * from "./orchestrator/DryRunOrchestrator";
+
 export * from "./providers/openai-provider";
 
 export * from "./tools/sales-tools";
