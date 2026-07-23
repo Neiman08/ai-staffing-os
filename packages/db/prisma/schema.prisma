@@ -2405,3 +2405,60 @@ model Notification {
   @@index([tenantId, recipientRole, readAt])
   @@index([tenantId, entityType, entityId])
 }
+
+// F25.2 Fase 5: Human Review Center -- tabla nueva (justificación:
+// ApprovalRequest es específico de outreach/envío, nada existente
+// cubre "caso consolidado con evidencia y opciones para que un humano
+// decida", ver docs/F25_AUTONOMY_POLICY_MODEL.md §8, contrato ya
+// revisado en la sesión de arquitectura F25). FKs opcionales vía
+// entityType/entityId (mismo patrón que Notification arriba), nunca
+// una relación obligatoria a una tabla de negocio específica -- una
+// misma cola sirve para Company/Contact/ApprovalRequest/lo que sea.
+enum HumanReviewType {
+  INVALID_CLASSIFICATION
+  CONTACT_AMBIGUOUS
+  CONTENT_RISK
+  POLICY_EXCEPTION
+  HIGH_VALUE_OPPORTUNITY
+  NEGOTIATION_REQUIRED
+  UNSAFE_REPLY
+  MEETING_CONFLICT
+  LEARNING_PROPOSAL
+  SYSTEM_FAILURE
+}
+
+enum HumanReviewPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model HumanReviewRequest {
+  id       String              @id @default(cuid())
+  tenantId String
+  type     HumanReviewType
+  priority HumanReviewPriority
+  deadline DateTime?
+
+  entityType String
+  entityId   String
+
+  summary           String
+  evidence          Json // Record<string, unknown>[] -- citas/datos concretos, nunca "confía en mí"
+  requestedDecision String
+  options           Json // { label: string; consequence: string }[]
+  recommendation    String? // sugerencia del sistema, nunca vinculante
+  impact            String // qué pasa si no se decide a tiempo
+
+  correlationId String // para reconstruir el caso completo (ver AgentEventEnvelope)
+
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+  resolution   String?
+
+  @@index([tenantId, resolvedAt, priority])
+  @@index([tenantId, entityType, entityId, type])
+  @@index([tenantId, correlationId])
+}

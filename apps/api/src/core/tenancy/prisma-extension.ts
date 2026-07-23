@@ -51,6 +51,7 @@ const STRICT_TENANT_MODELS = new Set([
   "AuditLog",
   "DomainEvent",
   "Notification",
+  "HumanReviewRequest",
   // Pre-F11 audit finding (P0): these four models all have a required,
   // non-nullable tenantId column in schema.prisma and are queried via
   // scopedDb.* in 60+ call sites (followups/service.ts, campaigns/service.ts,
