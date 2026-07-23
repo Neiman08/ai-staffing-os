@@ -1,16 +1,37 @@
-import type { ApprovalEmailSendResult, ApprovalRequestListItem, DecideApprovalInput } from "@ai-staffing-os/shared";
+import type {
+  ApprovalEmailSendResult,
+  ApprovalRequestListItem,
+  DecideApprovalInput,
+  EditApprovalDraftInput,
+  PlaceholderWarning,
+  RecipientWarning,
+} from "@ai-staffing-os/shared";
+import { EDITABLE_APPROVAL_STATUSES, findKnownPlaceholders } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
 import { sendEmail } from "../email/email-service";
+import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
+
+function extractBody(proposedAction: unknown): string {
+  if (!proposedAction || typeof proposedAction !== "object") return "";
+  const pa = proposedAction as Record<string, unknown>;
+  return typeof pa.body === "string" ? pa.body : "";
+}
+
+function computePlaceholderWarning(proposedAction: unknown): PlaceholderWarning {
+  const matches = findKnownPlaceholders(extractBody(proposedAction));
+  return { hasPlaceholders: matches.length > 0, matches };
+}
 
 function toListItem(
   approval: Awaited<ReturnType<typeof scopedDb.approvalRequest.findMany>>[number] & {
     agentTask: { type: string };
   },
   userLabels: Map<string, string>,
-  emailSendResult?: ApprovalEmailSendResult,
+  emailSendResult?: ApprovalEmailSendResult | null,
+  recipientWarning?: RecipientWarning,
 ): ApprovalRequestListItem {
   return {
     id: approval.id,
@@ -29,6 +50,8 @@ function toListItem(
     sentAt: approval.sentAt?.toISOString() ?? null,
     createdAt: approval.createdAt.toISOString(),
     emailSendResult,
+    recipientWarning: recipientWarning ?? null,
+    placeholderWarning: computePlaceholderWarning(approval.proposedAction),
   };
 }
 
@@ -123,6 +146,27 @@ async function resolveDraftEmail(proposedAction: unknown): Promise<ResolvedDraft
   return null;
 }
 
+/**
+ * F23: resuelve la advertencia de destinatario sospechoso (Fase 5) para
+ * varios ApprovalRequest de una sola pasada -- nunca N+1 hacia Company
+ * (un único findMany batch), nunca bloquea nada, solo informa.
+ */
+async function computeRecipientWarnings(proposedActions: unknown[]): Promise<RecipientWarning[]> {
+  const resolved = await Promise.all(proposedActions.map((pa) => resolveDraftEmail(pa)));
+
+  const companyIds = Array.from(new Set(resolved.map((r) => r?.companyId).filter((id): id is string => !!id)));
+  const companies = companyIds.length
+    ? await scopedDb.company.findMany({ where: { id: { in: companyIds } }, select: { id: true, website: true } })
+    : [];
+  const websiteByCompanyId = new Map(companies.map((c) => [c.id, c.website]));
+
+  return resolved.map((r) => {
+    if (!r) return null;
+    const website = r.companyId ? (websiteByCompanyId.get(r.companyId) ?? null) : null;
+    return assessRecipientTrust(r.to, website);
+  });
+}
+
 export async function listApprovals(status?: string): Promise<ApprovalRequestListItem[]> {
   const approvals = await scopedDb.approvalRequest.findMany({
     where: { status: status as never },
@@ -136,8 +180,9 @@ export async function listApprovals(status?: string): Promise<ApprovalRequestLis
     if (a.sentById) userIds.add(a.sentById);
   }
   const userLabels = await labelUsers(Array.from(userIds));
+  const recipientWarnings = await computeRecipientWarnings(approvals.map((a) => a.proposedAction));
 
-  return approvals.map((a) => toListItem(a, userLabels));
+  return approvals.map((a, idx) => toListItem(a, userLabels, null, recipientWarnings[idx]));
 }
 
 /**
@@ -158,6 +203,19 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
   if (!approval) throw AppError.notFound("Approval request not found");
   if (approval.status !== "PENDING") {
     throw AppError.badRequest(`This approval request was already decided (${approval.status})`);
+  }
+
+  // F23 Fase 4 (pedido explícito del PO): un borrador con firmas/placeholders
+  // sin completar ([Your Name], [Your Position]...) nunca puede aprobarse
+  // -- solo bloquea APPROVED, RECHAZAR sigue permitido siempre. Corregirlo
+  // requiere pasar por PATCH /approvals/:id/draft (editApprovalDraft).
+  if (input.decision === "APPROVED") {
+    const placeholders = findKnownPlaceholders(extractBody(approval.proposedAction));
+    if (placeholders.length > 0) {
+      throw AppError.badRequest(
+        `Este borrador todavía tiene placeholders de firma sin completar (${placeholders.join(", ")}) -- corrígelo con "Editar borrador" antes de aprobar.`,
+      );
+    }
   }
 
   const resultingStatus = input.decision === "APPROVED" ? "READY_TO_SEND" : "REJECTED";
@@ -194,7 +252,80 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
   });
 
   const decidedByLabels = await labelUsers([ctx.userId]);
-  return toListItem(updated, decidedByLabels, null);
+  const [recipientWarning] = await computeRecipientWarnings([updated.proposedAction]);
+  return toListItem(updated, decidedByLabels, null, recipientWarning);
+}
+
+/**
+ * F23 (pedido explícito del PO): edición segura de un borrador ANTES de
+ * aprobarlo/enviarlo -- nunca envía nada, nunca toca Company/Lead/
+ * Opportunity, solo reescribe to/subject/body dentro del mismo JSON de
+ * proposedAction. `to` explícito hace que resolveDraftEmail tome el
+ * shape F14/F15 de acá en adelante (chequea `pa.to` primero) sin
+ * importar cuál era el shape original -- funciona para los 3 shapes
+ * reales sin ninguna migración.
+ */
+export async function editApprovalDraft(id: string, input: EditApprovalDraftInput): Promise<ApprovalRequestListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.approvalRequest.findUnique({ where: { id }, include: { agentTask: true } });
+  if (!existing) throw AppError.notFound("Approval request not found");
+
+  if (!(EDITABLE_APPROVAL_STATUSES as readonly string[]).includes(existing.status)) {
+    throw AppError.badRequest(
+      `Este borrador no se puede editar desde el estado ${existing.status} -- solo PENDING, READY_TO_SEND o FAILED son editables.`,
+    );
+  }
+
+  const currentPa =
+    existing.proposedAction && typeof existing.proposedAction === "object" ? (existing.proposedAction as Record<string, unknown>) : {};
+  const previous = {
+    to: typeof currentPa.to === "string" ? currentPa.to : null,
+    subject: typeof currentPa.subject === "string" ? currentPa.subject : null,
+    body: typeof currentPa.body === "string" ? currentPa.body : null,
+  };
+  const next = { to: input.to, subject: input.subject, body: input.body };
+  const changedFields = (Object.keys(next) as Array<keyof typeof next>).filter((field) => previous[field] !== next[field]);
+
+  // Se preserva TODO lo demás del shape original (leadId/campaignCompanyId/
+  // channel/recipientKind/contactChannelSource/companyId/...) -- solo se
+  // sobreescriben los 3 campos editables.
+  const updatedProposedAction = { ...currentPa, ...next };
+
+  const wasReadyToSend = existing.status === "READY_TO_SEND";
+  const nextStatus = wasReadyToSend ? "PENDING" : existing.status;
+
+  const updated = await scopedDb.approvalRequest.update({
+    where: { id },
+    data: { proposedAction: updatedProposedAction, status: nextStatus },
+    include: { agentTask: true },
+  });
+
+  if (changedFields.length > 0) {
+    await scopedDb.auditLog.create({
+      data: {
+        tenantId: ctx.tenantId,
+        actorType: "HUMAN",
+        actorId: ctx.userId,
+        action: "approval.draft_edited",
+        entityType: "approvalRequest",
+        entityId: id,
+        // Nunca se guardan secretos acá -- to/subject/body de un borrador
+        // de outreach comercial, ningún dato sensible/credencial.
+        before: Object.fromEntries(changedFields.map((f) => [f, previous[f]])) as never,
+        after: {
+          ...Object.fromEntries(changedFields.map((f) => [f, next[f]])),
+          changedFields,
+          revertedToPending: wasReadyToSend,
+        } as never,
+      },
+    });
+  }
+
+  const labels = await labelUsers([ctx.userId]);
+  const [recipientWarning] = await computeRecipientWarnings([updated.proposedAction]);
+  return toListItem(updated, labels, null, recipientWarning);
 }
 
 export interface SendApprovalDeps {

@@ -157,6 +157,26 @@ export const approvalEmailSendResultSchema = z
   .nullable();
 export type ApprovalEmailSendResult = z.infer<typeof approvalEmailSendResultSchema>;
 
+// F23: advertencia no bloqueante sobre el destinatario resuelto de un
+// borrador -- nunca sustituye ni inventa el email, solo señala que un
+// humano debe verificarlo antes de aprobar (ver recipient-trust.ts).
+export const recipientWarningSchema = z
+  .object({
+    suspicious: z.boolean(),
+    reasons: z.array(z.string()),
+  })
+  .nullable();
+export type RecipientWarning = z.infer<typeof recipientWarningSchema>;
+
+// F23: placeholders de firma sin completar ([Your Name]...) -- bloquea
+// la aprobación en el backend (decideApproval), acá solo viaja para
+// que la UI lo muestre sin tener que recalcularlo por su cuenta.
+export const placeholderWarningSchema = z.object({
+  hasPlaceholders: z.boolean(),
+  matches: z.array(z.string()),
+});
+export type PlaceholderWarning = z.infer<typeof placeholderWarningSchema>;
+
 export const approvalRequestListItemSchema = z.object({
   id: z.string(),
   agentTaskId: z.string(),
@@ -174,6 +194,8 @@ export const approvalRequestListItemSchema = z.object({
   sentAt: z.string().nullable(),
   createdAt: z.string(),
   emailSendResult: approvalEmailSendResultSchema.optional(),
+  recipientWarning: recipientWarningSchema.optional(),
+  placeholderWarning: placeholderWarningSchema.optional(),
 });
 export type ApprovalRequestListItem = z.infer<typeof approvalRequestListItemSchema>;
 
@@ -182,6 +204,18 @@ export const decideApprovalInputSchema = z.object({
   note: z.string().optional(),
 });
 export type DecideApprovalInput = z.infer<typeof decideApprovalInputSchema>;
+
+// F23: edición manual de un borrador de outreach ANTES de aprobar/enviar
+// -- nunca envía nada por sí mismo (ver approvals/service.ts). `.strict()`
+// rechaza explícitamente cualquier campo desconocido en el body.
+export const editApprovalDraftInputSchema = z
+  .object({
+    to: z.string().trim().min(1, "El destinatario es obligatorio.").max(320, "Destinatario demasiado largo.").email("Formato de email inválido."),
+    subject: z.string().trim().min(1, "El asunto no puede estar vacío.").max(500, "Asunto demasiado largo (máximo 500 caracteres)."),
+    body: z.string().trim().min(1, "El cuerpo no puede estar vacío.").max(20000, "Cuerpo demasiado largo (máximo 20000 caracteres)."),
+  })
+  .strict();
+export type EditApprovalDraftInput = z.infer<typeof editApprovalDraftInputSchema>;
 
 // F17: envío manual real desde el CRM -- "correos manuales enviados
 // desde el CRM" del pedido real. SIEMPRE sale del perfil COMMERCIAL

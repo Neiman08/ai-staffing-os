@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { decideApprovalInputSchema } from "@ai-staffing-os/shared";
+import { decideApprovalInputSchema, editApprovalDraftInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
 import * as approvalsService from "./service";
 
@@ -26,6 +26,19 @@ approvalsRouter.post("/approvals/:id/decide", requirePermission("approvals.decid
   try {
     const input = decideApprovalInputSchema.parse(req.body);
     res.json(await approvalsService.decideApproval(req.params.id!, input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F23: edición segura de un borrador (to/subject/body) ANTES de aprobar/
+// enviar -- nunca envía nada (ver approvals/service.ts's editApprovalDraft).
+// Solo PENDING/READY_TO_SEND/FAILED son editables; editar un READY_TO_SEND
+// lo vuelve a PENDING, exigiendo una nueva aprobación humana.
+approvalsRouter.patch("/approvals/:id/draft", requirePermission("approvals.decide"), async (req, res, next) => {
+  try {
+    const input = editApprovalDraftInputSchema.parse(req.body);
+    res.json(await approvalsService.editApprovalDraft(req.params.id!, input));
   } catch (err) {
     next(err);
   }
