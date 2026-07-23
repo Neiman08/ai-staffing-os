@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import type { WebsiteGenericEmail, WebsiteGenericPhone, WebsiteNamedPerson } from "./types";
+import type { WebsiteCareersEvidence, WebsiteContactFormInfo, WebsiteGenericEmail, WebsiteGenericPhone, WebsiteNamedPerson } from "./types";
 
 // F4.7 §1.3: nunca se "desofusca" un email agresivamente — solo mailto:
 // reales y direcciones literales en texto plano. Un email ofuscado con
@@ -59,6 +59,31 @@ function looksLikeName(text: string): boolean {
   return NAME_RE.test(text.trim()) && text.trim().length < 40;
 }
 
+// F22 Fase 2: frases reales que confirman una página de careers/jobs por
+// CONTENIDO, no solo por path -- caso real: una empresa que publica sus
+// vacantes en "/opportunities" o en la home misma, sin que el path
+// contenga "career"/"jobs". Vocabulario cerrado, nunca inferido por LLM.
+const CAREERS_CONTENT_PHRASES = [
+  "we are hiring",
+  "we're hiring",
+  "now hiring",
+  "join our team",
+  "open positions",
+  "current openings",
+  "career opportunities",
+  "employment opportunities",
+  "apply today",
+  "view openings",
+];
+
+function findCareersEvidencePhrase(visibleText: string): string | null {
+  const lower = visibleText.toLowerCase();
+  for (const phrase of CAREERS_CONTENT_PHRASES) {
+    if (lower.includes(phrase)) return phrase;
+  }
+  return null;
+}
+
 export interface PageExtraction {
   genericEmails: WebsiteGenericEmail[];
   namedPeople: WebsiteNamedPerson[];
@@ -70,9 +95,92 @@ export interface PageExtraction {
   // nunca se re-crawlea el sitio para buscar señales de contratación, se
   // reutiliza el mismo texto ya bajado para emails/teléfonos/tarjetas.
   visibleText: string;
+  // F22 Fase 2: TODOS los formularios reales de esta página (nunca solo
+  // uno) -- se registran aunque la página no traiga ningún email.
+  contactForms: WebsiteContactFormInfo[];
+  // F22 Fase 2: evidencia real de careers por contenido (además del path,
+  // que se sigue evaluando en crawler.ts vía isCareersPath).
+  careersEvidencePhrase: string | null;
+  // F22 Fase 2: LinkedIn corporativo real, solo si aparece en ESTA página
+  // (link directo o JSON-LD `sameAs`) -- nunca de una búsqueda externa.
+  linkedinUrl: string | null;
+  // F22 Fase 2: cuántos emails de los de arriba vinieron específicamente
+  // de JSON-LD/schema.org -- para observabilidad (Fase 5), no cambia
+  // dónde se persisten (siguen siendo genericEmails/namedPeople normales).
+  structuredDataEmailsFound: number;
 }
 
-const MAX_VISIBLE_TEXT_CHARS = 5000;
+/**
+ * F22 Fase 2: JSON-LD (`<script type="application/ld+json">`) -- fuente
+ * estructurada, machine-readable, que muchos sitios ya incluyen para SEO
+ * (schema.org Organization/LocalBusiness/Person/ContactPoint). Nunca se
+ * infiere nada que el JSON no traiga literal; un bloque que no parsea
+ * como JSON válido simplemente se ignora (nunca rompe el resto del
+ * extract). `sameAs` es el campo real donde schema.org espera perfiles
+ * sociales (incluido LinkedIn) -- se revisa como fuente adicional de
+ * LinkedIn corporativo, siempre del propio sitio.
+ */
+function extractJsonLd(
+  $: cheerio.CheerioAPI,
+  pageUrl: string,
+): { emails: WebsiteGenericEmail[]; phones: WebsiteGenericPhone[]; linkedinUrl: string | null } {
+  const emails: WebsiteGenericEmail[] = [];
+  const phones: WebsiteGenericPhone[] = [];
+  let linkedinUrl: string | null = null;
+
+  $('script[type="application/ld+json"]').each((_, el) => {
+    const raw = $(el).contents().text();
+    if (!raw || !raw.trim()) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return; // JSON-LD inválido -- se ignora, nunca rompe el resto del crawl
+    }
+    const nodes = Array.isArray(parsed) ? parsed : [parsed];
+    for (const node of nodes) {
+      collectJsonLdNode(node, pageUrl, emails, phones, (url) => {
+        if (!linkedinUrl) linkedinUrl = url;
+      });
+    }
+  });
+
+  return { emails, phones, linkedinUrl };
+}
+
+function collectJsonLdNode(
+  node: unknown,
+  pageUrl: string,
+  emails: WebsiteGenericEmail[],
+  phones: WebsiteGenericPhone[],
+  onLinkedin: (url: string) => void,
+  depth = 0,
+): void {
+  if (!node || typeof node !== "object" || depth > 3) return;
+  const obj = node as Record<string, unknown>;
+
+  if (typeof obj.email === "string" && EMAIL_RE.test(obj.email) && isPlausibleEmail(obj.email)) {
+    emails.push({ email: obj.email.toLowerCase(), sourceUrl: pageUrl });
+  }
+  if (typeof obj.telephone === "string") {
+    const digits = obj.telephone.replace(/\D/g, "");
+    if (digits.length >= 10) phones.push({ phone: obj.telephone, sourceUrl: pageUrl });
+  }
+  const sameAs = obj.sameAs;
+  const sameAsList = Array.isArray(sameAs) ? sameAs : typeof sameAs === "string" ? [sameAs] : [];
+  for (const url of sameAsList) {
+    if (typeof url === "string" && /linkedin\.com\/(company|school)\//i.test(url)) onLinkedin(url);
+  }
+  // `contactPoint` puede ser un objeto único o un array -- recorrido
+  // recursivo acotado (depth) para no bajar infinito en JSON malformado.
+  if (obj.contactPoint) {
+    const points = Array.isArray(obj.contactPoint) ? obj.contactPoint : [obj.contactPoint];
+    for (const p of points) collectJsonLdNode(p, pageUrl, emails, phones, onLinkedin, depth + 1);
+  }
+  if (obj["@graph"] && Array.isArray(obj["@graph"])) {
+    for (const g of obj["@graph"]) collectJsonLdNode(g, pageUrl, emails, phones, onLinkedin, depth + 1);
+  }
+}
 
 /**
  * Extrae emails/teléfonos/tarjetas de persona de UNA página ya
@@ -83,6 +191,10 @@ const MAX_VISIBLE_TEXT_CHARS = 5000;
 export function extractFromPage(html: string, pageUrl: string): PageExtraction {
   const $ = cheerio.load(html);
   $("script, style, noscript").remove();
+  // JSON-LD ya se removió arriba junto con el resto de <script> -- se lee
+  // ANTES de esa remoción, ver más abajo (se recarga un DOM separado sin
+  // eliminar scripts, solo para JSON-LD).
+  const $withScripts = cheerio.load(html);
 
   const genericEmailSet = new Map<string, WebsiteGenericEmail>();
   const genericPhoneSet = new Map<string, WebsiteGenericPhone>();
@@ -127,8 +239,9 @@ export function extractFromPage(html: string, pageUrl: string): PageExtraction {
     }
   });
 
-  // 2) Emails en texto plano (regex sobre el body renderizado) — solo si
-  // no vinieron ya de un mailto: (evita duplicar la misma dirección).
+  // 2) Emails en texto plano (regex sobre el body renderizado, cubre
+  // header/footer al ser el texto completo del <body>) — solo si no
+  // vinieron ya de un mailto: (evita duplicar la misma dirección).
   const bodyText = $("body").text();
   const plainMatches = bodyText.match(EMAIL_RE) ?? [];
   for (const raw of plainMatches) {
@@ -146,17 +259,70 @@ export function extractFromPage(html: string, pageUrl: string): PageExtraction {
     if (!genericPhoneSet.has(digits)) genericPhoneSet.set(digits, { phone: raw.trim(), sourceUrl: pageUrl });
   }
 
-  // 4) Formulario de contacto — presencia binaria, nunca se interactúa.
-  const hasContactForm = $("form").length > 0;
+  // 4) JSON-LD / schema.org -- fuente adicional de emails/teléfonos/LinkedIn,
+  // sobre el DOM original (con <script> todavía presentes).
+  const jsonLd = extractJsonLd($withScripts, pageUrl);
+  let structuredDataEmailsFound = 0;
+  for (const e of jsonLd.emails) {
+    if (!genericEmailSet.has(e.email)) {
+      genericEmailSet.set(e.email, e);
+      structuredDataEmailsFound++;
+    }
+  }
+  for (const p of jsonLd.phones) {
+    const digits = p.phone.replace(/\D/g, "");
+    if (digits.length >= 10 && !genericPhoneSet.has(digits)) genericPhoneSet.set(digits, p);
+  }
+
+  // 5) Formularios de contacto -- TODOS, con método/action reales, nunca
+  // solo un booleano. Se registran aunque la página no tenga ningún email.
+  const contactForms: WebsiteContactFormInfo[] = [];
+  const seenForms = new Set<string>();
+  $("form").each((_, el) => {
+    const method = ($(el).attr("method") ?? "GET").toUpperCase();
+    const rawAction = $(el).attr("action");
+    let action: string | null = null;
+    if (rawAction) {
+      try {
+        action = new URL(rawAction, pageUrl).toString();
+      } catch {
+        action = null;
+      }
+    }
+    const key = `${method}::${action ?? pageUrl}`;
+    if (seenForms.has(key)) return;
+    seenForms.add(key);
+    contactForms.push({ url: pageUrl, method, action });
+  });
+
+  // 6) LinkedIn corporativo -- link real en la página, o el que ya vino
+  // de JSON-LD arriba. Nunca una búsqueda fuera del dominio del sitio.
+  let linkedinUrl: string | null = jsonLd.linkedinUrl;
+  if (!linkedinUrl) {
+    const linkedinHref = $('a[href*="linkedin.com/company/"], a[href*="linkedin.com/school/"]').first().attr("href");
+    if (linkedinHref) {
+      try {
+        linkedinUrl = new URL(linkedinHref, pageUrl).toString();
+      } catch {
+        linkedinUrl = null;
+      }
+    }
+  }
 
   return {
     genericEmails: Array.from(genericEmailSet.values()),
     namedPeople,
     genericPhones: Array.from(genericPhoneSet.values()),
-    hasContactForm,
+    hasContactForm: contactForms.length > 0,
     visibleText: bodyText.replace(/\s+/g, " ").trim().slice(0, MAX_VISIBLE_TEXT_CHARS),
+    contactForms,
+    careersEvidencePhrase: findCareersEvidencePhrase(bodyText),
+    linkedinUrl,
+    structuredDataEmailsFound,
   };
 }
+
+const MAX_VISIBLE_TEXT_CHARS = 5000;
 
 const TARGET_PATH_PATTERNS = [
   "contact",
@@ -207,4 +373,67 @@ export function isCareersPath(url: string): boolean {
 export function isContactPath(url: string): boolean {
   const path = new URL(url).pathname.toLowerCase();
   return path.includes("contact");
+}
+
+// F22 Fase 2: rutas comunes reales pedidas explícitamente por el PO --
+// vocabulario cerrado, se prueban SOLO cuando no hay sitemap.xml
+// utilizable (ver crawler.ts). Nunca se agrega una ruta nueva acá sin
+// pedido explícito -- mismo criterio de "vocabulario cerrado, nunca
+// inventado" que el resto del código de discovery.
+export const COMMON_PATH_CANDIDATES = [
+  "/contact",
+  "/contact-us",
+  "/contacto",
+  "/about",
+  "/about-us",
+  "/team",
+  "/staff",
+  "/careers",
+  "/jobs",
+  "/employment",
+  "/company",
+  "/locations",
+];
+
+// F22 Fase 3: heurística determinista para decidir si una página necesita
+// renderizado headless -- NUNCA se lanza un browser "por si acaso". Todas
+// estas señales son sobre el HTML crudo ya descargado (nunca se decide
+// antes de intentar el fetch plano primero, que sigue siendo gratis).
+const SPA_ROOT_SELECTORS = ["#root", "#app", "#__next", "#___gatsby", "[data-reactroot]"];
+const MIN_MEANINGFUL_TEXT_CHARS = 200;
+
+export interface HeadlessNeedAssessment {
+  needed: boolean;
+  reason: string | null;
+}
+
+export function assessHeadlessRenderNeed(html: string): HeadlessNeedAssessment {
+  const trimmed = html.trim();
+  if (trimmed.length === 0) {
+    return { needed: true, reason: "HTML vacío" };
+  }
+  const $ = cheerio.load(html);
+  $("script, style, noscript").remove();
+  const visibleText = $("body").text().replace(/\s+/g, " ").trim();
+
+  if (visibleText.length < MIN_MEANINGFUL_TEXT_CHARS) {
+    // Root de SPA conocido (React/Next/Gatsby/Vue-generic) con casi nada
+    // de texto real -- el contenido real se arma en el cliente, el
+    // fetch plano nunca lo va a ver.
+    const hasSpaRoot = SPA_ROOT_SELECTORS.some((sel) => $(sel).length > 0);
+    if (hasSpaRoot) {
+      return { needed: true, reason: `root de SPA detectado (${SPA_ROOT_SELECTORS.find((sel) => $(sel).length > 0)}) con solo ${visibleText.length} caracteres de texto visible` };
+    }
+    return { needed: true, reason: `contenido principal casi vacío (${visibleText.length} caracteres de texto visible, mínimo esperado ${MIN_MEANINGFUL_TEXT_CHARS})` };
+  }
+
+  // <noscript> con contenido real y sustancial es una señal explícita del
+  // propio sitio de "sin JS no hay nada" -- caso real de SPAs que sí
+  // dejan algo de texto base pero avisan que el resto depende de JS.
+  const noscriptWithContent = cheerio.load(html)("noscript").text().trim();
+  if (noscriptWithContent.length > 60 && /enable javascript|requires javascript|turn on javascript/i.test(noscriptWithContent)) {
+    return { needed: true, reason: "el sitio declara explícitamente en <noscript> que depende de JavaScript" };
+  }
+
+  return { needed: false, reason: null };
 }

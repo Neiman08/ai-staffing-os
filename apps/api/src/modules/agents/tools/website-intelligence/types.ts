@@ -31,6 +31,33 @@ export interface WebsitePageText {
   text: string;
 }
 
+// F22 Fase 2/5 (Contact Acquisition Engine): cómo se descubrió CADA página
+// visitada -- nunca un solo booleano global, para poder medir qué
+// estrategia de descubrimiento realmente aporta (Fase 5, observabilidad).
+export type PageDiscoveryMethod = "home" | "sitemap" | "home_link" | "common_path_guess";
+
+// F22 Fase 2: formulario de contacto real -- se registra SIEMPRE que
+// exista, aunque no haya ningún email en la misma página (regla explícita
+// del PO: "Registrar... aunque no exista email"). `action` es la URL
+// absoluta resuelta del atributo `action` del <form> -- null cuando el
+// form no declara uno (submit a la misma página) o el valor no es una URL
+// válida, nunca inventado.
+export interface WebsiteContactFormInfo {
+  url: string;
+  method: string;
+  action: string | null;
+}
+
+// F22 Fase 2: evidencia real de una página de careers -- no solo el path
+// (contact-channel.ts ya usaba eso), también contenido literal
+// ("we are hiring", "open positions"...) para casos donde la URL no seria
+// obvia pero el contenido sí lo es.
+export interface WebsiteCareersEvidence {
+  url: string;
+  evidence: string;
+  hasContactForm: boolean;
+}
+
 export interface WebsiteIntelligenceResult {
   namedPeople: WebsiteNamedPerson[];
   genericEmails: WebsiteGenericEmail[];
@@ -39,7 +66,6 @@ export interface WebsiteIntelligenceResult {
   contactFormUrl: string | null;
   hasCareersPage: boolean;
   careersPageUrl: string | null;
-  pagesVisited: string[];
   // F7.5: texto visible por página visitada -- aditivo, cero impacto en
   // consumidores existentes (email-providers/website-public-email.ts no
   // lo lee). Fuente para hiring-signals.ts, nunca para un re-crawl.
@@ -47,6 +73,31 @@ export interface WebsiteIntelligenceResult {
   patternsFailed: string[];
   cancelled: boolean;
   blockedByRobots: boolean;
+
+  // ---------- F22 Fase 2: descubrimiento de páginas ----------
+  sitemapFound: boolean;
+  sitemapUrl: string | null;
+  pagesVisited: string[];
+  // Método real por el que se descubrió CADA url de pagesVisited (mismo
+  // orden/claves) -- "home" siempre para la primera.
+  pageDiscoveryMethod: Record<string, PageDiscoveryMethod>;
+
+  // ---------- F22 Fase 2: canales alternativos, NUNCA se descarta ninguno ----------
+  // Todos los formularios/evidencia de careers/LinkedIn encontrados, no
+  // solo el "mejor" -- "nunca eliminar canales inferiores" (Fase 4).
+  contactForms: WebsiteContactFormInfo[];
+  careersEvidence: WebsiteCareersEvidence[];
+  // LinkedIn corporativo -- SOLO si viene de un link real en el propio
+  // sitio oficial (o de su JSON-LD `sameAs`) -- nunca de una búsqueda en
+  // Google (la regla lo prohíbe explícitamente, y estructuralmente este
+  // módulo nunca hace una request fuera del dominio de la Company).
+  linkedinUrl: string | null;
+  linkedinSourceUrl: string | null;
+  structuredDataEmailsFound: number;
+
+  // ---------- F22 Fase 3: renderizado headless ----------
+  headlessPagesRendered: string[];
+  headlessRenderDurationMs: number;
 }
 
 export function emptyWebsiteIntelligenceResult(): WebsiteIntelligenceResult {
@@ -63,5 +114,15 @@ export function emptyWebsiteIntelligenceResult(): WebsiteIntelligenceResult {
     patternsFailed: [],
     cancelled: false,
     blockedByRobots: false,
+    sitemapFound: false,
+    sitemapUrl: null,
+    pageDiscoveryMethod: {},
+    contactForms: [],
+    careersEvidence: [],
+    linkedinUrl: null,
+    linkedinSourceUrl: null,
+    structuredDataEmailsFound: 0,
+    headlessPagesRendered: [],
+    headlessRenderDurationMs: 0,
   };
 }
