@@ -65,6 +65,12 @@ export interface ContactChannelInput {
   companyPhone: string | null;
   careersPageUrl: string | null;
   contactFormUrl: string | null;
+  // F22 (Contact Acquisition Engine, Fase 4): LinkedIn CORPORATIVO
+  // encontrado por el crawler en el propio sitio oficial (link real o
+  // JSON-LD `sameAs`) -- distinto de un LinkedIn de un Contact/persona
+  // real. Cualquiera de los dos alcanza para el tier LINKEDIN, nunca se
+  // inventa uno a partir del otro.
+  companyLinkedinUrl: string | null;
 }
 
 export function resolveBestContactChannel(input: ContactChannelInput): ContactChannelResolution {
@@ -117,11 +123,13 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
   }
 
   const linkedinContact = input.contacts.find((c) => c.linkedinUrl);
-  if (linkedinContact) {
+  if (linkedinContact || input.companyLinkedinUrl) {
     return {
       channel: "LINKEDIN",
-      value: linkedinContact.linkedinUrl,
-      reason: "Sin email, formulario ni careers page -- LinkedIn real de un contacto encontrado.",
+      value: linkedinContact?.linkedinUrl ?? input.companyLinkedinUrl,
+      reason: linkedinContact
+        ? "Sin email, formulario ni careers page -- LinkedIn real de un contacto encontrado."
+        : "Sin email, formulario ni careers page -- LinkedIn corporativo real encontrado en el sitio oficial.",
       isEmailCapable: false,
     };
   }

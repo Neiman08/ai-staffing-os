@@ -10,6 +10,7 @@ function baseInput(overrides: Partial<ContactChannelInput> = {}): ContactChannel
     companyPhone: null,
     careersPageUrl: null,
     contactFormUrl: null,
+    companyLinkedinUrl: null,
     ...overrides,
   };
 }
@@ -72,6 +73,13 @@ test("tier 6: sin email/formulario/careers, LinkedIn real de un contacto gana", 
     baseInput({ contacts: [{ email: null, emailVerificationStatus: null, linkedinUrl: "https://linkedin.com/company/acme" }] }),
   );
   assert.equal(r.channel, "LINKEDIN");
+  assert.equal(r.isEmailCapable, false);
+});
+
+test("tier 6 (F22): LinkedIn CORPORATIVO del sitio oficial (sin ningún Contact) también gana el tier LINKEDIN", () => {
+  const r = resolveBestContactChannel(baseInput({ companyLinkedinUrl: "https://www.linkedin.com/company/acme-corp" }));
+  assert.equal(r.channel, "LINKEDIN");
+  assert.equal(r.value, "https://www.linkedin.com/company/acme-corp");
   assert.equal(r.isEmailCapable, false);
 });
 

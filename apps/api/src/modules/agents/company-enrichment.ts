@@ -4,7 +4,7 @@ import { AppError } from "../../core/errors";
 import { logAuditEvent } from "../../core/audit-log";
 import { validateEmailTrust, type EmailTrustResult } from "../ceo-intelligence/email-trust";
 import { runWebsiteIntelligence } from "./tools/website-intelligence/crawler";
-import type { WebsiteIntelligenceResult, WebsiteNamedPerson } from "./tools/website-intelligence/types";
+import type { WebsiteContactFormInfo, WebsiteIntelligenceResult, WebsiteNamedPerson } from "./tools/website-intelligence/types";
 
 /**
  * F7.4 Parte B: wiring impuro entre Website Intelligence (existente, sin
@@ -56,6 +56,14 @@ export interface WebsiteCrawlSignals {
   // cuando no hay ningún email real disponible.
   hasContactForm: boolean;
   contactFormUrl: string | null;
+  // F22 (Contact Acquisition Engine): señales nuevas del crawler
+  // mejorado -- todas aditivas, cero impacto en el comportamiento de
+  // consumidores que no las lean.
+  sitemapFound: boolean;
+  contactForms: WebsiteContactFormInfo[];
+  linkedinUrl: string | null;
+  headlessPagesRendered: string[];
+  headlessRenderDurationMs: number;
   pageTexts: Array<{ url: string; text: string }>;
   // F15: personas reales con nombre+cargo detectadas en el MISMO crawl
   // (Team/Leadership/About/Contact/Careers, ver website-intelligence/
@@ -104,6 +112,11 @@ function emptyReport(patternsFailed: string[] = [], websiteSignals?: Partial<Web
       careersPageUrl: null,
       hasContactForm: false,
       contactFormUrl: null,
+      sitemapFound: false,
+      contactForms: [],
+      linkedinUrl: null,
+      headlessPagesRendered: [],
+      headlessRenderDurationMs: 0,
       pageTexts: [],
       namedPeople: [],
       ...websiteSignals,
@@ -164,6 +177,11 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
     careersPageUrl: websiteResult.careersPageUrl,
     hasContactForm: websiteResult.hasContactForm,
     contactFormUrl: websiteResult.contactFormUrl,
+    sitemapFound: websiteResult.sitemapFound,
+    contactForms: websiteResult.contactForms,
+    linkedinUrl: websiteResult.linkedinUrl,
+    headlessPagesRendered: websiteResult.headlessPagesRendered,
+    headlessRenderDurationMs: websiteResult.headlessRenderDurationMs,
     pageTexts: websiteResult.pageTexts,
     namedPeople: websiteResult.namedPeople,
   };

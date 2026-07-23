@@ -18,6 +18,7 @@ import {
 } from "../ceo-intelligence/discovery-identity";
 import { validateBusinessCandidate, BUSINESS_VALIDATION_VERSION, type BusinessValidationConfidenceLevel } from "../ceo-intelligence/business-validation";
 import { deriveCommercialStatus } from "../ceo-intelligence/conversion-policy";
+import { resolveBestContactChannel, type ContactChannelType } from "../ceo-intelligence/contact-channel";
 import { computeHiringConfidence, type HiringConfidenceTier } from "../ceo-intelligence/hiring-confidence";
 import { detectClientOwnerMatch } from "../ceo-intelligence/critical-infrastructure-clients";
 import { createQueuedTask } from "./task-executor";
@@ -1035,6 +1036,9 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             careersPageUrl: enrichment.websiteSignals.careersPageUrl,
             hasContactForm: enrichment.websiteSignals.hasContactForm,
             contactFormUrl: enrichment.websiteSignals.contactFormUrl,
+            // F22: LinkedIn corporativo real encontrado en el sitio --
+            // outreach-tools.impl.ts lo lee acá para resolveBestContactChannel.
+            linkedinUrl: enrichment.websiteSignals.linkedinUrl,
           },
         };
         await scopedDb.company.update({
@@ -1171,6 +1175,57 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             stopReason = "cancelled";
           }
         }
+
+        // F22 Fase 4/5 (Contact Acquisition Engine): resuelve el MEJOR
+        // canal real disponible para esta Company -- se computa ACÁ,
+        // después de que tanto company-enrichment (emails
+        // organizacionales/formulario/careers/LinkedIn del sitio) como
+        // contact-enrichment (personas reales) ya corrieron para esta
+        // Company, así refleja TODA la evidencia reunida hasta este
+        // punto. Se consulta el estado YA PERSISTIDO (Contact/
+        // CompanyContactPoint), nunca solo lo creado en esta corrida --
+        // "nunca eliminar canales inferiores" (Fase 4): un canal
+        // encontrado en una corrida anterior sigue contando acá.
+        const [contactsForChannel, contactPointsForChannel] = await Promise.all([
+          scopedDb.contact.findMany({ where: { companyId: company.id }, select: { email: true, emailVerificationStatus: true, linkedinUrl: true } }),
+          scopedDb.companyContactPoint.findMany({ where: { companyId: company.id }, select: { email: true, verificationStatus: true } }),
+        ]);
+        const channelResolution = resolveBestContactChannel({
+          contacts: contactsForChannel,
+          contactPoints: contactPointsForChannel,
+          companyEmail: company.email,
+          companyPhone: company.phone,
+          careersPageUrl: enrichment.websiteSignals.careersPageUrl,
+          contactFormUrl: enrichment.websiteSignals.contactFormUrl,
+          companyLinkedinUrl: enrichment.websiteSignals.linkedinUrl,
+        });
+
+        // F22 Fase 5 (observabilidad): exactamente los campos pedidos --
+        // "por cada Company registrar: website encontrado, sitemap
+        // encontrado, páginas visitadas, emails encontrados, emails
+        // válidos, formularios encontrados, careers encontrada, LinkedIn
+        // encontrado, teléfono encontrado, canal final elegido, motivo
+        // cuando solo quedó teléfono".
+        const contactAcquisitionMetrics = {
+          websiteFound: enrichment.websiteSignals.hasWebsite,
+          sitemapFound: enrichment.websiteSignals.sitemapFound,
+          pagesVisited: enrichment.websitePagesVisited,
+          emailsFound: enrichment.emailsExtracted,
+          emailsValid: enrichment.emailsVerified + enrichment.emailsRisky,
+          contactFormsFound: enrichment.websiteSignals.contactForms.length,
+          careersPageFound: enrichment.websiteSignals.hasCareersPage,
+          linkedinFound: channelResolution.channel === "LINKEDIN" || contactsForChannel.some((c) => c.linkedinUrl != null),
+          phoneFound: !!company.phone,
+          finalChannel: channelResolution.channel as ContactChannelType,
+          reasonWhenPhoneOnly: channelResolution.channel === "PHONE" ? channelResolution.reason : null,
+          headlessPagesRendered: enrichment.websiteSignals.headlessPagesRendered.length,
+          headlessRenderDurationMs: enrichment.websiteSignals.headlessRenderDurationMs,
+        };
+        currentDiscoveryMetadata = { ...currentDiscoveryMetadata, contactAcquisition: contactAcquisitionMetrics };
+        await scopedDb.company.update({
+          where: { id: company.id },
+          data: { discoveryMetadata: currentDiscoveryMetadata as never },
+        });
 
         // F7.10: Opportunity Recommendation -- combina TODA la evidencia
         // ya reunida arriba en una recomendación auditable. Corre

@@ -164,13 +164,13 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         const stepLabel = STEP_LABELS[input.step] ?? "seguimiento";
         const company = cc.company;
         const metadata = (company.discoveryMetadata as {
-          contactChannel?: { careersPageUrl?: string | null; contactFormUrl?: string | null };
+          contactChannel?: { careersPageUrl?: string | null; contactFormUrl?: string | null; linkedinUrl?: string | null };
           hiringSignal?: { hiringStatus?: string | null };
         } | null) ?? null;
 
-        // F21 Fase 2: resuelve el mejor canal disponible ANTES de gastar
-        // ningún request al LLM -- nunca se redacta un "borrador de email"
-        // para una empresa sin ningún email real.
+        // F21/F22 Fase 2: resuelve el mejor canal disponible ANTES de
+        // gastar ningún request al LLM -- nunca se redacta un "borrador
+        // de email" para una empresa sin ningún email real.
         const channelResolution = resolveBestContactChannel({
           contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl })),
           contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
@@ -178,6 +178,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
           companyPhone: company.phone,
           careersPageUrl: metadata?.contactChannel?.careersPageUrl ?? null,
           contactFormUrl: metadata?.contactChannel?.contactFormUrl ?? null,
+          companyLinkedinUrl: metadata?.contactChannel?.linkedinUrl ?? null,
         });
 
         if (!channelResolution.isEmailCapable) {
