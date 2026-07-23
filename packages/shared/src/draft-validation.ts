@@ -5,11 +5,22 @@
  * dos lados, nunca duplicada con riesgo de drift.
  */
 
+// F24 (auditoría de producción, hallazgo real): borradores generados
+// antes del gate de contenido tenían firmas sin completar en español
+// ("[Tu Nombre]", "[Tu Posición]", "[Nombre de la Agencia de Staffing]",
+// "[Tu Información de Contacto]") que este detector, solo en inglés
+// hasta ahora, nunca bloqueaba. `[a-zà-ÿ]` cubre minúsculas acentuadas
+// del español (á é í ó ú ñ ü); con la flag `i` también cubre sus
+// equivalentes en mayúscula.
 const PLACEHOLDER_PATTERNS: RegExp[] = [
   // [Your Name], [Your Position], [Your Contact Information], [Your Title]...
   /\[\s*your\s+[a-z][a-z ]{1,40}?\]/gi,
   // [Insert ...], [Company Name], [Recipient Name], [Sender Name], [Full Name]
   /\[\s*(insert|company name|recipient name|client name|sender name|full name)[a-z ]{0,40}?\]/gi,
+  // [Tu Nombre], [Tu Posición], [Tu Cargo], [Tu Teléfono], [Tu Información de Contacto], [Tu Empresa/Agencia]...
+  /\[\s*tu\s+[a-zà-ÿ][a-zà-ÿ ]{1,40}?\]/gi,
+  // [Nombre de tu Agencia (de Staffing)], [Nombre de la Empresa], [Inserta/Insertar ...]
+  /\[\s*(inserta|insertar|nombre de (tu|la|del) (agencia|empresa|cliente|destinatario|remitente))[a-zà-ÿ ]{0,40}?\]/gi,
 ];
 
 /** Devuelve los placeholders literales encontrados (deduplicados) -- [] si no hay ninguno. */
