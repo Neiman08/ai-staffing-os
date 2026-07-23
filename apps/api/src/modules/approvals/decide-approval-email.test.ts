@@ -306,13 +306,46 @@ test("sin ningún canal real resoluble -- sendApproval falla honestamente (FAILE
       },
     });
 
-    await decideApproval(approval.id, { decision: "APPROVED" });
+    // F24 Fase 8: decideApproval ahora bloquea ESTE mismo caso más temprano
+    // (Quality Gate, check contact_valid) -- se simula acá un registro
+    // legacy que de alguna forma ya llegó a READY_TO_SEND (ej. datos de
+    // antes de F24), para seguir probando la defensa PROPIA de
+    // sendApproval, independiente de la de decideApproval.
+    await prisma.approvalRequest.update({ where: { id: approval.id }, data: { status: "READY_TO_SEND" } });
     await assert.rejects(() => sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE }), (err: unknown) => err instanceof AppError && err.status === 400);
 
     const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
     assert.equal(stored.status, "FAILED", "nunca se queda trabado en SENDING");
   });
   assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 0);
+});
+
+// F24 Fase 8: el Quality Gate de decideApproval bloquea el MISMO caso de
+// arriba mucho antes -- nunca llega siquiera a READY_TO_SEND.
+test("Quality Gate: decideApproval(APPROVED) rechaza un borrador sin destinatario resoluble -- nunca llega a READY_TO_SEND", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("quality-gate-no-recipient");
+  const company = await prisma.company.create({ data: { tenantId, name: "Sin Email Co 2", industryId, status: "LEAD" } });
+  const lead = await prisma.lead.create({ data: { tenantId, companyId: company.id, industryId, status: "NEW" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador sin destinatario resoluble",
+        proposedAction: { channel: "EMAIL", leadId: lead.id, contactId: null, subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    await assert.rejects(
+      () => decideApproval(approval.id, { decision: "APPROVED" }),
+      (err: unknown) => err instanceof AppError && err.status === 400 && /destinatario/i.test(err.message),
+    );
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
+    assert.equal(stored.status, "PENDING", "nunca avanza a READY_TO_SEND sin un destinatario real");
+  });
 });
 
 test("un fallo real del proveedor deja el ApprovalRequest en FAILED (reintentable), nunca en SENDING para siempre", async () => {

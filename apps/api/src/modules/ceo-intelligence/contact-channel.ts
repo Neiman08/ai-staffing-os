@@ -107,7 +107,9 @@ function domainPart(email: string): string {
   return (email.split("@")[1] ?? "").toLowerCase();
 }
 
-function isPhoneContaminated(email: string): boolean {
+// Exportado (F24 Fase 8) -- reutilizado por el Quality Gate de Approvals
+// (approval-quality-gate.ts) para la misma detección, nunca duplicada.
+export function isPhoneContaminated(email: string): boolean {
   return PHONE_CONTAMINATION_RE.test(localPart(email));
 }
 

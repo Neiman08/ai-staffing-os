@@ -13,6 +13,7 @@ import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
 import { sendEmail } from "../email/email-service";
 import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
+import { evaluateApprovalQualityGate } from "../ceo-intelligence/approval-quality-gate";
 
 // F24: un ApprovalRequest "activo" todavía puede terminar en un envío
 // real -- SENT/FAILED/REJECTED/EXPIRED ya cerraron su ciclo de vida
@@ -36,6 +37,23 @@ export async function hasActiveApprovalForCompany(companyId: string): Promise<bo
   if (!ctx) throw AppError.unauthorized();
   const existing = await scopedDb.approvalRequest.findFirst({
     where: { companyId, status: { in: [...ACTIVE_APPROVAL_STATUSES] } },
+    select: { id: true },
+  });
+  return !!existing;
+}
+
+/**
+ * F24 Fase 8: variante para el Quality Gate -- un ApprovalRequest PENDING
+ * es "activo" por definición (así lo cuenta hasActiveApprovalForCompany),
+ * así que decidir SU PROPIA aprobación nunca puede contarse a sí mismo
+ * como el duplicado. `excludeApprovalId` siempre es el id del registro
+ * que se está evaluando.
+ */
+async function hasOtherActiveApprovalForCompany(companyId: string, excludeApprovalId: string): Promise<boolean> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+  const existing = await scopedDb.approvalRequest.findFirst({
+    where: { companyId, id: { not: excludeApprovalId }, status: { in: [...ACTIVE_APPROVAL_STATUSES] } },
     select: { id: true },
   });
   return !!existing;
@@ -120,15 +138,31 @@ async function resolveDraftEmail(proposedAction: unknown): Promise<ResolvedDraft
   const body = typeof pa.body === "string" ? pa.body : null;
   if (!subject || !body) return null;
 
-  // Shape F14/F15 (discovery-conversion.ts): ya trae `to` resuelto.
+  // Shape F14/F15 (discovery-conversion.ts): ya trae `to` resuelto. F24
+  // Fase 8: un borrador de shape leadId/campaignCompanyId editado vía
+  // editApprovalDraft también termina acá (esa función escribe `to`
+  // directo en el JSON) -- `pa.companyId` nunca se seteó originalmente
+  // en esos 2 shapes, así que se resuelve el mismo companyId por la
+  // MISMA vía que ya usan los otros 2 shapes de abajo, nunca se deja en
+  // null solo porque este branch ganó primero. Nunca se re-resuelve `to`
+  // (ya es literal, la razón de ser de este branch), solo companyId.
   if (typeof pa.to === "string" && pa.to) {
+    let resolvedCompanyId = typeof pa.companyId === "string" ? pa.companyId : null;
+    if (!resolvedCompanyId && typeof pa.leadId === "string") {
+      const lead = await scopedDb.lead.findUnique({ where: { id: pa.leadId }, select: { companyId: true } });
+      resolvedCompanyId = lead?.companyId ?? null;
+    }
+    if (!resolvedCompanyId && typeof pa.campaignCompanyId === "string") {
+      const cc = await scopedDb.campaignCompany.findUnique({ where: { id: pa.campaignCompanyId }, select: { companyId: true } });
+      resolvedCompanyId = cc?.companyId ?? null;
+    }
     return {
       to: pa.to,
       subject,
       bodyText: body,
       leadId: typeof pa.leadId === "string" ? pa.leadId : null,
       opportunityId: typeof pa.opportunityId === "string" ? pa.opportunityId : null,
-      companyId: typeof pa.companyId === "string" ? pa.companyId : null,
+      companyId: resolvedCompanyId,
       contactId: typeof pa.contactId === "string" ? pa.contactId : null,
     };
   }
@@ -239,15 +273,31 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
     throw AppError.badRequest(`This approval request was already decided (${approval.status})`);
   }
 
-  // F23 Fase 4 (pedido explícito del PO): un borrador con firmas/placeholders
-  // sin completar ([Your Name], [Your Position]...) nunca puede aprobarse
-  // -- solo bloquea APPROVED, RECHAZAR sigue permitido siempre. Corregirlo
-  // requiere pasar por PATCH /approvals/:id/draft (editApprovalDraft).
+  // F24 Fase 8 (pedido explícito del PO, "Quality Gate antes de Approval"):
+  // reemplaza el chequeo de solo-placeholders de F23 por la validación
+  // completa (Company/clasificación/contacto/email/placeholders/
+  // duplicados/contenido/metadata) -- solo bloquea APPROVED, RECHAZAR
+  // sigue permitido siempre sin condiciones. Corregir el contenido
+  // requiere pasar por PATCH /approvals/:id/draft (editApprovalDraft);
+  // corregir un duplicado requiere rechazar uno de los dos.
   if (input.decision === "APPROVED") {
-    const placeholders = findKnownPlaceholders(extractBody(approval.proposedAction));
-    if (placeholders.length > 0) {
+    const pa = (approval.proposedAction && typeof approval.proposedAction === "object" ? approval.proposedAction : {}) as Record<string, unknown>;
+    const draft = await resolveDraftEmail(approval.proposedAction);
+    const companyId = draft?.companyId ?? null;
+    const company = companyId ? await scopedDb.company.findUnique({ where: { id: companyId }, select: { origin: true, commercialStatus: true } }) : null;
+
+    const gate = evaluateApprovalQualityGate({
+      companyOrigin: company?.origin ?? null,
+      companyCommercialStatus: company?.commercialStatus ?? null,
+      to: draft?.to ?? null,
+      subject: typeof pa.subject === "string" ? pa.subject : null,
+      body: typeof pa.body === "string" ? pa.body : null,
+      hasOtherActiveDuplicateApproval: companyId ? await hasOtherActiveApprovalForCompany(companyId, id) : false,
+    });
+
+    if (!gate.passed) {
       throw AppError.badRequest(
-        `Este borrador todavía tiene placeholders de firma sin completar (${placeholders.join(", ")}) -- corrígelo con "Editar borrador" antes de aprobar.`,
+        `Este borrador no pasó el control de calidad -- corrígelo antes de aprobar: ${gate.failures.map((f) => f.reason).join(" | ")}`,
       );
     }
   }
