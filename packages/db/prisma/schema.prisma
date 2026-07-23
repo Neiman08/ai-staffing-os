@@ -2345,8 +2345,27 @@ model DomainEvent {
   processedAt DateTime?
   createdAt   DateTime  @default(now())
 
+  // F25.2 Fase 2 (ADR-0002): outbox real -- estas columnas quedaban sin
+  // uso hasta hoy (auditoría F25 Fase A: DomainEvent era un stub muerto,
+  // nunca escrito ni leído). idempotencyKey único a nivel de tabla es la
+  // garantía real de "nunca se publica el mismo evento dos veces" (no
+  // una convención de aplicación). attempt/lastErrorAt/lastErrorCode
+  // soportan replay seguro: un evento no procesado se vuelve a reclamar
+  // en el próximo poll sin intervención manual.
+  correlationId  String?
+  causationId    String?
+  actorType      String?
+  actorId        String?
+  entityType     String?
+  entityId       String?
+  idempotencyKey String?   @unique
+  attempt        Int       @default(0)
+  lastErrorAt    DateTime?
+  lastErrorCode  String?
+
   @@index([processedAt])
   @@index([tenantId, type])
+  @@index([tenantId, correlationId])
 }
 
 // F10.8: extendido de forma ADITIVA -- `userId` conserva su nombre y
