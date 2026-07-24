@@ -176,3 +176,33 @@ test("reclaimExpiredLeases no toca tareas con lease vigente", async () => {
   const reloaded = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
   assert.equal(reloaded.status, "RUNNING");
 });
+
+test("concurrencia: M reclaimers concurrentes sobre N leases vencidos -- cada tarea se reclama exactamente una vez, sin doble-transición", async () => {
+  const { tenantId, agentInstanceId } = await setupTenant("reclaim-concurrency");
+  const N = 12;
+  const tasks = await Promise.all(
+    Array.from({ length: N }, async () => {
+      const task = await createTask(tenantId, agentInstanceId);
+      return runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, () =>
+        prisma.agentTask.update({
+          where: { id: task.id },
+          data: { status: "RUNNING", claimedAt: new Date(), claimedBy: "dead-worker", leaseExpiresAt: new Date(Date.now() - 1_000) },
+        }),
+      );
+    }),
+  );
+
+  const M = 6;
+  const results = await Promise.all(Array.from({ length: M }, () => reclaimExpiredLeases()));
+  const allReclaimedIds = results.flatMap((r) => r.reclaimedTaskIds);
+  const ourReclaimedIds = allReclaimedIds.filter((id) => tasks.some((t) => t.id === id));
+
+  assert.equal(ourReclaimedIds.length, new Set(ourReclaimedIds).size, "ninguna tarea reclamada por dos workers a la vez");
+  assert.equal(ourReclaimedIds.length, N, "las N tareas deben reclamarse exactamente una vez entre todos los reclaimers");
+
+  const reloaded = await prisma.agentTask.findMany({ where: { id: { in: tasks.map((t) => t.id) } } });
+  for (const t of reloaded) {
+    assert.equal(t.status, "RETRY_SCHEDULED", `AgentTask ${t.id} debe haber transicionado exactamente una vez, nunca reprocesada`);
+    assert.equal(t.attempt, 1, `AgentTask ${t.id} debe tener attempt=1 -- un attempt>1 significaría que se procesó dos veces`);
+  }
+});

@@ -2370,9 +2370,28 @@ model DomainEvent {
   lastErrorAt    DateTime?
   lastErrorCode  String?
 
+  // F25.2 (consolidación): lease real -- REVIERTE la decisión original
+  // de ADR-0002/ADR-0003 ("sin columnas de lease, un único dispatcher
+  // in-process alcanza"). Encontrado con un test de concurrencia real
+  // (no hipotético): dos transacciones separadas, cada una con
+  // `claimUnprocessedEvents` corriendo de punta a punta ANTES de que
+  // la otra empezara, reclamaban la MISMA fila -- porque `attempt++`
+  // solo no saca a la fila de `processedAt IS NULL`. Reproducido con
+  // psql puro (sin Prisma de por medio), consistentemente. Mismo
+  // patrón exacto que AgentTask (Fase 1/ADR-0004): claimedAt/claimedBy/
+  // leaseExpiresAt. Un lease vencido se vuelve a reclamar solo (la
+  // propia condición del claim ya lo cubre) -- no hace falta un sweep
+  // aparte como reclaimExpiredLeases, a diferencia de AgentTask, porque
+  // markEventProcessed/markEventFailed ya limpian el lease de inmediato
+  // en el camino feliz.
+  claimedAt      DateTime?
+  claimedBy      String?
+  leaseExpiresAt DateTime?
+
   @@index([processedAt])
   @@index([tenantId, type])
   @@index([tenantId, correlationId])
+  @@index([processedAt, leaseExpiresAt])
 }
 
 // F10.8: extendido de forma ADITIVA -- `userId` conserva su nombre y

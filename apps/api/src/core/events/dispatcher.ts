@@ -1,12 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { DomainEvent } from "@ai-staffing-os/db";
 import { claimUnprocessedEvents, markEventProcessed, markEventFailed } from "./outbox";
 import { logger } from "../logger";
 
 /**
  * F25.2 (consolidación): worker real de procesamiento de eventos --
- * reclama vía `claimUnprocessedEvents` (Fase 2), despacha a los
- * handlers registrados por `eventType`, marca processed/failed
- * (replay seguro ya garantizado por outbox.ts, ver su docstring).
+ * reclama vía `claimUnprocessedEvents` (con lease real, ver su
+ * docstring en outbox.ts -- múltiples EventDispatcher/instancias
+ * corriendo a la vez ya no pueden reclamar el mismo evento), despacha
+ * a los handlers registrados por `eventType`, marca processed/failed
+ * (replay seguro).
  *
  * Hoy no hay NINGÚN handler real registrado en producción -- ningún
  * agente consume `company.discovered.v1`/`outreach.draft_created.v1`
@@ -26,6 +29,10 @@ export interface EventDispatchMetrics {
 
 export class EventDispatcher {
   private readonly handlers = new Map<string, DomainEventHandler[]>();
+  // Un id estable por instancia -- suficiente como `claimedBy` para
+  // trazabilidad (qué proceso/instancia tiene el lease de un evento en
+  // AgentTask/DomainEvent.claimedBy), no una identidad de infraestructura real.
+  private readonly workerId = `event-dispatcher-${randomUUID()}`;
 
   registerHandler(eventType: string, handler: DomainEventHandler): void {
     const list = this.handlers.get(eventType) ?? [];
@@ -34,7 +41,7 @@ export class EventDispatcher {
   }
 
   async runOnce(limit = 25): Promise<EventDispatchMetrics> {
-    const claimed = await claimUnprocessedEvents(limit);
+    const claimed = await claimUnprocessedEvents(this.workerId, limit);
     const metrics: EventDispatchMetrics = { claimed: claimed.length, processed: 0, failed: 0 };
 
     for (const event of claimed) {

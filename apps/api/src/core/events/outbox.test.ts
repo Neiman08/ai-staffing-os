@@ -89,7 +89,7 @@ test("claimUnprocessedEvents reclama eventos no procesados por antigüedad e inc
   await new Promise((resolve) => setTimeout(resolve, 5));
   const second = await withTenant(tenantId, () => publishEvent(envelope(tenantId)));
 
-  const claimed = await claimUnprocessedEvents(100);
+  const claimed = await claimUnprocessedEvents("test-worker", 100);
   const claimedIds = claimed.map((e) => e.id);
 
   assert.ok(claimedIds.includes(first.event.id));
@@ -104,7 +104,7 @@ test("claimUnprocessedEvents no reclama eventos ya procesados", async () => {
   const { event } = await withTenant(tenantId, () => publishEvent(envelope(tenantId)));
   await markEventProcessed(event.id);
 
-  const claimed = await claimUnprocessedEvents(1000);
+  const claimed = await claimUnprocessedEvents("test-worker", 1000);
   assert.ok(!claimed.some((e) => e.id === event.id));
 });
 
@@ -112,15 +112,16 @@ test("markEventFailed deja el evento reclamable (replay seguro) y clasifica el e
   const tenantId = await setupTenant("failed-replay");
   const { event } = await withTenant(tenantId, () => publishEvent(envelope(tenantId)));
 
-  await claimUnprocessedEvents(1000); // primer intento -- se "pierde" (simula un consumer que crashea)
+  await claimUnprocessedEvents("test-worker", 1000); // primer intento -- se "pierde" (simula un consumer que crashea)
   await markEventFailed(event.id, new Error("503 Service Unavailable (proveedor sintético)"));
 
   const afterFailure = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
   assert.equal(afterFailure.processedAt, null, "sigue sin procesar -- el próximo poll lo reclama de nuevo");
   assert.equal(afterFailure.lastErrorCode, "RETRYABLE_PROVIDER");
   assert.ok(afterFailure.lastErrorAt);
+  assert.equal(afterFailure.claimedBy, null, "el lease se limpia de inmediato al fallar -- reclamable ya, sin esperar a que venza");
 
-  const reclaimed = await claimUnprocessedEvents(1000);
+  const reclaimed = await claimUnprocessedEvents("test-worker", 1000);
   assert.ok(reclaimed.some((e) => e.id === event.id), "replay real: el evento fallido vuelve a salir en el siguiente poll");
 
   await markEventProcessed(event.id);
@@ -134,20 +135,15 @@ test("claimUnprocessedEvents respeta el LIMIT exacto (regresión: UPDATE...WHERE
     await withTenant(tenantId, () => publishEvent(envelope(tenantId, { idempotencyKey: `outbox-limit-${tenantId}-${i}` })));
   }
 
-  const claimed = await claimUnprocessedEvents(4);
+  const claimed = await claimUnprocessedEvents("test-worker", 4);
   assert.equal(claimed.length, 4, "LIMIT 4 debe reclamar exactamente 4, nunca las 10 disponibles");
 });
 
 /**
- * Cubre la garantía REAL que la arquitectura actual promete (ADR-0003:
- * un único Orchestrator in-process, sin lease en DomainEvent -- ver el
- * comentario de claimUnprocessedEvents en outbox.ts). Un loop
- * secuencial claim -> marcar cada evento -> siguiente poll debe
+ * Un loop secuencial claim -> marcar cada evento -> siguiente poll debe
  * procesar cada evento disponible EXACTAMENTE una vez, sin perder
- * ninguno y sin reprocesar ninguno ya marcado. Esto NO prueba
- * seguridad bajo pollers concurrentes reales (esa garantía, con lease,
- * es explícitamente de Fase 3/AgentTask) -- probarlo igual sería
- * afirmar algo que el diseño de hoy no cumple.
+ * ninguno y sin reprocesar ninguno ya marcado -- el caso de uso real
+ * más común (un solo EventDispatcher, ver dispatcher.ts).
  */
 test("dispatcher secuencial: un loop claim->marcar procesa cada evento disponible exactamente una vez", async () => {
   const tenantId = await setupTenant("sequential-dispatch");
@@ -158,7 +154,7 @@ test("dispatcher secuencial: un loop claim->marcar procesa cada evento disponibl
 
   const processedIds: string[] = [];
   for (let round = 0; round < 20; round++) {
-    const claimed = await claimUnprocessedEvents(4);
+    const claimed = await claimUnprocessedEvents("test-worker", 4);
     const ours = claimed.filter((e) => e.tenantId === tenantId);
     const remaining = await prisma.domainEvent.count({ where: { tenantId, processedAt: null } });
     if (ours.length === 0 && remaining === 0) break;
@@ -191,4 +187,53 @@ test("publishEventSafe nunca lanza -- un fallo real de escritura se loguea, nunc
   // context missing" en cualquier otra circunstancia. publishEventSafe
   // debe absorberlo sin propagar nada.
   await assert.doesNotReject(() => publishEventSafe(env));
+});
+
+/**
+ * Cubre la garantía real que el lease agrega (ver el docstring de
+ * claimUnprocessedEvents en outbox.ts): M dispatchers/instancias
+ * DISTINTAS reclamando genuinamente en simultáneo, sin ningún claim
+ * marcado processed entre medio -- exactamente el escenario que
+ * reprodujo el bug real (dos transacciones separadas reclamaban la
+ * misma fila porque `attempt++` solo nunca la sacaba de la ventana de
+ * reclamo). Cada worker usa su propio workerId, igual que instancias
+ * reales de EventDispatcher correrían.
+ */
+test("concurrencia: M workers (ids distintos) reclamando eventos con claimUnprocessedEvents -- sin doble-claim, cada evento reclamado como máximo una vez", async () => {
+  const tenantId = await setupTenant("claim-concurrency");
+  const N = 20;
+  for (let i = 0; i < N; i++) {
+    await withTenant(tenantId, () => publishEvent(envelope(tenantId, { idempotencyKey: `outbox-claim-concurrency-${tenantId}-${i}` })));
+  }
+
+  const M = 5;
+  const results = await Promise.all(Array.from({ length: M }, (_, i) => claimUnprocessedEvents(`worker-${i}`, 5)));
+  const ourClaimedIds = results
+    .flat()
+    .filter((e) => e.tenantId === tenantId)
+    .map((e) => e.id);
+
+  assert.equal(ourClaimedIds.length, new Set(ourClaimedIds).size, "ningún evento de este tenant reclamado dos veces en la misma corrida concurrente");
+  assert.equal(ourClaimedIds.length, N, "M workers con limit=5 cada uno (25 de capacidad) deben repartirse exactamente los N=20 eventos disponibles");
+});
+
+test("concurrencia: M workers reclamando repetidamente (sin marcar nada entre medio) -- el lease evita el re-claim aunque cada transacción termine antes que la siguiente empiece", async () => {
+  const tenantId = await setupTenant("claim-concurrency-sequential-races");
+  const N = 20;
+  for (let i = 0; i < N; i++) {
+    await withTenant(tenantId, () => publishEvent(envelope(tenantId, { idempotencyKey: `outbox-claim-races-${tenantId}-${i}` })));
+  }
+
+  // Sin Promise.all -- cada llamada corre de punta a punta ANTES de que
+  // la siguiente empiece (esto es EXACTAMENTE lo que reprodujo el bug
+  // real: sin lease, `attempt++` no alcanzaba para que la segunda
+  // llamada viera la fila como "ya tomada").
+  const allClaimedIds: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const claimed = await claimUnprocessedEvents(`worker-${i}`, 5);
+    allClaimedIds.push(...claimed.filter((e) => e.tenantId === tenantId).map((e) => e.id));
+  }
+
+  assert.equal(allClaimedIds.length, new Set(allClaimedIds).size, "ninguna fila reclamada dos veces entre llamadas secuenciales sin marcar");
+  assert.equal(allClaimedIds.length, N);
 });

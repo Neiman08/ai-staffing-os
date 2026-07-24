@@ -85,63 +85,56 @@ export async function publishEventSafe(envelope: AgentEventEnvelope): Promise<vo
   }
 }
 
+export const DEFAULT_EVENT_LEASE_MS = 60_000;
+
 /**
- * Reclamo de hasta `limit` eventos sin procesar, ordenados por
- * antigüedad, usando `FOR UPDATE SKIP LOCKED` (mismo mecanismo que
- * ADR-0001 propone para AgentTask). Cruza tenants a propósito -- el
- * dispatcher es infraestructura, no una operación de negocio de un
- * tenant (mismo criterio que scheduler.ts:tickAllTenants usando el
- * cliente base).
+ * Reclamo de hasta `limit` eventos sin procesar, con lease real
+ * (`claimedAt`/`claimedBy`/`leaseExpiresAt`) -- mismo patrón que
+ * `claimTasksForTenant` (postgres-queue.ts/Fase 3). Cruza tenants a
+ * propósito -- el dispatcher es infraestructura, no una operación de
+ * negocio de un tenant.
  *
- * Límite de diseño explícito (a diferencia de AgentTask/Fase 3):
- * `DomainEvent` NO tiene columnas de lease (`claimedAt`/`claimedBy`) --
- * ADR-0002 las omitió deliberadamente, y ADR-0003 fija un único
- * Orchestrator in-process como consumidor. SKIP LOCKED acá solo evita
- * que dos transacciones VERDADERAMENTE simultáneas reclamen la misma
- * fila mientras ambas siguen abiertas; una vez que una transacción
- * confirma, la fila vuelve a quedar elegible para el próximo poll
- * aunque nadie la haya marcado processed/failed todavía -- esto es
- * SEGURO bajo la arquitectura real (un solo dispatcher, loop
- * secuencial: claim -> procesar cada evento -> marcar -> recién ahí el
- * siguiente poll), pero NO es una garantía de "cada evento reclamado
- * por como máximo un poller" bajo pollers concurrentes reales. Si en el
- * futuro se necesita más de un dispatcher a la vez, agregar lease acá
- * es la extensión natural (mismo patrón que AgentTask) -- fuera de
- * alcance hoy porque el ADR revisado no lo pide.
+ * REVIERTE una decisión previa (ADR-0002/ADR-0003: "sin lease,
+ * DomainEvent no lo necesita, un único dispatcher in-process
+ * alcanza"). Encontrado con un test de concurrencia real, reproducido
+ * también en psql puro sin Prisma de por medio: `attempt++` por sí
+ * solo NUNCA saca a una fila de `processedAt IS NULL` -- dos
+ * transacciones separadas, cada una ejecutando `claimUnprocessedEvents`
+ * de punta a punta ANTES de que la otra empezara (sin overlap real de
+ * ninguna transacción, SKIP LOCKED nunca llegó a intervenir),
+ * reclamaban la MISMA fila igual, porque para la segunda transacción
+ * la fila seguía pareciendo "nunca tocada". `FOR UPDATE SKIP LOCKED`
+ * solo protege mientras AMBAS transacciones siguen abiertas
+ * simultáneamente -- no alcanza por sí solo como mecanismo de
+ * "reclamo" cuando el claim y el marcado-como-procesado son pasos
+ * separados en el tiempo. El lease cierra exactamente ese hueco.
+ *
+ * Nota histórica (Fase 2): `UPDATE t SET ... WHERE id IN (SELECT id
+ * FROM t ... LIMIT n FOR UPDATE SKIP LOCKED)` tampoco respeta el LIMIT
+ * cuando la subquery referencia la misma tabla del UPDATE -- por eso
+ * el patrón acá sigue siendo un CTE materializado antes del UPDATE
+ * final (`WITH claimed AS (... FOR UPDATE SKIP LOCKED LIMIT n) UPDATE
+ * ... FROM claimed ...`).
+ *
+ * `ORDER BY attempt ASC, createdAt ASC` (no solo createdAt): sin esto,
+ * un evento que falla una y otra vez sin marcarse processed queda
+ * PERMANENTEMENTE primero en la cola y bloquea a todos los eventos más
+ * nuevos para siempre -- head-of-line blocking real, encontrado con el
+ * test de dispatcher secuencial de Fase 2.
  */
-export async function claimUnprocessedEvents(limit = 25): Promise<DomainEvent[]> {
-  // Nota importante (encontrada corriendo el test de concurrencia real,
-  // no una suposición): `UPDATE t SET ... WHERE id IN (SELECT id FROM t
-  // ... LIMIT n FOR UPDATE SKIP LOCKED)` NO respeta el LIMIT cuando la
-  // subquery referencia la MISMA tabla que el UPDATE -- el planner de
-  // Postgres puede aplanar la subquery y terminar actualizando TODAS las
-  // filas que matchean el WHERE interno, no solo las `n` bloqueadas
-  // (reproducido directo en psql: LIMIT 3 actualizó las 12 filas
-  // disponibles). El patrón correcto y documentado es un CTE: el
-  // `WITH claimed AS (... FOR UPDATE SKIP LOCKED LIMIT n)` se materializa
-  // como un resultado fijo ANTES del UPDATE, que solo hace JOIN contra
-  // esas filas ya elegidas -- ahí el LIMIT sí se respeta.
-  // ORDER BY attempt ASC, createdAt ASC (no solo createdAt): sin esto, un
-  // evento que falla una y otra vez sin marcarse processed queda
-  // PERMANENTEMENTE primero en la cola (siempre el más viejo) y bloquea
-  // a todos los eventos más nuevos para siempre -- head-of-line blocking
-  // real, encontrado con el test de dispatcher secuencial (9 eventos
-  // nunca se procesaban porque 4 eventos viejos de otro tenant, ya
-  // reclamados pero nunca marcados, se re-reclamaban en cada poll sin
-  // ceder el lugar). Al ordenar primero por attempt, un evento que ya
-  // falló cede prioridad a los que todavía no se intentaron -- se
-  // sigue reintentando (nunca se pierde), pero deja de monopolizar el
-  // frente de la cola.
+export async function claimUnprocessedEvents(workerId: string, limit = 25, leaseMs: number = DEFAULT_EVENT_LEASE_MS): Promise<DomainEvent[]> {
   return prisma.$queryRaw<DomainEvent[]>`
     WITH claimed AS (
       SELECT "id" FROM "DomainEvent"
       WHERE "processedAt" IS NULL
+        AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= now())
       ORDER BY "attempt" ASC, "createdAt" ASC
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
     )
     UPDATE "DomainEvent"
-    SET "attempt" = "attempt" + 1
+    SET "attempt" = "attempt" + 1, "claimedAt" = now(), "claimedBy" = ${workerId},
+        "leaseExpiresAt" = now() + (${leaseMs}::text || ' milliseconds')::interval
     FROM claimed
     WHERE "DomainEvent"."id" = claimed."id"
     RETURNING "DomainEvent".*;
@@ -149,16 +142,21 @@ export async function claimUnprocessedEvents(limit = 25): Promise<DomainEvent[]>
 }
 
 export async function markEventProcessed(eventId: string): Promise<void> {
-  await prisma.domainEvent.update({ where: { id: eventId }, data: { processedAt: new Date() } });
+  await prisma.domainEvent.update({
+    where: { id: eventId },
+    data: { processedAt: new Date(), claimedAt: null, claimedBy: null, leaseExpiresAt: null },
+  });
 }
 
 /**
  * Deja el evento sin procesar (processedAt sigue null) -- esa es toda la
  * garantía de "replay seguro": el próximo `claimUnprocessedEvents` lo
- * vuelve a tomar. `lastErrorCode` reusa `classifyError` de
- * packages/agents, la misma clasificación que AgentTask (Fase 1) --
- * ningún consumidor tiene que interpretar dos vocabularios de error
- * distintos.
+ * vuelve a tomar. Limpia el lease de inmediato (no espera a que
+ * expire) -- una falla real ya identificada debe quedar reclamable
+ * ahora, no recién cuando venza el lease del intento anterior.
+ * `lastErrorCode` reusa `classifyError` de packages/agents, la misma
+ * clasificación que AgentTask (Fase 1) -- ningún consumidor tiene que
+ * interpretar dos vocabularios de error distintos.
  */
 export async function markEventFailed(eventId: string, error: unknown): Promise<void> {
   const category = classifyError(error);
@@ -169,6 +167,6 @@ export async function markEventFailed(eventId: string, error: unknown): Promise<
   });
   await prisma.domainEvent.update({
     where: { id: eventId },
-    data: { lastErrorAt: new Date(), lastErrorCode: category },
+    data: { lastErrorAt: new Date(), lastErrorCode: category, claimedAt: null, claimedBy: null, leaseExpiresAt: null },
   });
 }
