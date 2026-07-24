@@ -31,6 +31,7 @@ import {
   History,
   PanelLeftClose,
   PanelLeftOpen,
+  Gavel,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -89,6 +90,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: "/discovery", label: "External Discovery", icon: Radar },
       { to: "/agents", label: "AI Agents", icon: Bot },
       { to: "/approvals", label: "Approvals", icon: CheckSquare },
+      { to: "/human-review", label: "Human Review", icon: Gavel },
       { to: "/ai-dashboard", label: "AI Dashboard", icon: Sparkles },
       { to: "/production-readiness", label: "Production Readiness", icon: ShieldAlert },
       { to: "/audit-log", label: "Audit Trail", icon: History },

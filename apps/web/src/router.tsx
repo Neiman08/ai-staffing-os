@@ -35,6 +35,7 @@ import InvoiceDetail from "./pages/InvoiceDetail";
 import Pricing from "./pages/Pricing";
 import AgentsCenter from "./pages/AgentsCenter";
 import Approvals from "./pages/Approvals";
+import HumanReview from "./pages/HumanReview";
 import AIDashboard from "./pages/AIDashboard";
 import Settings from "./pages/Settings";
 import NotificationsCenter from "./pages/NotificationsCenter";
@@ -133,6 +134,7 @@ export const router = createBrowserRouter([
       { path: "pricing", element: <Pricing /> },
       { path: "agents", element: <AgentsCenter /> },
       { path: "approvals", element: <Approvals /> },
+      { path: "human-review", element: <HumanReview /> },
       { path: "ai-dashboard", element: <AIDashboard /> },
       { path: "production-readiness", element: <ProductionReadiness /> },
       { path: "settings", element: <Settings /> },

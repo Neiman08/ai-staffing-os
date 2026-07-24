@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
-import { Activity, Bot, Coins, Gauge, Wrench, Zap } from "lucide-react";
+import { Activity, Bot, Coins, Gauge, ListTodo, Wrench, Zap } from "lucide-react";
 import type {
   AgentInstanceListItem,
   AiDashboardSummary,
   AuditLogItem,
   CompanyListItem,
+  OrchestratorHealth,
   Paginated,
   RevenueIntelligence,
 } from "@ai-staffing-os/shared";
@@ -77,6 +78,15 @@ export default function AIDashboard() {
   const { data: companies } = useQuery({
     queryKey: ["companies", "top-score"],
     queryFn: () => apiFetch<Paginated<CompanyListItem>>("/companies?limit=100"),
+  });
+
+  // F25.2 (consolidación): salud real de la cola/outbox -- mismo
+  // endpoint que consume el worker autónomo para decidir si hay
+  // trabajo pendiente (ver orchestrator-scheduler.ts).
+  const { data: orchestratorHealth } = useQuery({
+    queryKey: ["agents", "orchestrator", "health"],
+    queryFn: () => apiFetch<OrchestratorHealth>("/agents/orchestrator/health"),
+    refetchInterval: 5000,
   });
 
   if (isLoading || !data) {
@@ -325,6 +335,36 @@ export default function AIDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* F25.2 (consolidación): observabilidad real del Orchestrator/cola/outbox */}
+      {orchestratorHealth && (
+        <div className="mt-4">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <MetricCard label="Tareas en cola" value={String(orchestratorHealth.queueDepth)} hint="Reclamables ahora mismo" />
+            <MetricCard
+              label="Tarea más vieja en cola"
+              value={orchestratorHealth.oldestQueuedTaskAgeMs != null ? formatDuration(orchestratorHealth.oldestQueuedTaskAgeMs) : "—"}
+            />
+            <MetricCard label="Leases vencidos" value={String(orchestratorHealth.expiredLeases)} hint="Pendientes de recuperar" />
+            <MetricCard label="Eventos sin procesar" value={String(orchestratorHealth.unprocessedEvents)} hint="Outbox" />
+          </div>
+          <Card className="mt-4 card-hover">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ListTodo className="h-4 w-4" />
+                AgentTask por estado
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              {Object.entries(orchestratorHealth.tasksByStatus).map(([status, count]) => (
+                <Badge key={status} variant="neutral">
+                  {formatStatusLabel(status)}: {count}
+                </Badge>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="card-hover">
