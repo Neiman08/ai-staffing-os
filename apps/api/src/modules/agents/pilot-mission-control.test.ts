@@ -129,3 +129,30 @@ test("isPilotMissionActive: correlationId sin AgentTask raíz (no es una misión
   assert.equal(await withTenant(tenantId, () => isPilotMissionActive("correlation-sin-mision")), true);
   assert.equal(await withTenant(tenantId, () => isPilotMissionActive(null)), true);
 });
+
+test("Seguridad (Prioridad 9): un tenant nunca puede pausar/reanudar/cancelar la misión piloto de otro tenant", async () => {
+  const tenantA = await setupTenant("isolation-owner");
+  const tenantB = await setupTenant("isolation-attacker");
+  const mission = await withTenant(tenantA, () => createPilotMission(baseInput()));
+
+  await assert.rejects(withTenant(tenantB, () => pausePilotMission(mission.missionTaskId)), /Misión piloto no encontrada/);
+  await assert.rejects(withTenant(tenantB, () => resumePilotMission(mission.missionTaskId)), /Misión piloto no encontrada/);
+  await assert.rejects(withTenant(tenantB, () => cancelPilotMission(mission.missionTaskId)), /Misión piloto no encontrada/);
+
+  // La misión de A sigue intacta -- tenantB nunca la tocó de verdad.
+  const untouched = await withTenant(tenantA, () => listPilotMissions());
+  assert.equal(untouched[0]!.controlState, "ACTIVE");
+});
+
+test("Seguridad (Prioridad 9): listPilotMissions de un tenant nunca incluye misiones de otro tenant", async () => {
+  const tenantA = await setupTenant("list-isolation-a");
+  const tenantB = await setupTenant("list-isolation-b");
+  await withTenant(tenantA, () => createPilotMission(baseInput()));
+  await withTenant(tenantB, () => createPilotMission(baseInput()));
+
+  const missionsA = await withTenant(tenantA, () => listPilotMissions());
+  const missionsB = await withTenant(tenantB, () => listPilotMissions());
+  assert.equal(missionsA.length, 1);
+  assert.equal(missionsB.length, 1);
+  assert.notEqual(missionsA[0]!.missionTaskId, missionsB[0]!.missionTaskId);
+});
