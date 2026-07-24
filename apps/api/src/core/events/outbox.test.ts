@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { buildEventEnvelope } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../tenancy/context";
-import { publishEvent, claimUnprocessedEvents, markEventProcessed, markEventFailed } from "./outbox";
+import { publishEvent, publishEventSafe, claimUnprocessedEvents, markEventProcessed, markEventFailed } from "./outbox";
 
 /**
  * F25.2 Fase 2: pruebas de integración contra Postgres real (local) del
@@ -173,4 +173,22 @@ test("dispatcher secuencial: un loop claim->marcar procesa cada evento disponibl
 
   const stillUnprocessed = await prisma.domainEvent.count({ where: { tenantId, processedAt: null } });
   assert.equal(stillUnprocessed, 0);
+});
+
+test("publishEventSafe persiste normalmente cuando todo está bien (mismo resultado que publishEvent)", async () => {
+  const tenantId = await setupTenant("publish-safe-ok");
+  const env = envelope(tenantId);
+
+  await withTenant(tenantId, () => publishEventSafe(env));
+
+  const row = await prisma.domainEvent.findFirst({ where: { idempotencyKey: env.idempotencyKey } });
+  assert.ok(row, "publishEventSafe debe persistir igual que publishEvent en el camino feliz");
+});
+
+test("publishEventSafe nunca lanza -- un fallo real de escritura se loguea, nunca rompe al caller", async () => {
+  const env = envelope("tenant-inexistente-para-este-test");
+  // A propósito, SIN runWithTenancyContext -- scopedDb tira "Tenancy
+  // context missing" en cualquier otra circunstancia. publishEventSafe
+  // debe absorberlo sin propagar nada.
+  await assert.doesNotReject(() => publishEventSafe(env));
 });

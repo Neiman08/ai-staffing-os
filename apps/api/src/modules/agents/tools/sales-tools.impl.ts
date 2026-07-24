@@ -20,6 +20,8 @@ import {
   suggestFollowUpTool as suggestFollowUpToolStub,
   suggestFollowUpInputSchema,
   SALES_AGENT_SYSTEM_PROMPT,
+  buildEventEnvelope,
+  buildIdempotencyKey,
   type AgentTool,
   type LLMProvider,
 } from "@ai-staffing-os/agents";
@@ -28,6 +30,7 @@ import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { logActivity } from "../../../core/activity-log";
 import { AppError } from "../../../core/errors";
+import { publishEventSafe } from "../../../core/events/outbox";
 import * as leadsService from "../../leads/service";
 import * as opportunitiesService from "../../opportunities/service";
 import * as followUpsService from "../../followups/service";
@@ -522,8 +525,9 @@ ${input.channel === "EMAIL" ? `Nunca te presentes como una persona con nombre pr
           body: parsed.body,
         };
 
+        let approvalRequestId: string;
         try {
-          await scopedDb.approvalRequest.create({
+          const approval = await scopedDb.approvalRequest.create({
             data: {
               tenantId: ctx.tenantId,
               agentTaskId: deps.taskId,
@@ -533,6 +537,7 @@ ${input.channel === "EMAIL" ? `Nunca te presentes como una persona con nombre pr
               riskLevel: "MEDIUM",
             },
           });
+          approvalRequestId = approval.id;
         } catch (err) {
           // F24 (Fase 2): perdió la carrera contra el índice único parcial.
           if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -554,6 +559,24 @@ ${input.channel === "EMAIL" ? `Nunca te presentes como una persona con nombre pr
           entityId: lead.id,
           after: proposedAction,
         });
+
+        // F25.2 (consolidación del outbox): correlationId=deps.taskId --
+        // el AgentTask que ejecuta este tool es el identificador real
+        // disponible en este camino. Nunca lanza (publishEventSafe).
+        await publishEventSafe(
+          buildEventEnvelope({
+            eventType: "outreach.draft_created.v1",
+            tenantId: ctx.tenantId,
+            correlationId: deps.taskId,
+            causationId: null,
+            actorType: "AGENT",
+            actorId: deps.agentInstanceId,
+            entityType: "approval_request",
+            entityId: approvalRequestId,
+            payload: { approvalRequestId, companyId: lead.companyId, channel: input.channel, subjectPreview: "subject" in proposedAction ? proposedAction.subject : null },
+            idempotencyKey: buildIdempotencyKey(deps.taskId, "outreach.draft_created.v1", approvalRequestId),
+          }),
+        );
 
         return { draftBody: parsed.body };
       },

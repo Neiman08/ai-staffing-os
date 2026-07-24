@@ -1,4 +1,5 @@
 import type { MissionRestrictions } from "@ai-staffing-os/agents";
+import { buildEventEnvelope, buildIdempotencyKey } from "@ai-staffing-os/agents";
 import { CEO_INTENT_SCHEMA_VERSION, BUSINESS_TAXONOMY_VERSION } from "@ai-staffing-os/shared";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
@@ -6,6 +7,7 @@ import { AppError } from "../../core/errors";
 import { env } from "../../core/env";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
+import { publishEventSafe } from "../../core/events/outbox";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import { SUPPORTED_STATE_CODES, NEARBY_SUPPORTED_STATES } from "../ceo-intelligence/geo";
@@ -1632,6 +1634,27 @@ async function persistAcceptedCandidate(params: {
     entityId: company.id,
     after: { name: raw.name, sourceUrl: raw.sourceUrl, confidenceScore, origin: candidate.origin },
   });
+
+  // F25.2 (consolidación del outbox): publica company.discovered.v1
+  // (catálogo F25) -- correlationId=missionTaskId, el único identificador
+  // de "esta misión" disponible en este camino (el AgentTask.correlationId
+  // de Fase 1 todavía no lo llena este flujo). Nunca lanza (publishEventSafe,
+  // ver outbox.ts) -- un fallo acá es observabilidad, no debe poder
+  // revertir ni bloquear la creación de la Company que ya se confirmó arriba.
+  await publishEventSafe(
+    buildEventEnvelope({
+      eventType: "company.discovered.v1",
+      tenantId: ctx.tenantId,
+      correlationId: missionTaskId,
+      causationId: null,
+      actorType: "AGENT",
+      actorId: ctx.actor?.agentInstanceId ?? "system",
+      entityType: "company",
+      entityId: company.id,
+      payload: { companyId: company.id, origin: candidate.origin, businessConfidence: businessValidation.confidence, sourceUrl: raw.sourceUrl },
+      idempotencyKey: buildIdempotencyKey(missionTaskId, "company.discovered.v1", company.id),
+    }),
+  );
 
   return company;
 }

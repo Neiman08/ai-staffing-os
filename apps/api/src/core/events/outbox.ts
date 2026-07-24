@@ -13,16 +13,15 @@ import { logger } from "../logger";
  * scheduler.ts:tickAllTenants -- usa el cliente base sin scope porque
  * itera TODOS los tenants, no uno).
  *
- * Nota de alcance (F25.2 Fase 2): esta fase entrega el mecanismo real
- * del outbox -- nunca lanza, nunca duplica (idempotencyKey único a
- * nivel de tabla), nunca pierde un evento fallido (queda con
- * processedAt=null, reclamable en el próximo poll = replay seguro).
- * Instrumentar los 4 call sites de producción reales (persistAccepted-
- * Candidate, los 3 de draft_outreach) queda para cuando esos flujos se
- * conviertan en AgentExecutor real (Fase 6/7) -- publicar un evento
- * hoy sin nadie que lo consuma sería builder trabajo muerto, y tocar
- * esos 4 call sites reales sin necesidad viola "no expandas el alcance
- * más allá de lo pedido".
+ * Nota de alcance (F25.2 Fase 2): esta fase entregó el mecanismo real
+ * del outbox -- nunca duplica (idempotencyKey único a nivel de tabla),
+ * nunca pierde un evento fallido (queda con processedAt=null,
+ * reclamable en el próximo poll = replay seguro). Instrumentar los 4
+ * call sites de producción reales quedó explícitamente diferido; la
+ * sesión de consolidación (F25.2 Fase "outbox completo") los conecta
+ * -- ver `publishEventSafe` abajo, la variante que SÍ es segura de
+ * llamar desde código de negocio real (nunca lanza, un fallo se
+ * loguea y la transacción de negocio sigue intacta).
  */
 
 export interface PublishEventResult {
@@ -63,6 +62,26 @@ export async function publishEvent(envelope: AgentEventEnvelope): Promise<Publis
       if (existing) return { event: existing, wasAlreadyPublished: true };
     }
     throw err;
+  }
+}
+
+/**
+ * Variante segura de `publishEvent` para llamar desde un call site de
+ * negocio real (persistAcceptedCandidate, los 3 de draft_outreach) --
+ * nunca lanza. La escritura del evento es observabilidad/outbox, no
+ * debe poder romper el pipeline comercial real que la origina: un
+ * fallo (de infraestructura, no un choque de idempotencyKey -- ESE ya
+ * lo resuelve publishEvent sin error) se loguea y se sigue de largo.
+ */
+export async function publishEventSafe(envelope: AgentEventEnvelope): Promise<void> {
+  try {
+    await publishEvent(envelope);
+  } catch (err) {
+    logger.error("outbox_publish_failed", {
+      eventType: envelope.eventType,
+      idempotencyKey: envelope.idempotencyKey,
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
