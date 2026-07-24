@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { agentTaskQuerySchema, invokeSalesAgentInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { missionLaunchLimiter } from "../../core/rate-limiters";
 import * as agentsService from "./service";
 import { getMissionTimeline, getOrchestratorHealth } from "./observability";
+import { pilotMissionInputSchema, createPilotMission } from "./mission-producer";
 
 /**
  * DESVIACIÓN DOCUMENTADA: 02_F0_PROMPT.md (Paso 1) no lista un módulo
@@ -65,6 +67,20 @@ agentsRouter.get("/agents/missions/:correlationId/timeline", requirePermission("
 agentsRouter.get("/agents/orchestrator/health", requirePermission("agents.view"), async (_req, res, next) => {
   try {
     res.json(await getOrchestratorHealth());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F25.2 (activación controlada, Prioridad 1): productor real de
+// AgentTask -- distinto de POST /missions (instrucción en lenguaje
+// natural, camino de ejecución directa/viejo). Mismo rate limit que
+// el camino viejo (gasta presupuesto real de discovery cuando
+// dryRun=false).
+agentsRouter.post("/agents/missions", missionLaunchLimiter, requirePermission("missions.create"), async (req, res, next) => {
+  try {
+    const input = pilotMissionInputSchema.parse(req.body);
+    res.status(201).json(await createPilotMission(input));
   } catch (err) {
     next(err);
   }

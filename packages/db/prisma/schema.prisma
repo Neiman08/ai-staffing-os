@@ -2197,6 +2197,16 @@ model AgentTask {
   // createdAt (más vieja primero) -- ver postgres-queue.ts.
   priority Int @default(0)
 
+  // F25.2 (activación controlada del pipeline real): idempotencia real
+  // a nivel de DB para el productor de misiones piloto
+  // (mission-producer.ts) -- mismo patrón exacto que
+  // DomainEvent.idempotencyKey (Fase 2) y el índice único parcial de
+  // HumanReviewRequest (Fase 5): un choque real (P2002) se resuelve
+  // devolviendo la fila YA existente, nunca una segunda tarea para la
+  // misma solicitud. Nullable -- la inmensa mayoría de AgentTask
+  // (tools invocadas directamente, no misiones) nunca la usan.
+  idempotencyKey String? @unique
+
   @@index([tenantId, status])
   @@index([agentInstanceId, createdAt])
   @@index([status, nextAttemptAt])
