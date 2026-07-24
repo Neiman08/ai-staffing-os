@@ -6,6 +6,7 @@ import { startProspectingScheduler, stopProspectingScheduler } from "./modules/a
 import { startComplianceAlertScheduler, stopComplianceAlertScheduler } from "./modules/compliance/scheduler";
 import { startBillingOverdueScheduler, stopBillingOverdueScheduler } from "./modules/billing/scheduler";
 import { startAutonomousWorkers, stopAutonomousWorkers } from "./modules/agents/orchestrator-scheduler";
+import { PIPELINE_FLAGS } from "./core/pipeline-flags";
 
 const app = createApp();
 
@@ -14,14 +15,17 @@ const server = app.listen(env.PORT, () => {
   startProspectingScheduler();
   startComplianceAlertScheduler();
   startBillingOverdueScheduler();
-  // F25.2 (consolidación): worker autónomo real -- solo los 3
-  // AgentExecutor seguros (discover_companies/find_contacts/
-  // evaluate_draft_quality, ver orchestrator-scheduler.ts). Ningún
-  // flujo de producción encola tareas de estos tipos todavía, así que
-  // esto corre en vacío hasta que una sesión futura conecte un
-  // productor real -- ver el reporte final para el detalle de esa
-  // propiedad de seguridad.
-  startAutonomousWorkers();
+  // F25.2 (activación controlada): gateado por PIPELINE_FLAGS.autonomousWorkerEnabled
+  // (env AUTONOMOUS_WORKER_ENABLED, default true -- ya verificado inerte
+  // en la sesión anterior; PIPELINE_KILL_SWITCH=true lo apaga junto con
+  // todo lo demás). Los 3 AgentExecutor registrados
+  // (discover_companies/find_contacts/evaluate_draft_quality) nunca
+  // envían nada externo -- ver orchestrator-scheduler.ts.
+  if (PIPELINE_FLAGS.autonomousWorkerEnabled) {
+    startAutonomousWorkers();
+  } else {
+    logger.info("autonomous_worker_disabled_by_flag", {});
+  }
 });
 
 /**

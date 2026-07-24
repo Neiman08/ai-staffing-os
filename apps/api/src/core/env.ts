@@ -113,6 +113,20 @@ const envSchema = z.object({
   // seed.ts), pero el valor sigue siendo configurable por env, nunca
   // hardcodeado en el código de las rutas públicas. Ver core/public-tenant.ts.
   PUBLIC_TENANT_SLUG: z.string().default("titan"),
+
+  // F25.2 (activación controlada del pipeline real) — ver
+  // core/pipeline-flags.ts para el objeto derivado y el kill switch.
+  // Todos con default seguro/gradual salvo AUTONOMOUS_WORKER_ENABLED
+  // (ya activado y probado como inerte en la sesión anterior -- sigue
+  // en true para no revertir comportamiento ya verificado, pero ahora
+  // es un toggle real en vez de estar hardcodeado en index.ts).
+  PIPELINE_KILL_SWITCH: z.coerce.boolean().default(false),
+  AUTONOMOUS_WORKER_ENABLED: z.coerce.boolean().default(true),
+  MISSION_TASK_PRODUCTION_ENABLED: z.coerce.boolean().default(false),
+  DISCOVERY_AGENT_ENABLED: z.coerce.boolean().default(false),
+  CONTACT_INTELLIGENCE_AGENT_ENABLED: z.coerce.boolean().default(false),
+  QUALITY_AGENT_ENABLED: z.coerce.boolean().default(false),
+  EVENT_HANDLERS_ENABLED: z.coerce.boolean().default(false),
 });
 
 function loadEnv() {
