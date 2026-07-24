@@ -29,6 +29,8 @@ export type MissionTimelineEntry =
       causationId: string | null;
       processedAt: Date | null;
       createdAt: Date;
+      entityType: string | null;
+      entityId: string | null;
     };
 
 /**
@@ -66,6 +68,8 @@ export async function getMissionTimeline(correlationId: string): Promise<Mission
         causationId: e.causationId,
         processedAt: e.processedAt,
         createdAt: e.createdAt,
+        entityType: e.entityType,
+        entityId: e.entityId,
       }),
     ),
   ];

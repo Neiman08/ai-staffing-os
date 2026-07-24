@@ -44,6 +44,7 @@ import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
 import Missions from "./pages/Missions";
+import PilotMissions from "./pages/PilotMissions";
 import Discovery from "./pages/Discovery";
 import ProductionReadiness from "./pages/ProductionReadiness";
 import { ClientPortalGate } from "@/components/layout/ClientPortalGate";
@@ -109,6 +110,7 @@ export const router = createBrowserRouter([
       { path: "campaigns/:id", element: <CampaignDetail /> },
       { path: "campaigns/:campaignId/companies/:companyId", element: <CampaignCompanyDetail /> },
       { path: "missions", element: <Missions /> },
+      { path: "pilot-missions", element: <PilotMissions /> },
       { path: "discovery", element: <Discovery /> },
       { path: "revenue", element: <Revenue /> },
       { path: "analytics", element: <AnalyticsExecutive /> },

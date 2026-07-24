@@ -32,6 +32,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Gavel,
+  TestTube2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -87,6 +88,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     items: [
       { to: "/missions", label: "Daily Mission", icon: Rocket },
+      { to: "/pilot-missions", label: "Pilot Missions", icon: TestTube2 },
       { to: "/discovery", label: "External Discovery", icon: Radar },
       { to: "/agents", label: "AI Agents", icon: Bot },
       { to: "/approvals", label: "Approvals", icon: CheckSquare },
