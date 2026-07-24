@@ -9,6 +9,7 @@ import { EventDispatcher } from "../../core/events/dispatcher";
 import { registerPipelineHandlers } from "./pipeline-handlers";
 import { resolveHumanReviewRequest } from "../human-review/service";
 import { recordTaskFailure } from "./task-lifecycle";
+import { pausePilotMission, cancelPilotMission } from "./pilot-mission-control";
 
 /**
  * F25.2 (activación controlada, Prioridad 3): pruebas de integración
@@ -233,6 +234,50 @@ test("outreach.draft_created.v1: con qualityAgentEnabled, crea evaluate_draft_qu
   assert.equal(input.approvalRequestId, approval.id);
   assert.equal(input.to, "contact@acme.example");
   assert.equal(input.companyCommercialStatus, "COMMERCIAL_VALIDATED");
+});
+
+test("company.discovered.v1: una misión piloto pausada/cancelada nunca crea una find_contacts nueva (Prioridad 8)", async () => {
+  const { tenantId, industryId, agentInstanceId } = await setupTenant("company-discovered-paused");
+
+  async function missionCompanyDiscoveredSkips(controlAction: "pause" | "cancel") {
+    const company = await prisma.company.create({
+      data: { tenantId, name: `Acme ${controlAction}`, industryId, status: "LEAD", origin: "API_PROVIDER", discoveryMetadata: { queryOrigins: ["electrical"] } },
+    });
+    const correlationId = `mission_control_${controlAction}_${company.id}`;
+    const rootTask = await prisma.agentTask.create({
+      data: { tenantId, agentInstanceId, type: "discover_companies", status: "DONE", input: {}, triggeredBy: "USER", correlationId, idempotencyKey: `idem_${correlationId}` },
+    });
+
+    await withTenant(tenantId, () => (controlAction === "pause" ? pausePilotMission(rootTask.id) : cancelPilotMission(rootTask.id)));
+
+    await withTenant(tenantId, () =>
+      publishEvent(
+        buildEventEnvelope({
+          eventType: "company.discovered.v1",
+          tenantId,
+          correlationId,
+          causationId: null,
+          actorType: "AGENT",
+          actorId: "agentinstance_test",
+          entityType: "company",
+          entityId: company.id,
+          payload: { companyId: company.id },
+          idempotencyKey: `test-company-discovered-${controlAction}-${company.id}`,
+        }),
+      ),
+    );
+
+    const dispatcher = new EventDispatcher();
+    registerPipelineHandlers(dispatcher, { ...allFlagsOff(), contactIntelligenceAgentEnabled: true });
+    const metrics = await dispatcher.runOnce();
+    assert.equal(metrics.failed, 0);
+
+    const tasks = await prisma.agentTask.findMany({ where: { tenantId, type: "find_contacts", correlationId } });
+    assert.equal(tasks.length, 0, `una misión ${controlAction === "pause" ? "pausada" : "cancelada"} no debe crear find_contacts`);
+  }
+
+  await missionCompanyDiscoveredSkips("pause");
+  await missionCompanyDiscoveredSkips("cancel");
 });
 
 test("human.review_resolved.v1: reanuda una AgentTask real en HUMAN_REVIEW cuando entityType=agent_task", async () => {

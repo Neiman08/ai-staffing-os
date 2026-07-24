@@ -6,6 +6,7 @@ import { logger } from "../../core/logger";
 import { PIPELINE_FLAGS, type PipelineFlags } from "../../core/pipeline-flags";
 import { resolveAgentInstance } from "./task-executor";
 import { resumeTaskAfterHumanReview } from "./task-lifecycle";
+import { isPilotMissionActive } from "./pilot-mission-control";
 import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import { buildDecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { hasOtherActiveApprovalForCompany } from "../approvals/service";
@@ -42,6 +43,11 @@ async function handleCompanyDiscovered(event: DomainEvent, flags: PipelineFlags)
   if (!payload.companyId) return;
 
   await runWithTenancyContext(eventTenantContext(event), async () => {
+    if (!(await isPilotMissionActive(event.correlationId))) {
+      logger.info("pipeline_handler_mission_inactive_skip", { handler: "company.discovered.v1", correlationId: event.correlationId });
+      return;
+    }
+
     const company = await scopedDb.company.findUnique({ where: { id: payload.companyId! }, include: { industry: true } });
     if (!company) return;
 
@@ -114,6 +120,11 @@ async function handleOutreachDraftCreated(event: DomainEvent, flags: PipelineFla
   if (!payload.approvalRequestId) return;
 
   await runWithTenancyContext(eventTenantContext(event), async () => {
+    if (!(await isPilotMissionActive(event.correlationId))) {
+      logger.info("pipeline_handler_mission_inactive_skip", { handler: "outreach.draft_created.v1", correlationId: event.correlationId });
+      return;
+    }
+
     const approval = await scopedDb.approvalRequest.findUnique({ where: { id: payload.approvalRequestId! }, include: { company: true } });
     if (!approval) return;
 
