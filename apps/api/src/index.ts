@@ -5,6 +5,7 @@ import { createApp } from "./app";
 import { startProspectingScheduler, stopProspectingScheduler } from "./modules/agents/scheduler";
 import { startComplianceAlertScheduler, stopComplianceAlertScheduler } from "./modules/compliance/scheduler";
 import { startBillingOverdueScheduler, stopBillingOverdueScheduler } from "./modules/billing/scheduler";
+import { startAutonomousWorkers, stopAutonomousWorkers } from "./modules/agents/orchestrator-scheduler";
 
 const app = createApp();
 
@@ -13,13 +14,21 @@ const server = app.listen(env.PORT, () => {
   startProspectingScheduler();
   startComplianceAlertScheduler();
   startBillingOverdueScheduler();
+  // F25.2 (consolidación): worker autónomo real -- solo los 3
+  // AgentExecutor seguros (discover_companies/find_contacts/
+  // evaluate_draft_quality, ver orchestrator-scheduler.ts). Ningún
+  // flujo de producción encola tareas de estos tipos todavía, así que
+  // esto corre en vacío hasta que una sesión futura conecte un
+  // productor real -- ver el reporte final para el detalle de esa
+  // propiedad de seguridad.
+  startAutonomousWorkers();
 });
 
 /**
  * F12.7: cierre ordenado real -- SIGTERM es la señal que Render (y
  * cualquier orquestador de contenedores) manda antes de matar el
  * proceso en un redeploy/restart. Sin esto, un request en vuelo se
- * corta a mitad de camino y los 3 schedulers de setInterval siguen
+ * corta a mitad de camino y los 4 schedulers de setInterval siguen
  * intentando escribir a una conexión de Prisma que puede cerrarse en
  * cualquier momento. Orden: (1) dejar de aceptar conexiones nuevas,
  * (2) parar los timers de los schedulers, (3) esperar a que los
@@ -44,6 +53,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   stopProspectingScheduler();
   stopComplianceAlertScheduler();
   stopBillingOverdueScheduler();
+  stopAutonomousWorkers();
 
   server.close(async (err) => {
     if (err) {
