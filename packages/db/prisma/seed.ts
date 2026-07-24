@@ -1671,6 +1671,13 @@ const AGENT_DEFINITIONS = [
   { key: "discovery", name: "Discovery Agent", description: "Finds real companies in public external sources, deduplicates against the CRM, and creates them with full provenance." },
   // F4.6: Contact Intelligence Agent
   { key: "contact_intelligence", name: "Contact Intelligence Agent", description: "Finds real decision-maker contacts for newly discovered companies — never sends anything, only enriches the CRM." },
+  // F25.2 (activación controlada del pipeline real): Quality Agent --
+  // el AgentInstance real que respalda el AgentTask type="evaluate_draft_quality"
+  // (createQualityAgentExecutor, Fase 8). Deliberadamente NO en
+  // SEMI_AUTO_AGENT_KEYS de abajo -- queda en ASSISTED (Nivel 1, el
+  // default), restricción explícita de esta sesión ("mantén el sistema
+  // en AUTONOMY LEVEL 1").
+  { key: "quality", name: "Quality Agent", description: "Evaluates outreach drafts against the deterministic quality gate before a human approves -- never sends anything." },
 ];
 
 const AGENT_PROMPTS: Record<string, string> = {
@@ -1730,6 +1737,7 @@ async function seedAgents(tenantId: string) {
     "ceo",
     "discovery",
     "contact_intelligence",
+    "quality",
   ]) {
     const definitionId = definitionMap.get(key)!;
     const autonomyLevel = SEMI_AUTO_AGENT_KEYS.has(key) ? "SEMI_AUTO" : "ASSISTED";

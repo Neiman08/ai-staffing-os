@@ -4,7 +4,9 @@ import { createContactIntelligenceExecutor } from "./executors/contact-intellige
 import { createQualityAgentExecutor } from "./executors/quality.executor";
 import { reclaimExpiredLeases } from "../../core/queue/postgres-queue";
 import { EventDispatcher } from "../../core/events/dispatcher";
+import { registerPipelineHandlers } from "./pipeline-handlers";
 import { logger } from "../../core/logger";
+import { PIPELINE_FLAGS, type PipelineFlags } from "../../core/pipeline-flags";
 
 /**
  * F25.2 (consolidación): worker autónomo real -- claim+ejecución
@@ -37,18 +39,25 @@ const TICK_INTERVAL_MS = 30_000;
 const ORCHESTRATOR_CLAIM_LIMIT = 10;
 const WORKER_ID = "autonomous-worker-1";
 
-export function buildProductionOrchestrator(): Orchestrator {
+/**
+ * Cada AgentExecutor se registra SOLO si su flag específico está
+ * encendido -- un flag apagado significa que ese ejecutor ni siquiera
+ * existe para el Orchestrator, no es una comprobación que el ejecutor
+ * podría saltarse (ver pipeline-flags.ts: "no permitas que esos flags
+ * puedan ser ignorados por un agente").
+ */
+export function buildProductionOrchestrator(flags: PipelineFlags = PIPELINE_FLAGS): Orchestrator {
   const orchestrator = new Orchestrator();
-  orchestrator.registerExecutor(createDiscoveryExecutor());
-  orchestrator.registerExecutor(createContactIntelligenceExecutor());
-  orchestrator.registerExecutor(createQualityAgentExecutor());
+  if (flags.discoveryAgentEnabled) orchestrator.registerExecutor(createDiscoveryExecutor());
+  if (flags.contactIntelligenceAgentEnabled) orchestrator.registerExecutor(createContactIntelligenceExecutor());
+  if (flags.qualityAgentEnabled) orchestrator.registerExecutor(createQualityAgentExecutor());
   return orchestrator;
 }
 
-export function buildProductionEventDispatcher(): EventDispatcher {
-  // Sin handlers registrados -- infraestructura real, cero
-  // consumidores en producción hoy (ver docstring del archivo).
-  return new EventDispatcher();
+export function buildProductionEventDispatcher(flags: PipelineFlags = PIPELINE_FLAGS): EventDispatcher {
+  const dispatcher = new EventDispatcher();
+  if (flags.eventHandlersEnabled) registerPipelineHandlers(dispatcher, flags);
+  return dispatcher;
 }
 
 let orchestrator: Orchestrator | null = null;

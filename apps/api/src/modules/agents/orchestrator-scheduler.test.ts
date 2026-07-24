@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { PipelineFlags } from "../../core/pipeline-flags";
 import {
   buildProductionOrchestrator,
   buildProductionEventDispatcher,
@@ -9,29 +10,64 @@ import {
 } from "./orchestrator-scheduler";
 
 /**
- * F25.2 (consolidación): el worker autónomo real -- confirma que
- * registra exactamente los 3 AgentExecutor seguros (ninguno envía
- * email/agenda reunión, ver docstring del módulo) y que un tick
- * completo corre sin lanzar incluso con la cola vacía (el caso real
- * hoy: nada encola AgentTask de estos tipos todavía).
+ * F25.2 (activación controlada): el worker autónomo real -- confirma
+ * que cada AgentExecutor/handler SOLO se registra cuando su flag
+ * específico está encendido (nunca "los 3 siempre", como antes de esta
+ * sesión) y que un tick completo corre sin lanzar incluso con la cola
+ * vacía.
  */
 
-test("buildProductionOrchestrator registra exactamente los 3 AgentExecutor seguros", () => {
-  const orchestrator = buildProductionOrchestrator();
-  assert.equal(orchestrator.hasExecutor("discover_companies"), true);
-  assert.equal(orchestrator.hasExecutor("find_contacts"), true);
-  assert.equal(orchestrator.hasExecutor("evaluate_draft_quality"), true);
+function allFlagsOff(): PipelineFlags {
+  return {
+    autonomousWorkerEnabled: false,
+    missionTaskProductionEnabled: false,
+    discoveryAgentEnabled: false,
+    contactIntelligenceAgentEnabled: false,
+    qualityAgentEnabled: false,
+    eventHandlersEnabled: false,
+    externalActionsEnabled: false,
+    autonomousSendingEnabled: false,
+  };
+}
+
+test("con todos los flags apagados, el Orchestrator no registra NINGÚN ejecutor", () => {
+  const orchestrator = buildProductionOrchestrator(allFlagsOff());
+  assert.equal(orchestrator.hasExecutor("discover_companies"), false);
+  assert.equal(orchestrator.hasExecutor("find_contacts"), false);
+  assert.equal(orchestrator.hasExecutor("evaluate_draft_quality"), false);
+});
+
+test("cada flag registra únicamente su propio AgentExecutor -- nunca los otros dos por error", () => {
+  const onlyDiscovery = buildProductionOrchestrator({ ...allFlagsOff(), discoveryAgentEnabled: true });
+  assert.equal(onlyDiscovery.hasExecutor("discover_companies"), true);
+  assert.equal(onlyDiscovery.hasExecutor("find_contacts"), false);
+  assert.equal(onlyDiscovery.hasExecutor("evaluate_draft_quality"), false);
+
+  const allThree = buildProductionOrchestrator({ ...allFlagsOff(), discoveryAgentEnabled: true, contactIntelligenceAgentEnabled: true, qualityAgentEnabled: true });
+  assert.equal(allThree.hasExecutor("discover_companies"), true);
+  assert.equal(allThree.hasExecutor("find_contacts"), true);
+  assert.equal(allThree.hasExecutor("evaluate_draft_quality"), true);
 
   // Ningún ejecutor de envío/reunión existe -- ni siquiera podría
   // registrarse por error, porque no hay ningún AgentExecutor de ese
   // tipo construido en el proyecto todavía.
-  assert.equal(orchestrator.hasExecutor("send_email"), false);
-  assert.equal(orchestrator.hasExecutor("book_meeting"), false);
+  assert.equal(allThree.hasExecutor("send_email"), false);
+  assert.equal(allThree.hasExecutor("book_meeting"), false);
 });
 
-test("runAutonomousWorkerTick corre las 3 sub-operaciones sin lanzar, incluso con la cola vacía", async () => {
-  const orchestrator = buildProductionOrchestrator();
-  const dispatcher = buildProductionEventDispatcher();
+test("eventHandlersEnabled=false nunca registra los handlers reales, incluso si otros flags están prendidos", () => {
+  // No hay una forma pública de "contar handlers" en EventDispatcher --
+  // esto se prueba indirectamente en pipeline-handlers.test.ts (los
+  // handlers no crean nada cuando su flag está apagado). Acá solo se
+  // confirma que buildProductionEventDispatcher no lanza con cualquier
+  // combinación de flags.
+  const dispatcher = buildProductionEventDispatcher({ ...allFlagsOff(), discoveryAgentEnabled: true });
+  assert.ok(dispatcher);
+});
+
+test("runAutonomousWorkerTick corre las 3 sub-operaciones sin lanzar, incluso con la cola vacía y todos los flags apagados", async () => {
+  const orchestrator = buildProductionOrchestrator(allFlagsOff());
+  const dispatcher = buildProductionEventDispatcher(allFlagsOff());
 
   const result = await runAutonomousWorkerTick(orchestrator, dispatcher);
 

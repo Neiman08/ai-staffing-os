@@ -49,7 +49,7 @@ export async function hasActiveApprovalForCompany(companyId: string): Promise<bo
  * como el duplicado. `excludeApprovalId` siempre es el id del registro
  * que se está evaluando.
  */
-async function hasOtherActiveApprovalForCompany(companyId: string, excludeApprovalId: string): Promise<boolean> {
+export async function hasOtherActiveApprovalForCompany(companyId: string, excludeApprovalId: string): Promise<boolean> {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
   const existing = await scopedDb.approvalRequest.findFirst({

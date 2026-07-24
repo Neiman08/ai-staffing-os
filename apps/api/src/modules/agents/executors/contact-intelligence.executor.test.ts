@@ -53,6 +53,48 @@ test("execute() con rolePlan=null delega a enrichCompanyWithDecisionContacts rea
   assert.ok(result.output.patternsFailed.some((m) => m.includes("rolePlan sin roles planificados")));
 });
 
+test("execute() con rolePlan real y cero contactos resueltos -- falla con DATA_INSUFFICIENT, nunca inventa un contacto", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("execute() DATA_INSUFFICIENT test: intento de llamada de red real -- los proveedores deben inyectarse mockeados.");
+  }) as typeof fetch;
+
+  try {
+    const executor = createContactIntelligenceExecutor();
+    const tenantId = "tenant-titan";
+
+    const result = await runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, () =>
+      executor.execute(
+        { tenantId, ...FAKE_CONTEXT_BASE },
+        {
+          taskId: "task_test",
+          companyId: "company_test",
+          companyName: "Acme Test Co",
+          companyWebsite: null,
+          companyState: "IL",
+          companyCity: "Chicago",
+          industryName: "Manufacturing",
+          rolePlan: {
+            companyId: "company_test",
+            targetRoles: [{ role: "HR Manager", priority: 1, rationale: "fixture", source: "taxonomy" }],
+            excludedRoles: [],
+            confidence: 1,
+            taxonomySource: "fixture",
+            hiringSignalSource: null,
+            planVersion: 1,
+          },
+        },
+      ),
+    );
+
+    assert.equal(result.success, false);
+    if (result.success) return;
+    assert.equal(result.error.category, "DATA_INSUFFICIENT");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("execute() convierte una falla estructural real (tenancy context ausente) en un AgentResult clasificado -- nunca una excepción sin capturar", async () => {
   const executor = createContactIntelligenceExecutor();
 

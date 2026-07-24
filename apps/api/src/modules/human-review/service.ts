@@ -1,7 +1,9 @@
 import { Prisma, type HumanReviewRequest, type HumanReviewType, type HumanReviewPriority } from "@ai-staffing-os/db";
+import { buildEventEnvelope, buildIdempotencyKey } from "@ai-staffing-os/agents";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
+import { publishEventSafe } from "../../core/events/outbox";
 
 /**
  * F25.2 Fase 5: Human Review Center -- contrato ya diseñado en
@@ -103,13 +105,42 @@ export async function getHumanReviewRequest(id: string): Promise<HumanReviewRequ
   return scopedDb.humanReviewRequest.findUniqueOrThrow({ where: { id } });
 }
 
+/**
+ * F25.2 (activación controlada, Prioridad 3): publica
+ * human.review_resolved.v1 -- permite que el pipeline REACCIONE a una
+ * resolución humana (ver pipeline-handlers.ts: reanuda/finaliza la
+ * AgentTask relacionada cuando entityType="agent_task"). Nunca lanza
+ * si la publicación falla (publishEventSafe) -- la resolución humana ya
+ * se guardó, eso es lo que importa; el evento es notificación, no debe
+ * poder revertir la resolución.
+ */
 export async function resolveHumanReviewRequest(id: string, resolvedById: string, resolution: string): Promise<HumanReviewRequest> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
   const existing = await scopedDb.humanReviewRequest.findUniqueOrThrow({ where: { id } });
   if (existing.resolvedAt) {
     throw AppError.conflict(`HumanReviewRequest ${id} ya está resuelto`);
   }
-  return scopedDb.humanReviewRequest.update({
+  const resolved = await scopedDb.humanReviewRequest.update({
     where: { id },
     data: { resolvedAt: new Date(), resolvedById, resolution },
   });
+
+  await publishEventSafe(
+    buildEventEnvelope({
+      eventType: "human.review_resolved.v1",
+      tenantId: ctx.tenantId,
+      correlationId: resolved.correlationId,
+      causationId: null,
+      actorType: "HUMAN",
+      actorId: resolvedById,
+      entityType: resolved.entityType,
+      entityId: resolved.entityId,
+      payload: { humanReviewRequestId: resolved.id, entityType: resolved.entityType, entityId: resolved.entityId, resolution, resolvedById },
+      idempotencyKey: buildIdempotencyKey(resolved.correlationId, "human.review_resolved.v1", resolved.id),
+    }),
+  );
+
+  return resolved;
 }

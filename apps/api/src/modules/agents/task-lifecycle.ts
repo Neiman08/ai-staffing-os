@@ -199,6 +199,28 @@ export async function cancelTask(taskId: string, canceledBy: string, reason?: st
 }
 
 /**
+ * F25.2 (activación controlada, Prioridad 3): una tarea en HUMAN_REVIEW
+ * (recordTaskFailure con categoría HUMAN_ACTION_REQUIRED) queda
+ * "congelada" hasta que un humano decida -- esta función es lo que la
+ * saca de ahí una vez resuelto el HumanReviewRequest asociado
+ * (ver pipeline-handlers.ts: handler de human.review_resolved.v1).
+ * La decisión humana YA ES el resultado -- nunca se re-ejecuta el
+ * AgentExecutor, se completa la tarea con la resolución como output.
+ */
+export async function resumeTaskAfterHumanReview(taskId: string, resolution: string) {
+  const task = await requireTask(taskId);
+  if (task.status !== "HUMAN_REVIEW") {
+    throw new AppError(409, "AGENT_TASK_NOT_IN_HUMAN_REVIEW", `AgentTask ${taskId} no está en HUMAN_REVIEW (status=${task.status})`);
+  }
+  const resumed = await scopedDb.agentTask.update({
+    where: { id: taskId },
+    data: { status: "DONE", output: { humanResolution: resolution } as never, completedAt: new Date() },
+  });
+  logger.info("agent_task_resumed_after_human_review", { taskId, type: resumed.type, correlationId: resumed.correlationId });
+  return resumed;
+}
+
+/**
  * Reclama de vuelta UNA tarea cuyo lease expiró sin que el worker la
  * haya terminado (murió, se colgó, el proceso se reinició). Vuelve a
  * QUEUED si todavía hay intentos disponibles, o termina en FAILED si ya
