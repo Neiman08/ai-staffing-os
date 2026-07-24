@@ -127,6 +127,17 @@ const envSchema = z.object({
   CONTACT_INTELLIGENCE_AGENT_ENABLED: z.coerce.boolean().default(false),
   QUALITY_AGENT_ENABLED: z.coerce.boolean().default(false),
   EVENT_HANDLERS_ENABLED: z.coerce.boolean().default(false),
+  // F26 (primer piloto de outreach real): gate reactivo adicional --
+  // contact.verified.v1 -> crea un draft_outreach real (LLM + ApprovalRequest).
+  // Mismo criterio que los 4 flags de arriba: default false, apagado por
+  // el kill switch, nunca puede saltarse el approval humano (eso no es
+  // un flag, es la arquitectura -- ver draft.executor.ts/sendApproval).
+  DRAFT_AGENT_ENABLED: z.coerce.boolean().default(false),
+  // Límite diario de envíos REALES (EmailMessage.status=SENT) por tenant,
+  // enforced en sendApproval antes de llamar a Microsoft Graph -- ver
+  // modules/email/send-limits.ts. Configurable, nunca hardcodeado a un
+  // valor fijo en el código de envío.
+  DAILY_EMAIL_SEND_LIMIT: z.coerce.number().int().min(1).default(25),
 });
 
 function loadEnv() {

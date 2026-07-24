@@ -12,6 +12,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
 import { sendEmail } from "../email/email-service";
+import { checkSendLimits } from "../email/send-limits";
 import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
 import { evaluateApprovalQualityGate } from "../ceo-intelligence/approval-quality-gate";
 
@@ -467,6 +468,28 @@ export async function sendApproval(id: string, deps: SendApprovalDeps = {}): Pro
     // proposedAction sin `to` resoluble (dato viejo/canal no-EMAIL).
     await scopedDb.approvalRequest.update({ where: { id }, data: { status: "FAILED" } });
     throw AppError.badRequest("No se pudo resolver un destinatario de email real para este borrador -- revisar el canal de contacto.");
+  }
+
+  // F26 (primer piloto de outreach real): límite diario + prevención de
+  // duplicados -- ANTES de gastar la llamada real a Microsoft Graph,
+  // nunca después. Mismo criterio que la guarda de `!draft` de arriba:
+  // vuelve a FAILED (reintentable, nunca queda trabada en SENDING) y
+  // audita el bloqueo real.
+  const limitCheck = await checkSendLimits(draft.to);
+  if (!limitCheck.allowed) {
+    await scopedDb.approvalRequest.update({ where: { id }, data: { status: "FAILED" } });
+    await scopedDb.auditLog.create({
+      data: {
+        tenantId: ctx.tenantId,
+        actorType: "HUMAN",
+        actorId: ctx.userId,
+        action: "approval.send_blocked_by_limit",
+        entityType: "approvalRequest",
+        entityId: id,
+        after: { reason: limitCheck.reason } as never,
+      },
+    });
+    throw AppError.badRequest(limitCheck.reason ?? "Envío bloqueado por límites de seguridad.");
   }
 
   let emailSendResult: ApprovalEmailSendResult;

@@ -10,15 +10,17 @@ import {
   AgentError,
   type AgentExecutor,
   type AgentExecutionContext,
+  type LLMProvider,
+  type LLMCompletionResult,
 } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
-import { publishEvent } from "../../core/events/outbox";
 import { createOrMergeHumanReviewRequest } from "../human-review/service";
 import { Orchestrator } from "./orchestrator";
 import { EventDispatcher } from "../../core/events/dispatcher";
 import { registerPipelineHandlers } from "./pipeline-handlers";
 import { createQualityAgentExecutor } from "./executors/quality.executor";
+import { createDraftExecutor } from "./executors/draft.executor";
 import { discoveryTaskInputSchema, type DiscoveryTaskInput } from "./executors/discovery.executor";
 import { contactIntelligenceTaskInputSchema, type ContactIntelligenceTaskInput } from "./executors/contact-intelligence.executor";
 import { executeDiscoveryPlan, type DiscoveryExecutionReport } from "./mission-executor";
@@ -37,14 +39,17 @@ import type { PipelineFlags } from "../../core/pipeline-flags";
  * F25.2 (activación controlada, Prioridad 6): prueba end-to-end LOCAL
  * y real contra Postgres del pipeline completo -- misión piloto ->
  * AgentTask -> claim del Orchestrator -> Discovery -> evento ->
- * EventDispatcher -> Contact Intelligence -> Quality -> Human Review
- * -> timeline. Cero llamadas externas reales (global.fetch bloqueado a
- * propósito, mismo patrón que mission-executor.test.ts) -- los
- * AgentExecutor de Discovery/Contact Intelligence de ESTE archivo son
- * variantes locales que inyectan proveedores sintéticos (la forma real
- * -- createDiscoveryExecutor/createContactIntelligenceExecutor -- no
- * expone esa inyección a propósito, porque un AgentTask.input real es
- * JSON puro, nunca puede llevar una función).
+ * EventDispatcher -> Contact Intelligence -> Draft (F26, LLM inyectado)
+ * -> Quality -> timeline. Cero llamadas externas reales (global.fetch
+ * bloqueado a propósito, mismo patrón que mission-executor.test.ts) --
+ * los AgentExecutor de Discovery/Contact Intelligence de ESTE archivo
+ * son variantes locales que inyectan proveedores sintéticos (la forma
+ * real -- createDiscoveryExecutor/createContactIntelligenceExecutor --
+ * no expone esa inyección a propósito, porque un AgentTask.input real es
+ * JSON puro, nunca puede llevar una función); createDraftExecutor SÍ
+ * expone la inyección del LLMProvider (mismo criterio que
+ * MissingApiKeyProvider en task-executor.ts), así que acá se usa la
+ * forma REAL, no una variante local.
  */
 
 const originalFetch = globalThis.fetch;
@@ -61,6 +66,7 @@ after(async () => {
     await prisma.humanReviewRequest.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.domainEvent.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.approvalRequest.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    await prisma.lead.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.contact.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.agentTask.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.company.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
@@ -74,7 +80,7 @@ async function setupTenant(suffix: string): Promise<string> {
     data: { name: `${TEST_PREFIX}-${suffix}`, slug: `${TEST_PREFIX.toLowerCase()}-${suffix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` },
   });
   createdTenantIds.push(tenant.id);
-  for (const key of ["discovery", "contact_intelligence", "quality"]) {
+  for (const key of ["discovery", "contact_intelligence", "quality", "sales"]) {
     const definition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key } });
     await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: definition.id, isActive: true } });
   }
@@ -93,6 +99,7 @@ function allFlagsOn(): PipelineFlags {
     contactIntelligenceAgentEnabled: true,
     qualityAgentEnabled: true,
     eventHandlersEnabled: true,
+    draftAgentEnabled: true,
     externalActionsEnabled: false,
     autonomousSendingEnabled: false,
   };
@@ -102,9 +109,9 @@ function allFlagsOn(): PipelineFlags {
 
 function candidateFixture(overrides: Partial<ProviderCandidate> = {}): ProviderCandidate {
   return {
-    name: "QTS Electrical Contractors Inc",
+    name: "Acme Electrical Contractors Inc",
     fields: {
-      website: { status: "CONFIRMED", value: "https://www.qts-electrical-fixture.example" },
+      website: { status: "CONFIRMED", value: "https://www.acme-electrical-fixture.example" },
       phone: { status: "CONFIRMED", value: "(312) 555-0199" },
       city: { status: "CONFIRMED", value: "Chicago" },
       email: { status: "NOT_FOUND", value: null },
@@ -145,7 +152,7 @@ function contactCandidateFixture(overrides: Partial<ContactCandidate> = {}): Con
       lastName: { status: "CONFIRMED", value: "Doe" },
       title: { status: "CONFIRMED", value: "Operations Manager" },
       linkedinUrl: { status: "NOT_FOUND", value: null },
-      email: { status: "CONFIRMED", value: "jane.doe@qts-electrical-fixture.example" },
+      email: { status: "CONFIRMED", value: "jane.doe@acme-electrical-fixture.example" },
       phone: { status: "NOT_FOUND", value: null },
     },
     sourceUrl: null,
@@ -262,8 +269,8 @@ function createTestContactIntelligenceExecutor(): AgentExecutor<ContactIntellige
           peopleDataLabsApiKey: "fake-key-for-e2e-test",
         });
 
-        const events = report.contactsCreated.map((contact) =>
-          buildEventEnvelope({
+        const events = report.contactsCreated.flatMap((contact) => {
+          const discovered = buildEventEnvelope({
             eventType: "contact.discovered.v1",
             tenantId: context.tenantId,
             correlationId: context.correlationId,
@@ -274,14 +281,34 @@ function createTestContactIntelligenceExecutor(): AgentExecutor<ContactIntellige
             entityId: contact.contactId,
             payload: { contactId: contact.contactId, companyId: input.companyId, matchedRole: contact.matchedRole },
             idempotencyKey: buildIdempotencyKey(context.correlationId, "contact.discovered.v1", contact.contactId),
-          }),
-        );
+          });
+          if (!contact.emailDomainTrust) return [discovered];
+          const verified = buildEventEnvelope({
+            eventType: "contact.verified.v1",
+            tenantId: context.tenantId,
+            correlationId: context.correlationId,
+            causationId: context.causationId,
+            actorType: "AGENT" as const,
+            actorId: context.agentInstanceId,
+            entityType: "contact",
+            entityId: contact.contactId,
+            payload: { contactId: contact.contactId, companyId: input.companyId, emailVerificationStatus: contact.emailDomainTrust },
+            idempotencyKey: buildIdempotencyKey(context.correlationId, "contact.verified.v1", contact.contactId),
+          });
+          return [discovered, verified];
+        });
 
         return agentSuccess(report, events);
       } catch (err) {
         return agentFailure(new AgentError(classifyError(err), err instanceof Error ? err.message : String(err), err));
       }
     },
+  };
+}
+
+function fakeLLMProvider(response: { subject: string; body: string } = { subject: "Ayuda con personal para tu operación", body: "Hola equipo,\n\nBest regards,\nDreiStaff Team" }): LLMProvider {
+  return {
+    complete: async (): Promise<LLMCompletionResult> => ({ content: JSON.stringify(response), tokensUsed: 42 }),
   };
 }
 
@@ -293,12 +320,13 @@ async function runUntilIdle(orchestrator: Orchestrator, dispatcher: EventDispatc
   }
 }
 
-test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligence -> Human Review -> Quality (vía outreach.draft_created.v1 sintético) -> timeline", async () => {
+test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligence -> Draft real (F26) -> Quality -> timeline", async () => {
   const tenantId = await setupTenant("full-pipeline");
 
   const orchestrator = new Orchestrator();
   orchestrator.registerExecutor(createTestDiscoveryExecutor());
   orchestrator.registerExecutor(createTestContactIntelligenceExecutor());
+  orchestrator.registerExecutor(createDraftExecutor(fakeLLMProvider()));
   orchestrator.registerExecutor(createQualityAgentExecutor());
 
   const dispatcher = new EventDispatcher();
@@ -330,7 +358,7 @@ test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligenc
   assert.equal(discoveryTask.correlationId, correlationId);
 
   const company = await prisma.company.findFirstOrThrow({ where: { tenantId } });
-  assert.equal(company.name, "QTS Electrical Contractors Inc");
+  assert.equal(company.name, "Acme Electrical Contractors Inc");
 
   const companyDiscoveredEvent = await prisma.domainEvent.findFirstOrThrow({ where: { tenantId, type: "company.discovered.v1" } });
   assert.equal(companyDiscoveredEvent.correlationId, correlationId, "correlationId estable de punta a punta");
@@ -343,48 +371,38 @@ test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligenc
   const contact = await prisma.contact.findFirstOrThrow({ where: { tenantId, companyId: company.id } });
   assert.equal(contact.firstName, "Jane");
 
-  // ---------- 9. Human Review real (QTS es un cliente crítico real -- isClientOwnerCandidate) ----------
-  const review = await prisma.humanReviewRequest.findFirstOrThrow({ where: { tenantId, entityType: "company", entityId: company.id } });
-  assert.equal(review.type, "POLICY_EXCEPTION");
-  assert.equal(review.resolvedAt, null);
+  // Nota: el HumanReviewRequest real por isClientOwnerCandidate (Prioridad
+  // 2, "posible cliente actual") ya está cubierto a nivel más preciso por
+  // critical-infrastructure-clients.test.ts + draft-creation-gate.test.ts
+  // + draft.executor.test.ts ("CLIENT_OWNER_REVIEW") -- acá se usa
+  // deliberadamente una empresa que NO matchea ningún cliente crítico,
+  // para poder probar el camino feliz completo hasta un Draft real.
 
-  // ---------- 8. Quality -- disparado por un outreach.draft_created.v1 sintético (Prioridad 2: "no crees outreach en esta etapa") ----------
-  const draftAgentInstance = await prisma.agentInstance.findFirstOrThrow({ where: { tenantId, definition: { key: "contact_intelligence" } } });
-  const draftTask = await prisma.agentTask.create({
-    data: { tenantId, agentInstanceId: draftAgentInstance.id, type: "draft_outreach", status: "DONE", input: {}, triggeredBy: "AGENT", correlationId },
-  });
-  const approval = await prisma.approvalRequest.create({
-    data: {
-      tenantId,
-      agentTaskId: draftTask.id,
-      companyId: company.id,
-      summary: "Borrador sintético E2E",
-      proposedAction: { to: "jane.doe@qts-electrical-fixture.example", subject: "Asunto E2E", body: "Cuerpo real, sin placeholders." },
-      riskLevel: "MEDIUM",
-    },
-  });
-  await withTenant(tenantId, () =>
-    publishEvent(
-      buildEventEnvelope({
-        eventType: "outreach.draft_created.v1",
-        tenantId,
-        correlationId,
-        causationId: null,
-        actorType: "AGENT",
-        actorId: draftAgentInstance.id,
-        entityType: "approval_request",
-        entityId: approval.id,
-        payload: { approvalRequestId: approval.id, companyId: company.id, channel: "EMAIL", subjectPreview: "Asunto E2E" },
-        idempotencyKey: buildIdempotencyKey(correlationId, "outreach.draft_created.v1", approval.id),
-      }),
-    ),
-  );
+  // ---------- 8. Draft real (contact.verified.v1 -> draft_outreach, LLM inyectado) -> Quality ----------
+  const contactVerifiedEvent = await prisma.domainEvent.findFirstOrThrow({ where: { tenantId, type: "contact.verified.v1" } });
+  assert.equal(contactVerifiedEvent.correlationId, correlationId, "contact.verified.v1 también propaga el correlationId de la misión");
 
   await runUntilIdle(orchestrator, dispatcher);
 
+  const draftTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "draft_outreach" } });
+  assert.equal(draftTask.status, "DONE", "el Draft real (LLM inyectado) debe completarse");
+  assert.equal(draftTask.causationId, contactVerifiedEvent.id, "causationId encadena hasta contact.verified.v1");
+
+  const lead = await prisma.lead.findFirstOrThrow({ where: { tenantId, companyId: company.id } });
+  assert.equal(lead.source, "pilot-mission");
+
+  const approval = await prisma.approvalRequest.findFirstOrThrow({ where: { tenantId, companyId: company.id } });
+  assert.equal(approval.status, "PENDING", "el Draft nunca se auto-aprueba -- espera decisión humana");
+  const proposedAction = approval.proposedAction as { to: string; leadId: string };
+  assert.equal(proposedAction.to, "jane.doe@acme-electrical-fixture.example", "usa el email real resuelto por Contact Intelligence, nunca uno inventado");
+  assert.equal(proposedAction.leadId, lead.id);
+
+  const draftCreatedEvent = await prisma.domainEvent.findFirstOrThrow({ where: { tenantId, type: "outreach.draft_created.v1" } });
+  assert.equal(draftCreatedEvent.correlationId, correlationId);
+
   const qualityTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "evaluate_draft_quality" } });
   assert.equal(qualityTask.status, "DONE", "un borrador válido (PASS) completa la tarea normalmente");
-  assert.equal(qualityTask.causationId, (await prisma.domainEvent.findFirstOrThrow({ where: { tenantId, type: "outreach.draft_created.v1" } })).id);
+  assert.equal(qualityTask.causationId, draftCreatedEvent.id);
 
   const qualityEvent = await prisma.domainEvent.findFirstOrThrow({ where: { tenantId, type: "outreach.quality_passed.v1" } });
   assert.equal((qualityEvent.payload as { verdict: string }).verdict, "PASS");
@@ -396,6 +414,9 @@ test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligenc
   assert.ok(kinds.includes("event:company.discovered.v1"));
   assert.ok(kinds.includes("task:find_contacts"));
   assert.ok(kinds.includes("event:contact.discovered.v1"));
+  assert.ok(kinds.includes("event:contact.verified.v1"));
+  assert.ok(kinds.includes("task:draft_outreach"));
+  assert.ok(kinds.includes("event:outreach.draft_created.v1"));
   assert.ok(kinds.includes("task:evaluate_draft_quality"));
   assert.ok(kinds.includes("event:outreach.quality_passed.v1"));
   // Cronológico: el primer elemento es SIEMPRE la tarea raíz.

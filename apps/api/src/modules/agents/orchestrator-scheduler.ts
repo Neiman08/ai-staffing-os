@@ -2,6 +2,7 @@ import { Orchestrator } from "./orchestrator";
 import { createDiscoveryExecutor } from "./executors/discovery.executor";
 import { createContactIntelligenceExecutor } from "./executors/contact-intelligence.executor";
 import { createQualityAgentExecutor } from "./executors/quality.executor";
+import { createDraftExecutor } from "./executors/draft.executor";
 import { reclaimExpiredLeases } from "../../core/queue/postgres-queue";
 import { EventDispatcher } from "../../core/events/dispatcher";
 import { registerPipelineHandlers } from "./pipeline-handlers";
@@ -15,24 +16,16 @@ import { PIPELINE_FLAGS, type PipelineFlags } from "../../core/pipeline-flags";
  * mismo patrón `setInterval` que scheduler.ts/compliance/billing
  * (ver apps/api/src/index.ts).
  *
- * SOLO tareas internas seguras: los 3 AgentExecutor registrados
- * (discover_companies, find_contacts, evaluate_draft_quality) nunca
- * envían un email, nunca agendan una reunión, nunca ejecutan una
- * acción irreversible hacia un tercero real -- coinciden exactamente
- * con los 3 ya construidos y probados en Fase 6/7/8. Ningún
- * AgentExecutor de envío/reunión existe todavía en el proyecto, así
- * que no hay nada peligroso que registrar por error.
- *
- * Propiedad de seguridad real (no solo una intención declarada):
- * ningún flujo de producción hoy crea AgentTask de estos 3 tipos a
- * través de la cola nueva (Fase 3) -- las misiones/tools reales siguen
- * usando el camino directo de task-executor.ts, sin pasar por
- * claimNextTasks. Activar este worker es entonces seguro incluso con
- * credenciales reales de proveedores configuradas: no hay ningún
- * productor que encole trabajo para que este worker reclame, por
- * diseño explícito de esta sesión (ver el reporte final). El worker
- * corre igual, en vacío, dejando la infraestructura real lista para
- * cuando una sesión futura decida conectar la creación de tareas.
+ * SOLO tareas internas seguras: los 4 AgentExecutor registrados
+ * (discover_companies, find_contacts, evaluate_draft_quality,
+ * draft_outreach) nunca envían un email, nunca agendan una reunión,
+ * nunca ejecutan una acción irreversible hacia un tercero real. El
+ * draft_outreach (F26) SÍ llama a un LLM real y SÍ crea un
+ * ApprovalRequest real -- pero un ApprovalRequest nunca se envía solo;
+ * el único camino de envío real (sendApproval, approvals/service.ts,
+ * Microsoft Graph) exige un click humano explícito en "Approve & Send"
+ * y no lee nada de este Orchestrator ni de PIPELINE_FLAGS. Ningún
+ * AgentExecutor de envío/reunión existe en este registro.
  */
 
 const TICK_INTERVAL_MS = 30_000;
@@ -51,6 +44,7 @@ export function buildProductionOrchestrator(flags: PipelineFlags = PIPELINE_FLAG
   if (flags.discoveryAgentEnabled) orchestrator.registerExecutor(createDiscoveryExecutor());
   if (flags.contactIntelligenceAgentEnabled) orchestrator.registerExecutor(createContactIntelligenceExecutor());
   if (flags.qualityAgentEnabled) orchestrator.registerExecutor(createQualityAgentExecutor());
+  if (flags.draftAgentEnabled) orchestrator.registerExecutor(createDraftExecutor());
   return orchestrator;
 }
 

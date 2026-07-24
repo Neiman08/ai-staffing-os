@@ -88,7 +88,7 @@ export function createContactIntelligenceExecutor(): AgentExecutor<ContactIntell
             actorId: context.agentInstanceId,
             entityType: "contact",
             entityId: contact.contactId,
-            payload: { contactId: contact.contactId, emailVerificationStatus: contact.emailDomainTrust },
+            payload: { contactId: contact.contactId, companyId: input.companyId, emailVerificationStatus: contact.emailDomainTrust },
             idempotencyKey: buildIdempotencyKey(context.correlationId, "contact.verified.v1", contact.contactId),
           });
           return [discovered, verified];

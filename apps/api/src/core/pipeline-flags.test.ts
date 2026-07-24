@@ -17,6 +17,7 @@ function allOn(): PipelineFlagSource {
     CONTACT_INTELLIGENCE_AGENT_ENABLED: true,
     QUALITY_AGENT_ENABLED: true,
     EVENT_HANDLERS_ENABLED: true,
+    DRAFT_AGENT_ENABLED: true,
   };
 }
 
@@ -34,6 +35,7 @@ test("PIPELINE_KILL_SWITCH=true apaga todos los flags graduales de una sola vez"
   assert.equal(flags.contactIntelligenceAgentEnabled, false);
   assert.equal(flags.qualityAgentEnabled, false);
   assert.equal(flags.eventHandlersEnabled, false);
+  assert.equal(flags.draftAgentEnabled, false);
 });
 
 test("cada flag gradual respeta su propia fuente cuando el kill switch está apagado", () => {

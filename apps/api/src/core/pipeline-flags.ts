@@ -26,6 +26,7 @@ export interface PipelineFlagSource {
   CONTACT_INTELLIGENCE_AGENT_ENABLED: boolean;
   QUALITY_AGENT_ENABLED: boolean;
   EVENT_HANDLERS_ENABLED: boolean;
+  DRAFT_AGENT_ENABLED: boolean;
 }
 
 export interface PipelineFlags {
@@ -35,6 +36,12 @@ export interface PipelineFlags {
   contactIntelligenceAgentEnabled: boolean;
   qualityAgentEnabled: boolean;
   eventHandlersEnabled: boolean;
+  // F26 (primer piloto de outreach real): gatea SOLO la creación
+  // reactiva del borrador (contact.verified.v1 -> draft_outreach, LLM
+  // real). El envío real (sendApproval/sendEmail, Microsoft Graph) NO
+  // lee este objeto en absoluto -- sigue gateado exclusivamente por un
+  // click humano explícito en "Approve & Send", igual que desde F17.
+  draftAgentEnabled: boolean;
   externalActionsEnabled: false;
   autonomousSendingEnabled: false;
 }
@@ -49,6 +56,7 @@ export function computePipelineFlags(source: PipelineFlagSource): PipelineFlags 
     contactIntelligenceAgentEnabled: !killed && source.CONTACT_INTELLIGENCE_AGENT_ENABLED,
     qualityAgentEnabled: !killed && source.QUALITY_AGENT_ENABLED,
     eventHandlersEnabled: !killed && source.EVENT_HANDLERS_ENABLED,
+    draftAgentEnabled: !killed && source.DRAFT_AGENT_ENABLED,
     // Nunca derivan de `source` -- ver docstring del archivo.
     externalActionsEnabled: false,
     autonomousSendingEnabled: false,

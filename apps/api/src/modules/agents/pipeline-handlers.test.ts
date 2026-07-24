@@ -40,6 +40,7 @@ function allFlagsOff(): PipelineFlags {
     contactIntelligenceAgentEnabled: false,
     qualityAgentEnabled: false,
     eventHandlersEnabled: false,
+    draftAgentEnabled: false,
     externalActionsEnabled: false,
     autonomousSendingEnabled: false,
   };
@@ -54,6 +55,8 @@ async function setupTenant(suffix: string): Promise<{ tenantId: string; agentIns
   const contactIntelInstance = await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: contactIntelDefinition.id, isActive: true } });
   const qualityDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "quality" } });
   await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: qualityDefinition.id, isActive: true } });
+  const salesDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "sales" } });
+  await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: salesDefinition.id, isActive: true } });
   const industry = await prisma.industry.findFirstOrThrow();
   return { tenantId: tenant.id, agentInstanceId: contactIntelInstance.id, industryId: industry.id };
 }
@@ -185,6 +188,100 @@ test("company.discovered.v1: idempotente -- procesar el mismo evento dos veces n
 
   const tasks = await prisma.agentTask.findMany({ where: { tenantId, type: "find_contacts" } });
   assert.equal(tasks.length, 1, "el índice único de idempotencyKey garantiza una sola tarea, no una convención de aplicación");
+});
+
+// ---------- F26 (primer piloto de outreach real): contact.verified.v1 -> draft_outreach ----------
+
+test("contact.verified.v1: sin draftAgentEnabled, no crea ninguna tarea", async () => {
+  const { tenantId, industryId } = await setupTenant("contact-verified-off");
+  const company = await prisma.company.create({ data: { tenantId, name: "Acme Electrical", industryId, status: "LEAD", origin: "API_PROVIDER" } });
+
+  await withTenant(tenantId, () =>
+    publishEvent(
+      buildEventEnvelope({
+        eventType: "contact.verified.v1",
+        tenantId,
+        correlationId: "mission_test",
+        causationId: null,
+        actorType: "AGENT",
+        actorId: "agentinstance_test",
+        entityType: "contact",
+        entityId: "contact_test",
+        payload: { contactId: "contact_test", companyId: company.id, emailVerificationStatus: "VERIFIED" },
+        idempotencyKey: `test-contact-verified-off-${company.id}`,
+      }),
+    ),
+  );
+
+  const dispatcher = new EventDispatcher();
+  registerPipelineHandlers(dispatcher, allFlagsOff());
+  await dispatcher.runOnce();
+
+  assert.equal(await prisma.agentTask.count({ where: { tenantId, type: "draft_outreach" } }), 0);
+});
+
+test("contact.verified.v1: con draftAgentEnabled, crea draft_outreach real con companyId del payload", async () => {
+  const { tenantId, industryId } = await setupTenant("contact-verified-on");
+  const company = await prisma.company.create({ data: { tenantId, name: "Acme Electrical", industryId, status: "LEAD", origin: "API_PROVIDER" } });
+
+  await withTenant(tenantId, () =>
+    publishEvent(
+      buildEventEnvelope({
+        eventType: "contact.verified.v1",
+        tenantId,
+        correlationId: "mission_test",
+        causationId: null,
+        actorType: "AGENT",
+        actorId: "agentinstance_test",
+        entityType: "contact",
+        entityId: "contact_test",
+        payload: { contactId: "contact_test", companyId: company.id, emailVerificationStatus: "VERIFIED" },
+        idempotencyKey: `test-contact-verified-on-${company.id}`,
+      }),
+    ),
+  );
+
+  const dispatcher = new EventDispatcher();
+  registerPipelineHandlers(dispatcher, { ...allFlagsOff(), draftAgentEnabled: true });
+  const metrics = await dispatcher.runOnce();
+
+  assert.equal(metrics.failed, 0);
+  const task = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "draft_outreach" } });
+  assert.equal(task.status, "QUEUED");
+  assert.equal(task.triggeredBy, "EVENT");
+  assert.equal(task.correlationId, "mission_test");
+  const input = task.input as { companyId: string };
+  assert.equal(input.companyId, company.id);
+});
+
+test("contact.verified.v1: idempotente -- dos contactos verificados de la MISMA Company solo crean una draft_outreach", async () => {
+  const { tenantId, industryId } = await setupTenant("contact-verified-idempotent");
+  const company = await prisma.company.create({ data: { tenantId, name: "Acme Electrical", industryId, status: "LEAD", origin: "API_PROVIDER" } });
+
+  const flags = { ...allFlagsOff(), draftAgentEnabled: true };
+  for (const contactId of ["contact_a", "contact_b"]) {
+    await withTenant(tenantId, () =>
+      publishEvent(
+        buildEventEnvelope({
+          eventType: "contact.verified.v1",
+          tenantId,
+          correlationId: "mission_test",
+          causationId: null,
+          actorType: "AGENT",
+          actorId: "agentinstance_test",
+          entityType: "contact",
+          entityId: contactId,
+          payload: { contactId, companyId: company.id, emailVerificationStatus: "VERIFIED" },
+          idempotencyKey: `test-contact-verified-idem-${contactId}`,
+        }),
+      ),
+    );
+    const dispatcher = new EventDispatcher();
+    registerPipelineHandlers(dispatcher, flags);
+    await dispatcher.runOnce();
+  }
+
+  assert.equal(await prisma.agentTask.count({ where: { tenantId, type: "draft_outreach" } }), 1, "un solo draft_outreach por Company, sin importar cuántos contactos se verifiquen");
 });
 
 test("outreach.draft_created.v1: con qualityAgentEnabled, crea evaluate_draft_quality con los datos reales de la ApprovalRequest", async () => {

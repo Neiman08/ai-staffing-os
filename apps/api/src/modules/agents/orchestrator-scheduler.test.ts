@@ -25,6 +25,7 @@ function allFlagsOff(): PipelineFlags {
     contactIntelligenceAgentEnabled: false,
     qualityAgentEnabled: false,
     eventHandlersEnabled: false,
+    draftAgentEnabled: false,
     externalActionsEnabled: false,
     autonomousSendingEnabled: false,
   };

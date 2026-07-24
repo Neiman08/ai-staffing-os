@@ -376,3 +376,57 @@ test("un fallo real del proveedor deja el ApprovalRequest en FAILED (reintentabl
     assert.equal(retry.status, "SENT");
   });
 });
+
+// F26 (primer piloto de outreach real): checkSendLimits corre DENTRO de
+// sendApproval, antes de llamar al proveedor -- probado acá end-to-end
+// (no solo la función pura en send-limits.test.ts) para confirmar que un
+// bloqueo real de verdad nunca llega a golpear a Microsoft Graph.
+test("sendApproval real: un segundo borrador al MISMO destinatario nunca llega al proveedor -- se bloquea por duplicado antes", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("dedup-blocks-send");
+  const company = await prisma.company.create({ data: { tenantId, name: "Dedup Co", industryId, status: "LEAD" } });
+  const company2 = await prisma.company.create({ data: { tenantId, name: "Dedup Co 2", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const first = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Primer borrador",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "mismo@dedup.example", subject: "s1", body: "b1" },
+        riskLevel: "MEDIUM",
+      },
+    });
+    await decideApproval(first.id, { decision: "APPROVED" });
+    const firstSend = await sendApproval(first.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+    assert.equal(firstSend.status, "SENT");
+
+    const second = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Segundo borrador, mismo destinatario",
+        proposedAction: { channel: "EMAIL", companyId: company2.id, to: "mismo@dedup.example", subject: "s2", body: "b2" },
+        riskLevel: "MEDIUM",
+      },
+    });
+    await decideApproval(second.id, { decision: "APPROVED" });
+
+    let calledProvider = false;
+    const trackedProvider: MicrosoftGraphProviderPort = {
+      sendGraphMail: async () => {
+        calledProvider = true;
+        return { kind: "sent", providerMessageId: "should-never-happen", conversationId: null };
+      },
+    };
+    await assert.rejects(
+      () => sendApproval(second.id, { graphProvider: trackedProvider, ...FAKE_AZURE }),
+      (err: unknown) => err instanceof AppError && err.status === 400 && /nunca se envía dos veces/i.test(err.message),
+    );
+    assert.equal(calledProvider, false, "el proveedor real nunca debe llamarse cuando el límite bloquea antes");
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: second.id } });
+    assert.equal(stored.status, "FAILED", "reintentable, nunca queda trabado en SENDING");
+  });
+
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId, status: "SENT" } }), 1, "el segundo intento nunca llega a crear un EmailMessage enviado");
+});

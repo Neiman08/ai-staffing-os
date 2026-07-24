@@ -21,10 +21,7 @@ import type { EventDispatcher } from "../../core/events/dispatcher";
  * (correlationId/causationId propagados) y reintentable (una falla acá
  * hace que EventDispatcher.runOnce marque el evento failed -- replay
  * seguro, ver outbox.ts). "No agregues handlers vacíos": solo se
- * registran los que hacen algo real -- contact.verified.v1 no tiene un
- * handler propio porque no hay ninguna acción real que disparar todavía
- * más allá de lo que ya hace contact.discovered.v1 (mismo evento
- * source, ver contact-intelligence.executor.ts).
+ * registran los que hacen algo real.
  */
 
 function eventTenantContext(event: DomainEvent) {
@@ -105,6 +102,56 @@ async function handleCompanyDiscovered(event: DomainEvent, flags: PipelineFlags)
       data: { input: { ...(task.input as object), taskId: task.id } as Prisma.InputJsonValue },
     });
     logger.info("pipeline_handler_created_task", { handler: "company.discovered.v1", taskId: task.id, companyId: company.id });
+  });
+}
+
+/**
+ * F26 (primer piloto de outreach real): contact.verified.v1 -> crea
+ * draft_outreach (gateado por draftAgentEnabled) -- el paso reactivo que
+ * faltaba entre Contact Intelligence y Draft. Se dispara sobre
+ * contact.verified.v1 (nunca contact.discovered.v1): ese evento
+ * específicamente significa "este contacto pasó emailDomainTrust", la
+ * misma barra que resolveBestContactChannel exige para sus tiers 1-2
+ * (VERIFIED_PERSON_EMAIL/VERIFIED_ORG_EMAIL) -- nunca se intenta redactar
+ * sobre un contacto sin evidencia real de email.
+ */
+async function handleContactVerified(event: DomainEvent, flags: PipelineFlags): Promise<void> {
+  if (!flags.draftAgentEnabled) return;
+  const payload = event.payload as { companyId?: string };
+  if (!payload.companyId) return;
+
+  await runWithTenancyContext(eventTenantContext(event), async () => {
+    if (!(await isPilotMissionActive(event.correlationId))) {
+      logger.info("pipeline_handler_mission_inactive_skip", { handler: "contact.verified.v1", correlationId: event.correlationId });
+      return;
+    }
+
+    const companyId = payload.companyId!;
+    const agentInstance = await resolveAgentInstance("sales");
+    const idempotencyKey = buildIdempotencyKey(event.correlationId ?? companyId, "draft_outreach", companyId);
+
+    try {
+      await scopedDb.agentTask.create({
+        data: {
+          tenantId: event.tenantId,
+          agentInstanceId: agentInstance.id,
+          type: "draft_outreach",
+          status: "QUEUED",
+          triggeredBy: "EVENT",
+          correlationId: event.correlationId,
+          causationId: event.id,
+          idempotencyKey,
+          input: { companyId } as Prisma.InputJsonValue,
+        },
+      });
+      logger.info("pipeline_handler_created_task", { handler: "contact.verified.v1", companyId });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        logger.info("pipeline_handler_idempotent_skip", { handler: "contact.verified.v1", companyId });
+        return;
+      }
+      throw err;
+    }
   });
 }
 
@@ -197,6 +244,7 @@ async function handleHumanReviewResolved(event: DomainEvent): Promise<void> {
 
 export function registerPipelineHandlers(dispatcher: EventDispatcher, flags: PipelineFlags = PIPELINE_FLAGS): void {
   dispatcher.registerHandler("company.discovered.v1", (event) => handleCompanyDiscovered(event, flags));
+  dispatcher.registerHandler("contact.verified.v1", (event) => handleContactVerified(event, flags));
   dispatcher.registerHandler("outreach.draft_created.v1", (event) => handleOutreachDraftCreated(event, flags));
   dispatcher.registerHandler("human.review_resolved.v1", handleHumanReviewResolved);
 }
