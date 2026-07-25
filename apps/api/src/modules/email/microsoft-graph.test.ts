@@ -1,6 +1,7 @@
-import { test, beforeEach, after } from "node:test";
+import { test, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
-import { sendGraphMail, getAccessToken, resetTokenCacheForTests, checkMicrosoftGraphHealth } from "./microsoft-graph";
+import { prisma } from "@ai-staffing-os/db";
+import { sendGraphMail, getAccessToken, resetTokenCacheForTests, checkMicrosoftGraphHealth, type SendAuthorization } from "./microsoft-graph";
 import { resetProviderHealthForTests } from "../agents/tools/provider-health";
 
 /**
@@ -8,6 +9,13 @@ import { resetProviderHealthForTests } from "../agents/tools/provider-health";
  * llamadas de red reales, `global.fetch` se reemplaza por un fake
  * distinto en cada test. Mismo criterio del resto del repo: nunca se
  * llama a un proveedor real en un test unitario.
+ *
+ * F27 Fase 5: `sendGraphMail` ahora exige un `SendAuthorization` real
+ * (ver comentario en microsoft-graph.ts) -- estos tests llaman la
+ * función real directamente (no a través de email-service.ts), así que
+ * necesitan una fila PENDING real de EmailMessage para autorizar cada
+ * llamada, igual que en producción. Una sola fila fixture, reutilizada
+ * por todos los tests de sendGraphMail -- la función nunca la muta.
  */
 
 const originalFetch = globalThis.fetch;
@@ -21,6 +29,36 @@ beforeEach(() => {
 });
 
 const FAKE_CREDS = { tenantId: "fake-tenant", clientId: "fake-client", clientSecret: "SUPER-SECRET-VALUE" };
+
+const TEST_PREFIX = "F27-GRAPH-CLIENT-TEST";
+let AUTH: SendAuthorization;
+let fixtureTenantId: string;
+
+before(async () => {
+  const tenant = await prisma.tenant.create({ data: { name: TEST_PREFIX, slug: `${TEST_PREFIX.toLowerCase()}-${Date.now()}` } });
+  fixtureTenantId = tenant.id;
+  const emailMessage = await prisma.emailMessage.create({
+    data: {
+      tenantId: tenant.id,
+      senderProfile: "COMMERCIAL",
+      fromEmail: "sales@dreistaff.com",
+      fromName: "DreiStaff Sales",
+      toEmail: "prospect@example.com",
+      subject: "Test",
+      provider: "microsoft_graph",
+      status: "PENDING",
+      correlationId: `${TEST_PREFIX}-corr-${Date.now()}`,
+    },
+  });
+  AUTH = { emailMessageId: emailMessage.id, tenantId: tenant.id, correlationId: emailMessage.correlationId!, actorType: "HUMAN", actorId: "test-user" };
+});
+
+after(async () => {
+  if (fixtureTenantId) {
+    await prisma.emailMessage.deleteMany({ where: { tenantId: fixtureTenantId } });
+    await prisma.tenant.deleteMany({ where: { id: fixtureTenantId } });
+  }
+});
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -155,6 +193,7 @@ test("sendGraphMail: camino feliz -- crea el mensaje (201, id real) y lo envía 
       to: [{ email: "prospect@example.com" }],
       subject: "Test",
       bodyText: "Hello",
+      auth: AUTH,
     },
     FAKE_CREDS,
   );
@@ -192,6 +231,7 @@ test("sendGraphMail: 403 ErrorSendAsDenied al crear el mensaje -- falla, NUNCA r
       to: [{ email: "prospect@example.com" }],
       subject: "Test",
       bodyText: "Hello",
+      auth: AUTH,
     },
     FAKE_CREDS,
   );
@@ -219,6 +259,7 @@ test("sendGraphMail: 429 al crear el mensaje -- clasificado recuperable (RETRYAB
       to: [{ email: "prospect@example.com" }],
       subject: "Test",
       bodyText: "Hello",
+      auth: AUTH,
     },
     FAKE_CREDS,
   );
@@ -248,6 +289,7 @@ test("sendGraphMail: 5xx al enviar el borrador ya creado -- recuperable, el mens
       to: [{ email: "prospect@example.com" }],
       subject: "Test",
       bodyText: "Hello",
+      auth: AUTH,
     },
     FAKE_CREDS,
   );
@@ -268,14 +310,14 @@ test("sendGraphMail: circuito abierto tras un 401 -- la siguiente llamada NUNCA 
   });
 
   const first = await sendGraphMail(
-    { mailbox: "sales@dreistaff.com", from: { email: "sales@dreistaff.com" }, to: [{ email: "x@example.com" }], subject: "s", bodyText: "b" },
+    { mailbox: "sales@dreistaff.com", from: { email: "sales@dreistaff.com" }, to: [{ email: "x@example.com" }], subject: "s", bodyText: "b", auth: AUTH },
     FAKE_CREDS,
   );
   assert.equal(first.kind, "failed");
   const callsAfterFirst = realFetchCalls;
 
   const second = await sendGraphMail(
-    { mailbox: "sales@dreistaff.com", from: { email: "sales@dreistaff.com" }, to: [{ email: "x@example.com" }], subject: "s", bodyText: "b" },
+    { mailbox: "sales@dreistaff.com", from: { email: "sales@dreistaff.com" }, to: [{ email: "x@example.com" }], subject: "s", bodyText: "b", auth: AUTH },
     FAKE_CREDS,
   );
   assert.equal(second.kind, "failed");
@@ -325,4 +367,50 @@ test("checkMicrosoftGraphHealth: credenciales inválidas -> healthy:false con mo
   const result = await checkMicrosoftGraphHealth(FAKE_CREDS);
   assert.equal(result.healthy, false);
   assert.match(result.reason ?? "", /invalid_client/);
+});
+
+// ---------- F27 Fase 5: SendAuthorization -- nunca se puede llamar sin un EmailMessage PENDING real ----------
+
+test("sendGraphMail: sin un EmailMessage PENDING real que respalde el auth, se rechaza ANTES de tocar la red -- ni siquiera pide un token", async () => {
+  let networkTouched = false;
+  globalThis.fetch = (async () => {
+    networkTouched = true;
+    return jsonResponse(200, { access_token: "fake-token", expires_in: 3600 });
+  }) as typeof fetch;
+
+  const fakeAuth: SendAuthorization = { emailMessageId: "does-not-exist", tenantId: fixtureTenantId, correlationId: "does-not-exist-either", actorType: "HUMAN", actorId: "test-user" };
+  const result = await sendGraphMail(
+    { mailbox: "sales@dreistaff.com", from: { email: "sales@dreistaff.com" }, to: [{ email: "x@example.com" }], subject: "s", bodyText: "b", auth: fakeAuth },
+    FAKE_CREDS,
+  );
+
+  assert.equal(result.kind, "failed");
+  if (result.kind === "failed") {
+    assert.equal(result.retryable, false);
+    assert.match(result.reason, /no existe un EmailMessage PENDING real/);
+  }
+  assert.equal(networkTouched, false, "un envío sin autorización real nunca debe llegar a pedir un token ni tocar Graph");
+});
+
+test("sendGraphMail: un correlationId real pero de OTRO tenant nunca autoriza el envío", async () => {
+  const other = await prisma.tenant.create({ data: { name: "F27-OTHER-TENANT", slug: `f27-other-tenant-${Date.now()}` } });
+  try {
+    let networkTouched = false;
+    globalThis.fetch = (async () => {
+      networkTouched = true;
+      return jsonResponse(200, { access_token: "fake-token", expires_in: 3600 });
+    }) as typeof fetch;
+
+    // AUTH.correlationId/emailMessageId son reales -- pero se pasa el tenantId de OTRO tenant.
+    const crossTenantAuth: SendAuthorization = { ...AUTH, tenantId: other.id };
+    const result = await sendGraphMail(
+      { mailbox: "sales@dreistaff.com", from: { email: "sales@dreistaff.com" }, to: [{ email: "x@example.com" }], subject: "s", bodyText: "b", auth: crossTenantAuth },
+      FAKE_CREDS,
+    );
+
+    assert.equal(result.kind, "failed");
+    assert.equal(networkTouched, false, "un tenantId que no coincide con la fila real nunca debe autorizar el envío");
+  } finally {
+    await prisma.tenant.deleteMany({ where: { id: other.id } });
+  }
 });

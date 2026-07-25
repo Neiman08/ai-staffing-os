@@ -175,6 +175,7 @@ export async function sendEmail(params: SendEmailParams): Promise<SendEmailResul
       subject: params.subject,
       bodyHtml: params.bodyHtml,
       bodyText: params.bodyText,
+      auth: { emailMessageId: emailMessage.id, tenantId: ctx.tenantId, correlationId, actorType, actorId },
       abortSignal: params.abortSignal,
     },
     { tenantId: azureTenantId, clientId: azureClientId, clientSecret: azureClientSecret },

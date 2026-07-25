@@ -1,4 +1,5 @@
 import type { ProviderStatusValue } from "@ai-staffing-os/agents";
+import { prisma } from "@ai-staffing-os/db";
 import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "../agents/tools/provider-health";
 
 /**
@@ -182,6 +183,28 @@ export interface GraphEmailAddress {
   name?: string;
 }
 
+/**
+ * F27 Fase 5 (hallazgo real de esta misión: 5 correos reales llegaron a
+ * Graph sin ningún EmailMessage/ApprovalRequest/AuditLog, porque un
+ * script ad-hoc pudo importar `sendGraphMail` directamente y llamarlo
+ * con datos inventados -- esta función de bajo nivel no tenía forma de
+ * saber que no venía de email-service.ts). `auth` nunca se puede
+ * fabricar de la nada: exige el id/correlationId reales de un
+ * EmailMessage que YA existe en estado PENDING para este tenant --
+ * exactamente lo que `sendEmail()` (el único llamador de producción)
+ * crea justo antes de llamar acá, nunca después. Un script que quiera
+ * saltarse esto tendría que crear esa fila PENDING primero -- en cuyo
+ * caso ya dejó el mismo rastro real que este endurecimiento existe para
+ * garantizar, así que deja de ser un envío "fuera del flujo oficial".
+ */
+export interface SendAuthorization {
+  emailMessageId: string;
+  tenantId: string;
+  correlationId: string;
+  actorType: "HUMAN" | "AGENT" | "SYSTEM";
+  actorId: string;
+}
+
 export interface SendGraphMailParams {
   taskId?: string;
   mailbox: string; // ej. "sales@dreistaff.com" -- SIEMPRE /users/{mailbox}, nunca /me
@@ -193,6 +216,7 @@ export interface SendGraphMailParams {
   subject: string;
   bodyHtml?: string;
   bodyText?: string;
+  auth: SendAuthorization;
   abortSignal?: AbortSignal;
 }
 
@@ -302,6 +326,23 @@ async function graphFetch(
  * enviarlo. Nunca marca "sent" sin la confirmación real de ambos pasos.
  */
 export async function sendGraphMail(params: SendGraphMailParams, creds: GraphCredentials): Promise<SendGraphMailResult> {
+  // F27 Fase 5: rechazo real ANTES de gastar ningún token/llamada a
+  // Graph -- ver comentario de SendAuthorization arriba. Nunca confía en
+  // que el llamador "seguramente" viene de email-service.ts; lo verifica
+  // leyendo la fila real.
+  const authorizedRow = await prisma.emailMessage.findFirst({
+    where: { id: params.auth.emailMessageId, tenantId: params.auth.tenantId, correlationId: params.auth.correlationId, status: "PENDING" },
+    select: { id: true },
+  });
+  if (!authorizedRow) {
+    return {
+      kind: "failed",
+      reason: "sendGraphMail: no existe un EmailMessage PENDING real con este emailMessageId/correlationId/tenantId -- rechazado antes de tocar Microsoft Graph (protección contra envíos fuera del flujo oficial, ver SendAuthorization)",
+      retryable: false,
+      providerStatus: "AVAILABLE",
+    };
+  }
+
   const existingHealth = getProviderHealth(PROVIDER_KEY);
   if (existingHealth && existingHealth.status !== "AVAILABLE") {
     return {
