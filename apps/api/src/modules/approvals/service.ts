@@ -511,8 +511,22 @@ export async function sendApproval(id: string, deps: SendApprovalDeps = {}): Pro
       azureClientId: deps.azureClientId,
       azureClientSecret: deps.azureClientSecret,
     });
-    emailSendResult = { status: sent.status, providerMessageId: sent.providerMessageId, errorMessage: sent.errorMessage };
-    finalStatus = sent.status === "SENT" ? "SENT" : "FAILED";
+    // F27: ApprovalRequest.status="SENT" sigue significando lo mismo de
+    // siempre ("la acción humana de envío se completó del lado del
+    // proveedor") -- lo que cambia es que ya NUNCA se confunde con
+    // "entregado confirmado". Ese detalle fino vive en EmailMessage
+    // (ACCEPTED_BY_PROVIDER -> SENT_CONFIRMED/BOUNCED/DELIVERY_UNKNOWN,
+    // ver reconciliation.ts), reflejado acá en emailSendResult.status
+    // para que la UI muestre el estado real, no uno optimista.
+    emailSendResult = {
+      status: sent.status === "ACCEPTED_BY_PROVIDER" ? "ACCEPTED_BY_PROVIDER" : sent.status,
+      providerMessageId: sent.providerMessageId,
+      internetMessageId: sent.internetMessageId,
+      conversationId: sent.conversationId,
+      correlationId: sent.correlationId,
+      errorMessage: sent.errorMessage,
+    };
+    finalStatus = sent.status === "ACCEPTED_BY_PROVIDER" ? "SENT" : "FAILED";
   } catch (err) {
     // Error de programación/uso real -- se registra igual como fallo
     // real, nunca deja el ApprovalRequest trabado en SENDING.

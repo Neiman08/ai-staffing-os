@@ -162,10 +162,17 @@ export const riskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
 // listApprovals) -- feedback inmediato de si el envío real vía
 // Microsoft Graph funcionó. `null` = no era un borrador de email (ej.
 // LinkedIn, o la decisión fue REJECTED). Ver modules/email/email-service.ts.
+// F27: "SENT" queda solo por compatibilidad con filas viejas -- ningún
+// código nuevo lo escribe. ACCEPTED_BY_PROVIDER es el único estado de
+// éxito real que sendEmail() puede devolver desde F27 (ver
+// email-service.ts) -- Graph aceptó el /send (202), nunca "se entregó".
 export const approvalEmailSendResultSchema = z
   .object({
-    status: z.enum(["SENT", "FAILED", "RETRYABLE"]),
+    status: z.enum(["SENT", "ACCEPTED_BY_PROVIDER", "FAILED", "RETRYABLE"]),
     providerMessageId: z.string().nullable(),
+    internetMessageId: z.string().nullable().optional(),
+    conversationId: z.string().nullable().optional(),
+    correlationId: z.string().nullable().optional(),
     errorMessage: z.string().nullable(),
   })
   .nullable();

@@ -72,6 +72,10 @@ const STRICT_TENANT_MODELS = new Set([
   "CompanyContactPoint",
   // F17: EmailMessage tiene tenantId requerido, no-nullable -- mismo criterio que el resto.
   "EmailMessage",
+  // F27: EmailReconciliationAlert tiene tenantId requerido, no-nullable --
+  // mismo criterio que el resto (ver hallazgo documentado arriba sobre
+  // qué pasa si un modelo STRICT se olvida acá).
+  "EmailReconciliationAlert",
 ]);
 
 /**

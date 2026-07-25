@@ -2279,9 +2279,21 @@ model ApprovalRequest {
 
 enum EmailMessageStatus {
   PENDING // creada, todavía no se intentó el envío real
-  SENT // Microsoft Graph confirmó el envío (HTTP 202, con messageId real cuando Graph lo devuelve)
+  // F27 (endurecimiento de trazabilidad): SENT queda como estado LEGADO --
+  // ningún código nuevo lo escribe. Antes de F27 significaba "Graph
+  // aceptó el /send (202)", que es exactamente la confusión que este
+  // cambio corrige (202 = aceptado, NUNCA "enviado" ni "entregado"
+  // confirmado). Las filas viejas con SENT se preservan tal cual, sin
+  // reinterpretar ni migrar su significado retroactivamente.
+  SENT
   FAILED // error real de Graph que NO amerita reintento (ej. 403 ErrorSendAsDenied, remitente inválido)
   RETRYABLE // error transitorio real (429/5xx/timeout) -- puede reintentarse
+  // ---- F27: estados nuevos, más finos, que reemplazan a SENT hacia adelante ----
+  ACCEPTED_BY_PROVIDER // Graph devolvió 202 al /send -- confirma que la solicitud fue aceptada para procesar, NUNCA que se entregó ni que existe en Sent Items todavía.
+  SENT_CONFIRMED // el reconciliador encontró el mensaje real en la carpeta Sent Items del buzón remitente correcto -- confirmación real, no inferida.
+  DELIVERED // evidencia real de entrega en el buzón del destinatario (hoy no se implementa ningún chequeo automático de esto -- placeholder para una integración futura real, nunca se escribe sin evidencia).
+  BOUNCED // se encontró un NDR (Non-Delivery Report) real, relacionado por ventana temporal + destinatario, en el Inbox del buzón remitente.
+  DELIVERY_UNKNOWN // venció la ventana razonable de verificación sin encontrar el mensaje en Sent Items ni un NDR -- estado honesto de "no se pudo confirmar", nunca se fuerza a SENT_CONFIRMED ni BOUNCED sin evidencia.
 }
 
 // F17: distingue el propósito real del envío -- nunca un `from` de texto
@@ -2329,10 +2341,74 @@ model EmailMessage {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
+  // ---- F27 (endurecimiento de trazabilidad) -- todo aditivo, nulo en cualquier fila previa ----
+  // Id real de RFC 5322 (Message-ID header) -- distinto del providerMessageId
+  // (id interno de Graph, inmutable gracias a `Prefer: IdType="ImmutableId"`)
+  // y del conversationId (agrupa un hilo, no un mensaje puntual). Es el
+  // identificador más estable para buscar el mensaje real más adelante.
+  internetMessageId    String?
+  // Identificador interno único de ESTE intento de envío -- generado por
+  // DreiStaff antes de llamar a Graph, propagado a AuditLog y disponible
+  // para correlacionar logs/reportes sin depender de ningún id que
+  // devuelva un proveedor externo.
+  correlationId        String?   @unique
+  // Timestamps reales de cada transición verificable (nunca inferidos):
+  acceptedAt           DateTime? // Graph devolvió 202 al /send
+  sentItemsConfirmedAt DateTime? // el reconciliador lo encontró en Sent Items
+  lastCheckedAt        DateTime? // última vez que el reconciliador lo revisó, haya encontrado algo o no
+  ndrReceivedAt        DateTime?
+  ndrDetail            String? // texto plano del NDR real (SMTP diagnostic), nunca inventado
+  normalizedError      String? // clasificación corta y estable del error real (ej. "ErrorSendAsDenied"), separado de errorMessage (texto completo/legado)
+  // Metadata de la respuesta real de Graph -- nunca un token/secreto, solo
+  // encabezados/códigos de diagnóstico ya públicos en la respuesta HTTP.
+  graphClientRequestId String?
+  httpStatusCode       Int?
+  // Quién disparó este envío -- HUMAN (Approve & Send / envío manual) o
+  // AGENT (ningún camino real hoy, campo preparado para cuando exista).
+  actorType            ActorType?
+  actorId              String?
+
   @@index([tenantId, status])
   @@index([tenantId, approvalRequestId])
   @@index([tenantId, leadId])
   @@index([tenantId, opportunityId])
+  @@index([tenantId, internetMessageId])
+  @@index([status, acceptedAt])
+}
+
+// F27 (Fase 4, reconciliación): un mensaje real encontrado en Sent Items
+// del buzón configurado que NO tiene ningún EmailMessage correspondiente
+// -- el hallazgo real que motivó todo este endurecimiento (5 correos
+// reales sin ningún registro en el CRM). Nunca se inventa un
+// ApprovalRequest para esto -- es evidencia de que algo envió por fuera
+// del flujo oficial, se registra como tal para que un humano lo revise.
+model EmailReconciliationAlert {
+  id                String                         @id @default(cuid())
+  tenantId          String
+  mailbox           String
+  graphMessageId    String // id inmutable de Graph -- único por mensaje real
+  internetMessageId String?
+  subject           String?
+  toRecipients      String[]                       @default([])
+  sentDateTime      DateTime?
+  discoveredAt      DateTime                       @default(now())
+  status            EmailReconciliationAlertStatus @default(OPEN)
+  // Evidencia mínima seria (nunca el cuerpo completo del mensaje real) --
+  // suficiente para que un humano decida qué hacer, sin duplicar
+  // contenido sensible de un buzón real en esta base.
+  evidence          Json?
+  acknowledgedById  String?
+  acknowledgedAt    DateTime?
+  createdAt         DateTime                       @default(now())
+
+  @@unique([tenantId, mailbox, graphMessageId])
+  @@index([tenantId, status])
+}
+
+enum EmailReconciliationAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  DISMISSED
 }
 
 // ================= AUDITORÍA, EVENTOS, NOTIFICACIONES =================

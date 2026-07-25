@@ -52,7 +52,9 @@ after(async () => {
   }
 });
 
-function fakeGraphProvider(sent: SendGraphMailResult = { kind: "sent", providerMessageId: "fake-msg-id", conversationId: "fake-conv-id" }): MicrosoftGraphProviderPort {
+function fakeGraphProvider(
+  sent: SendGraphMailResult = { kind: "sent", providerMessageId: "fake-msg-id", conversationId: "fake-conv-id", internetMessageId: "<fake@dreistaff.com>", httpStatus: 202, clientRequestId: "fake-request-id" },
+): MicrosoftGraphProviderPort {
   return { sendGraphMail: async () => sent };
 }
 
@@ -136,7 +138,7 @@ test("sendApproval sobre un draft F14/F15 (proposedAction.to ya resuelto) envía
     const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
     assert.equal(result.status, "SENT");
-    assert.equal(result.emailSendResult?.status, "SENT");
+    assert.equal(result.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
     assert.equal(result.emailSendResult?.providerMessageId, "fake-msg-id");
     assert.ok(result.sentAt);
     assert.ok(result.sentByLabel);
@@ -144,7 +146,7 @@ test("sendApproval sobre un draft F14/F15 (proposedAction.to ya resuelto) envía
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "info@acme-electrical.example");
     assert.equal(row.fromEmail, "sales@dreistaff.com");
-    assert.equal(row.status, "SENT");
+    assert.equal(row.status, "ACCEPTED_BY_PROVIDER");
 
     const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
     assert.equal(stored.status, "SENT");
@@ -173,7 +175,7 @@ test("sendApproval de sales-tools (leadId + contactId, sin `to`) resuelve el ema
     await decideApproval(approval.id, { decision: "APPROVED" });
     const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
-    assert.equal(result.emailSendResult?.status, "SENT");
+    assert.equal(result.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "jane.doe@beta-mfg.example");
     assert.equal(row.leadId, lead.id);
@@ -202,7 +204,7 @@ test("sendApproval del loop clásico de Campaign (campaignCompanyId, sin `to`) r
     await decideApproval(approval.id, { decision: "APPROVED" });
     const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
-    assert.equal(result.emailSendResult?.status, "SENT");
+    assert.equal(result.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "bob.smith@delta-electrical.example");
     assert.equal(row.companyId, company.id);
@@ -415,7 +417,7 @@ test("sendApproval real: un segundo borrador al MISMO destinatario nunca llega a
     const trackedProvider: MicrosoftGraphProviderPort = {
       sendGraphMail: async () => {
         calledProvider = true;
-        return { kind: "sent", providerMessageId: "should-never-happen", conversationId: null };
+        return { kind: "sent", providerMessageId: "should-never-happen", conversationId: null, internetMessageId: null, httpStatus: 202, clientRequestId: null };
       },
     };
     await assert.rejects(
@@ -428,5 +430,5 @@ test("sendApproval real: un segundo borrador al MISMO destinatario nunca llega a
     assert.equal(stored.status, "FAILED", "reintentable, nunca queda trabado en SENDING");
   });
 
-  assert.equal(await prisma.emailMessage.count({ where: { tenantId, status: "SENT" } }), 1, "el segundo intento nunca llega a crear un EmailMessage enviado");
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId, status: "ACCEPTED_BY_PROVIDER" } }), 1, "el segundo intento nunca llega a crear un EmailMessage enviado");
 });

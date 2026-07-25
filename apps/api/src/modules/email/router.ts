@@ -6,6 +6,10 @@ import { env } from "../../core/env";
 import { AppError } from "../../core/errors";
 import { sendEmail } from "./email-service";
 import { investigateDelivery } from "./microsoft-graph";
+import { DISPATCHED_EMAIL_STATUSES } from "./send-limits";
+import { reconcileMailbox } from "./reconciliation";
+import { resolveSender } from "./sender-profiles";
+import { getTenancyContext } from "../../core/tenancy/context";
 
 /**
  * F17: "correos manuales enviados desde el CRM" -- el único punto donde
@@ -54,7 +58,7 @@ emailRouter.get("/emails/:id/investigate-delivery", requirePermission("approvals
   try {
     const emailMessage = await scopedDb.emailMessage.findUnique({ where: { id: req.params.id } });
     if (!emailMessage) throw AppError.notFound("EmailMessage no encontrado");
-    if (emailMessage.status !== "SENT" || !emailMessage.providerMessageId || !emailMessage.sentAt) {
+    if (!(DISPATCHED_EMAIL_STATUSES as readonly string[]).includes(emailMessage.status) || !emailMessage.providerMessageId || !emailMessage.sentAt) {
       res.json({ foundInSentItems: false, detail: `EmailMessage status=${emailMessage.status}, sin providerMessageId/sentAt -- nunca se llegó a enviar` });
       return;
     }
@@ -67,6 +71,56 @@ emailRouter.get("/emails/:id/investigate-delivery", requirePermission("approvals
       clientSecret: env.AZURE_CLIENT_SECRET,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * F27 Fase 4: disparo manual del reconciliador Graph <-> CRM -- mismo
+ * permiso sensible que el resto de acciones administrativas
+ * (settings.manage). Reconcilia el ÚNICO buzón real que este repo usa
+ * para envíos reales (sales@<dominio>, ver sender-profiles.ts) contra el
+ * tenant del contexto actual. No hay ejecución periódica automática
+ * todavía -- pedido explícito de la Fase 4 (si se agrega más adelante,
+ * debe ser configurable, apagada por defecto en tests, y con guarda de
+ * liderazgo de proceso).
+ */
+emailRouter.post("/emails/reconcile", requirePermission("settings.manage"), async (req, res, next) => {
+  try {
+    if (!env.AZURE_TENANT_ID || !env.AZURE_CLIENT_ID || !env.AZURE_CLIENT_SECRET) {
+      throw AppError.badRequest("Microsoft Graph no configurado");
+    }
+    const mailbox = resolveSender("commercial")!.email;
+    const summary = await reconcileMailbox(mailbox, { tenantId: env.AZURE_TENANT_ID, clientId: env.AZURE_CLIENT_ID, clientSecret: env.AZURE_CLIENT_SECRET });
+    res.json(summary);
+  } catch (err) {
+    next(err);
+  }
+});
+
+emailRouter.get("/emails/reconciliation-alerts", requirePermission("settings.manage"), async (req, res, next) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const alerts = await scopedDb.emailReconciliationAlert.findMany({
+      where: status ? { status: status as never } : undefined,
+      orderBy: { discoveredAt: "desc" },
+    });
+    res.json(alerts);
+  } catch (err) {
+    next(err);
+  }
+});
+
+emailRouter.post("/emails/reconciliation-alerts/:id/acknowledge", requirePermission("settings.manage"), async (req, res, next) => {
+  try {
+    const ctx = getTenancyContext();
+    if (!ctx) throw AppError.unauthorized();
+    const alert = await scopedDb.emailReconciliationAlert.update({
+      where: { id: req.params.id },
+      data: { status: "ACKNOWLEDGED", acknowledgedById: ctx.userId, acknowledgedAt: new Date() },
+    });
+    res.json(alert);
   } catch (err) {
     next(err);
   }

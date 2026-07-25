@@ -33,14 +33,15 @@ after(async () => {
 
 function fakeProvider(overrides: Partial<MicrosoftGraphProviderPort> = {}): MicrosoftGraphProviderPort {
   return {
-    sendGraphMail: async () => ({ kind: "sent", providerMessageId: "fake-id", conversationId: "fake-conv" }) as SendGraphMailResult,
+    sendGraphMail: async () =>
+      ({ kind: "sent", providerMessageId: "fake-id", conversationId: "fake-conv", internetMessageId: "<fake-id@dreistaff.com>", httpStatus: 202, clientRequestId: "fake-request-id" }) as SendGraphMailResult,
     ...overrides,
   };
 }
 
 const FAKE_AZURE = { azureTenantId: "fake-tenant", azureClientId: "fake-client", azureClientSecret: "fake-secret" };
 
-test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a SENT con messageId/conversationId reales del proveedor", async () => {
+test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a ACCEPTED_BY_PROVIDER (nunca SENT directo) con messageId/conversationId/internetMessageId reales del proveedor", async () => {
   const tenantId = await setupTenant("happy-path");
   const result = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
     sendEmail({
@@ -53,11 +54,17 @@ test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a SENT
     }),
   );
 
-  assert.equal(result.status, "SENT");
+  assert.equal(result.status, "ACCEPTED_BY_PROVIDER");
   assert.equal(result.providerMessageId, "fake-id");
+  assert.equal(result.internetMessageId, "<fake-id@dreistaff.com>");
+  assert.ok(result.correlationId);
 
   const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: result.emailMessageId } });
-  assert.equal(row.status, "SENT");
+  assert.equal(row.status, "ACCEPTED_BY_PROVIDER");
+  assert.equal(row.correlationId, result.correlationId);
+  assert.equal(row.internetMessageId, "<fake-id@dreistaff.com>");
+  assert.equal(row.httpStatusCode, 202);
+  assert.ok(row.acceptedAt);
   assert.equal(row.fromEmail, "sales@dreistaff.com");
   assert.equal(row.fromName, "DreiStaff Sales");
   assert.equal(row.toEmail, "prospect@example.com");
@@ -143,7 +150,7 @@ test("sendEmail: destinatario con formato inválido -- rechazado ANTES de crear 
         to: "not-an-email",
         subject: "Test",
         bodyText: "Test",
-        graphProvider: fakeProvider({ sendGraphMail: async () => { providerCalled = true; return { kind: "sent", providerMessageId: "x", conversationId: null }; } }),
+        graphProvider: fakeProvider({ sendGraphMail: async () => { providerCalled = true; return { kind: "sent", providerMessageId: "x", conversationId: null, internetMessageId: null, httpStatus: 202, clientRequestId: null }; } }),
         ...FAKE_AZURE,
       }),
     ),

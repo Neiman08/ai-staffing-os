@@ -11,15 +11,27 @@ import { env } from "../../core/env";
  * envío) -- ninguna tabla/columna nueva.
  *
  * 1. Límite diario configurable (`DAILY_EMAIL_SEND_LIMIT`, default 25):
- *    cuenta `EmailMessage.status=SENT` con `sentAt` desde la medianoche
- *    UTC de hoy, por tenant.
+ *    cuenta EmailMessage realmente despachados (`sentAt` desde la
+ *    medianoche UTC de hoy), por tenant.
  * 2. Prevención de duplicados: nunca se envía dos veces al mismo
  *    destinatario (case-insensitive) -- un segundo intento a la misma
  *    dirección, sin importar de qué ApprovalRequest venga, se bloquea.
  *    Deliberadamente estricto para un primer piloto -- ninguna ventana de
  *    "permitir de nuevo después de N días" todavía, eso es una decisión
  *    de negocio que un humano puede relajar más adelante si hace falta.
+ *
+ * F27: cuenta cualquier estado que signifique "esto realmente salió
+ * hacia el proveedor" -- ACCEPTED_BY_PROVIDER/SENT_CONFIRMED/DELIVERED,
+ * más el legado SENT de filas anteriores a F27. BOUNCED/FAILED/
+ * DELIVERY_UNKNOWN nunca cuentan acá -- un rebote o un fallo real no es
+ * "ya le escribimos", y DELIVERY_UNKNOWN es agnóstico (no se sabe si de
+ * verdad llegó, pero el intento de Graph sí fue real -- se incluye
+ * igual, porque lo que importa para este guardia es "ya se le mandó un
+ * request real a Graph", no si se pudo confirmar después).
  */
+
+export const DISPATCHED_EMAIL_STATUSES = ["SENT", "ACCEPTED_BY_PROVIDER", "SENT_CONFIRMED", "DELIVERED", "DELIVERY_UNKNOWN"] as const;
+const DISPATCHED_STATUSES = DISPATCHED_EMAIL_STATUSES;
 
 export interface SendLimitCheckResult {
   allowed: boolean;
@@ -35,10 +47,10 @@ export async function checkSendLimits(toEmail: string): Promise<SendLimitCheckRe
 
   const [sentToday, priorSendToSameRecipient] = await Promise.all([
     scopedDb.emailMessage.count({
-      where: { tenantId: ctx.tenantId, status: "SENT", sentAt: { gte: startOfTodayUtc } },
+      where: { tenantId: ctx.tenantId, status: { in: [...DISPATCHED_STATUSES] }, sentAt: { gte: startOfTodayUtc } },
     }),
     scopedDb.emailMessage.findFirst({
-      where: { tenantId: ctx.tenantId, status: "SENT", toEmail: { equals: toEmail, mode: "insensitive" } },
+      where: { tenantId: ctx.tenantId, status: { in: [...DISPATCHED_STATUSES] }, toEmail: { equals: toEmail, mode: "insensitive" } },
       orderBy: { sentAt: "desc" },
     }),
   ]);
