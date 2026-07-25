@@ -5,6 +5,7 @@ import { env } from "../../core/env";
 import { logAuditEvent } from "../../core/audit-log";
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
 import { getPdlMonthlyBudgetStatus, createPdlMissionBudget, consumePdlMissionBudget, computeAllowedPdlSearchSize, type PdlMissionBudget } from "./pdl-budget";
+import { getFreshHunterDomainCache, recordHunterDomainQuery } from "./hunter-domain-cache";
 import { searchPeopleDataLabs } from "./tools/contact-providers/people-data-labs";
 import type { ContactCandidate } from "./tools/contact-providers/types";
 import { searchHunterEmails } from "./tools/email-providers/hunter";
@@ -518,33 +519,59 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
     if (!domain) {
       patternsFailed.push(`${params.companyName}:hunter_domain_search (sin dominio derivable de companyWebsite)`);
     } else {
-      const hunterProvider = params.hunterProvider ?? REAL_HUNTER_PROVIDER;
-      const hunterResult = await hunterProvider.searchHunterEmails(
-        {
-          taskId: params.taskId,
-          companyName: params.companyName,
-          companyWebsite: params.companyWebsite,
-          domain,
-          limit: Math.min(targetRoles.length * 2, 10),
-          abortSignal: params.abortSignal,
-        },
-        hunterApiKey,
-      );
+      // F27 Fase 7: Hunter free tier = 25 búsquedas/mes TOTAL (ver
+      // hunter.ts) -- nunca se repite una consulta real por el mismo
+      // dominio dentro de la ventana de frescura de la caché (30 días,
+      // ver hunter-domain-cache.ts). Un cache hit reconstruye exactamente
+      // el mismo shape que una respuesta real, nunca inventa nada nuevo.
+      const cacheHit = await getFreshHunterDomainCache(domain);
+      let hunterCandidates: EmailCandidate[];
+      let hunterCancelled = false;
 
-      costUsd += hunterResult.costUsd;
-      patternsFailed.push(...hunterResult.patternsFailed);
-      // Solo se sobreescribe providerStatus si PDL nunca corrió/no dio
-      // señal útil -- el estado más informativo (el de la última fuente
-      // que realmente respondió) es el que se reporta.
-      if (hunterResult.providerStatus !== "AVAILABLE" || providerStatus === "NOT_CONFIGURED") {
-        providerStatus = hunterResult.providerStatus;
+      if (cacheHit) {
+        log(params.taskId, "Hunter.io domain cache hit -- consulta real omitida", { domain, queriedAt: cacheHit.queriedAt.toISOString(), candidateCount: cacheHit.candidates.length });
+        patternsFailed.push(...cacheHit.patternsFailed);
+        if (cacheHit.providerStatus !== "AVAILABLE" || providerStatus === "NOT_CONFIGURED") providerStatus = cacheHit.providerStatus;
+        hunterCandidates = cacheHit.candidates;
+      } else {
+        const hunterProvider = params.hunterProvider ?? REAL_HUNTER_PROVIDER;
+        const hunterResult = await hunterProvider.searchHunterEmails(
+          {
+            taskId: params.taskId,
+            companyName: params.companyName,
+            companyWebsite: params.companyWebsite,
+            domain,
+            limit: Math.min(targetRoles.length * 2, 10),
+            abortSignal: params.abortSignal,
+          },
+          hunterApiKey,
+        );
+
+        costUsd += hunterResult.costUsd;
+        patternsFailed.push(...hunterResult.patternsFailed);
+        // Solo se sobreescribe providerStatus si PDL nunca corrió/no dio
+        // señal útil -- el estado más informativo (el de la última fuente
+        // que realmente respondió) es el que se reporta.
+        if (hunterResult.providerStatus !== "AVAILABLE" || providerStatus === "NOT_CONFIGURED") {
+          providerStatus = hunterResult.providerStatus;
+        }
+        hunterCandidates = hunterResult.candidates as EmailCandidate[];
+        hunterCancelled = hunterResult.cancelled;
+
+        // Nunca se cachea un intento cancelado a mitad de camino ni un
+        // resultado de un proveedor no disponible (CREDIT_EXHAUSTED/
+        // UNAUTHORIZED/UNAVAILABLE) -- eso no es "la respuesta real de
+        // Hunter para este dominio", es la ausencia de una consulta real.
+        if (!hunterCancelled && hunterResult.providerStatus === "AVAILABLE") {
+          await recordHunterDomainQuery(ctx.tenantId, domain, hunterCandidates, hunterResult.patternsFailed, hunterResult.providerStatus);
+        }
       }
 
-      if (hunterResult.cancelled) {
+      if (hunterCancelled) {
         cancelled = true;
       } else {
-        for (const candidate of hunterResult.candidates as EmailCandidate[]) {
-          const outcome = await processCandidate(fromHunterCandidate(candidate), "Hunter.io", ctx, params, targetRoles, hunterResult.providerStatus);
+        for (const candidate of hunterCandidates) {
+          const outcome = await processCandidate(fromHunterCandidate(candidate), "Hunter.io", ctx, params, targetRoles, providerStatus);
           await applyOutcome(outcome, "Hunter.io");
         }
       }

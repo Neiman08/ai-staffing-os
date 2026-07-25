@@ -2411,6 +2411,26 @@ enum EmailReconciliationAlertStatus {
   DISMISSED
 }
 
+// F27 Fase 7: caché real de la última consulta real de Hunter.io Domain
+// Search por (tenant, dominio) -- el free tier de Hunter (25 búsquedas/mes,
+// ver hunter.ts) se agota rápido si cada reintento de find_contacts o cada
+// misión que vuelve a tocar la misma Company golpea la API real de nuevo
+// por el mismo dominio. `candidates` guarda el mismo shape EmailCandidate[]
+// que hunter.ts ya mapea de la respuesta real -- un "cache hit" reconstruye
+// exactamente lo que Hunter dijo la última vez, nunca inventa nada nuevo.
+model HunterDomainSearchCache {
+  id             String   @id @default(cuid())
+  tenantId       String
+  domain         String
+  queriedAt      DateTime @default(now())
+  candidates     Json // EmailCandidate[] real, tal cual lo devolvió la última consulta
+  patternsFailed String[] @default([])
+  providerStatus String
+
+  @@unique([tenantId, domain])
+  @@index([tenantId, queriedAt])
+}
+
 // ================= AUDITORÍA, EVENTOS, NOTIFICACIONES =================
 
 model AuditLog {

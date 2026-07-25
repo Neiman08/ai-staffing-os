@@ -76,6 +76,9 @@ const STRICT_TENANT_MODELS = new Set([
   // mismo criterio que el resto (ver hallazgo documentado arriba sobre
   // qué pasa si un modelo STRICT se olvida acá).
   "EmailReconciliationAlert",
+  // F27 Fase 7: mismo criterio -- HunterDomainSearchCache tiene tenantId
+  // requerido, no-nullable.
+  "HunterDomainSearchCache",
 ]);
 
 /**
