@@ -222,6 +222,7 @@ export async function searchPeopleDataLabs(
       patternsFailed: [`People Data Labs: ${existingHealth.status} — ${existingHealth.reason} (no se reintenta por ~15 min para no repetir la misma llamada fallida en cada empresa)`],
       cancelled: false,
       providerStatus: existingHealth.status,
+      creditsUsed: 0,
     };
   }
 
@@ -229,8 +230,26 @@ export async function searchPeopleDataLabs(
   // cargo prioritario se aplica client-side, DESPUÉS de esta llamada
   // (ver fetchPdlSearch) — sin margen, la mayoría de una empresa
   // (contadores, ingenieros, etc.) desplazaría a los cargos que sí
-  // importan para ventas de staffing.
-  const searchSize = Math.min(params.limit * 5, 20);
+  // importan para ventas de staffing. F27 Fase 6: `params.maxResults`
+  // (presupuesto real de la misión, ver pdl-budget.ts) es SIEMPRE el
+  // techo final -- nunca se pide más que eso sin importar la heurística
+  // de arriba. 0 significa "el presupuesto real no permite ningún
+  // resultado para esta empresa" -- se omite la llamada por completo,
+  // nunca se le pide 0 a PDL (evita un request real que no aporta nada).
+  const searchSize = Math.min(params.limit * 5, 20, params.maxResults ?? 20);
+  if (searchSize <= 0) {
+    log(params.taskId, "provider skipped — budget exhausted", { provider: "People Data Labs", companyName: params.companyName });
+    return {
+      candidates: [],
+      costUsd: 0,
+      sourcesUsed: [],
+      patternsFailed: [],
+      cancelled: false,
+      providerStatus: "AVAILABLE",
+      creditsUsed: 0,
+    };
+  }
+
   const result = await fetchPdlSearch(params.taskId, apiKey, params.companyName, searchSize, params.abortSignal);
 
   if ("error" in result) {
@@ -246,6 +265,7 @@ export async function searchPeopleDataLabs(
       patternsFailed: [`${params.companyName}:people_data_labs_search (${result.error})`],
       cancelled: !!result.cancelled,
       providerStatus,
+      creditsUsed: 0,
     };
   }
 
@@ -264,5 +284,6 @@ export async function searchPeopleDataLabs(
     patternsFailed: [],
     cancelled: false,
     providerStatus: "AVAILABLE",
+    creditsUsed: result.people.length,
   };
 }

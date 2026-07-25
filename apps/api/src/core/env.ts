@@ -138,6 +138,14 @@ const envSchema = z.object({
   // modules/email/send-limits.ts. Configurable, nunca hardcodeado a un
   // valor fijo en el código de envío.
   DAILY_EMAIL_SEND_LIMIT: z.coerce.number().int().min(1).default(25),
+  // F27 Fase 6: techos deliberadamente conservadores de créditos de People
+  // Data Labs -- muy por debajo del plan real (100 créditos/mes según el
+  // panel verificado en esta misión), para que este sistema nunca pueda
+  // ser la razón de que se agote el saldo del mes. Configurable porque el
+  // plan real puede cambiar sin un deploy de código -- ver pdl-budget.ts.
+  PDL_MONTHLY_CREDIT_BUDGET: z.coerce.number().int().min(0).default(40),
+  PDL_PER_MISSION_CREDIT_BUDGET: z.coerce.number().int().min(0).default(15),
+  PDL_PER_COMPANY_MAX_RESULTS: z.coerce.number().int().min(0).default(5),
 });
 
 function loadEnv() {

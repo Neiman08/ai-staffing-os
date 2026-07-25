@@ -32,6 +32,7 @@ import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } f
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { enrichCompanyWithDecisionContacts, type ContactProviderPort, type HunterContactProviderPort } from "./contact-enrichment";
+import { createPdlMissionBudget } from "./pdl-budget";
 import { recommendOpportunityAction, type OpportunityRecommendationResult, type BestContactRankingTier } from "../ceo-intelligence/opportunity-recommendation";
 import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from "./discovery-conversion";
 
@@ -690,6 +691,12 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const companyValidations: CompanyValidationRecord[] = [];
   const providersUsed = new Set<string>();
   const providersOmitted = new Set<string>();
+  // F27 Fase 6: UN presupuesto de créditos de PDL para TODA esta misión,
+  // compartido por cada empresa de su loop (ver contact-enrichment.ts) --
+  // así una misión de N empresas nunca puede gastar más que
+  // PDL_PER_MISSION_CREDIT_BUDGET en total, sin importar cuántos roles
+  // objetivo tenga cada empresa individual.
+  const pdlMissionBudget = createPdlMissionBudget();
   const validationWarnings = new Set<string>();
   const rejectionReasons = new Set<string>();
   const createdCompanyIds: string[] = [];
@@ -1123,6 +1130,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             abortSignal: params.abortSignal,
             contactProvider: params.contactProvider,
             peopleDataLabsApiKey: params.peopleDataLabsApiKey,
+            pdlMissionBudget,
             // F15: 2da y 3ra fuente de la cascada -- namedPeople viene
             // del MISMO crawl que ya hizo enrichCompanyWithOrganizationalEmails
             // arriba (nunca un segundo request al sitio); Hunter corre
