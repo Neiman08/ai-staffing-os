@@ -143,8 +143,13 @@ Ningún `DROP`/`RENAME`/`ALTER COLUMN ... SET NOT NULL` sobre datos existentes.
   endurecimiento de `sendGraphMail` porque son correcciones de un defecto real (el envío
   sin rastro), no funcionalidades opcionales — desactivarlas reintroduciría el problema
   original que motivó todo este trabajo.
+```
 
-## Lista exacta de commits (13, en orden)
+_(Fin del contenido a pegar como descripción del PR en GitHub — las secciones de abajo
+son deliberadamente parte de este documento de preparación, no del cuerpo del PR en sí,
+ya que GitHub ya muestra los commits y archivos modificados de forma nativa.)_
+
+## Lista exacta de commits (14, en orden — corregido tras detectar que el fence de arriba no cerraba antes de esta sección)
 
 1. `3b0f7b6` — fix(email): stop conflating Graph 202 with a confirmed send, add reconciliation
 2. `ae3af5a` — fix(email): require a real EmailMessage before sendGraphMail will touch Graph
@@ -159,8 +164,9 @@ Ningún `DROP`/`RENAME`/`ALTER COLUMN ... SET NOT NULL` sobre datos existentes.
 11. `f382485` — test(public): fix stats test to match the widened INTERNAL_TEST exclusion
 12. `d525526` — docs: final release audit -- RELEASE_READINESS.md, GO with documented caveats
 13. `971c6ec` — docs: correct release audit inaccuracies, add exact non-pass test evidence, prepare PR draft
+14. `06918f4` — docs: correct commit/file counts in PR draft (13 commits, 56 files)
 
-## Lista exacta de archivos modificados (56 hasta el commit `971c6ec`)
+## Lista exacta de archivos modificados (56 hasta el commit `06918f4` — commit 14 solo modificó `PULL_REQUEST_DRAFT.md`, ya listado abajo, ningún archivo nuevo)
 
 **Nuevos (25)**:
 ```
