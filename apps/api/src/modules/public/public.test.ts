@@ -60,7 +60,7 @@ test("GET /public/job-openings: sin auth, nunca incluye una empresa demo ni el n
   }
 });
 
-test("GET /public/stats: sin auth, companiesInNetwork nunca cuenta empresas demo", async () => {
+test("GET /public/stats: sin auth, companiesInNetwork nunca cuenta empresas demo ni de prueba interna", async () => {
   const res = await fetch(`${baseUrl}/api/v1/public/stats`);
   assert.equal(res.status, 200);
   const body = (await res.json()) as { companiesInNetwork: number };
@@ -71,8 +71,14 @@ test("GET /public/stats: sin auth, companiesInNetwork nunca cuenta empresas demo
   // otro test, o una validación manual como la de F14, agrega
   // companies a OTRO tenant y este conteo global diverge del que el
   // endpoint realmente devuelve).
+  // F27: el endpoint real (public/service.ts) también excluye
+  // origin=INTERNAL_TEST (Internal Acceptance Test) -- este cálculo
+  // independiente debe reflejar EXACTAMENTE el mismo filtro real, nunca
+  // uno más viejo/angosto, o diverge apenas exista una Company de prueba
+  // interna real en el tenant (como la que deja la propia suite de
+  // internal-testing).
   const publicTenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: process.env.PUBLIC_TENANT_SLUG ?? "titan" } });
-  const realCompanyCount = await prisma.company.count({ where: { tenantId: publicTenant.id, origin: { not: "DEMO_SEED" } } });
+  const realCompanyCount = await prisma.company.count({ where: { tenantId: publicTenant.id, origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } } });
   assert.equal(body.companiesInNetwork, realCompanyCount);
 });
 
