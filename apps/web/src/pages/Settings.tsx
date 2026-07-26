@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UsersPanel } from "@/components/settings/UsersPanel";
+import { EmailReconciliationPanel } from "@/components/settings/EmailReconciliationPanel";
 
 function SectionError({ error }: { error: unknown }) {
   const message = error instanceof ApiError ? error.message : "No se pudo cargar esta sección.";
@@ -36,6 +37,8 @@ export default function Settings() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <UsersPanel className="lg:col-span-2" />
+
+        <EmailReconciliationPanel />
 
         <Card>
           <CardHeader>

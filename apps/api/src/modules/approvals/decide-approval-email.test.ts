@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { decideApproval, sendApproval } from "./service";
+import { decideApproval, sendApproval, listApprovals } from "./service";
 import type { MicrosoftGraphProviderPort } from "../email/email-service";
 import type { SendGraphMailResult } from "../email/microsoft-graph";
 
@@ -431,4 +431,49 @@ test("sendApproval real: un segundo borrador al MISMO destinatario nunca llega a
   });
 
   assert.equal(await prisma.emailMessage.count({ where: { tenantId, status: "ACCEPTED_BY_PROVIDER" } }), 1, "el segundo intento nunca llega a crear un EmailMessage enviado");
+});
+
+// F27 Fase 9: la UI (Approvals.tsx) nunca debe mostrar un envío viejo
+// como "enviado" a secas -- listApprovals debe reflejar el estado REAL
+// más reciente de EmailMessage, incluso después de que el reconciliador
+// (reconciliation.ts, corrido por separado) lo haya movido más allá de
+// ACCEPTED_BY_PROVIDER.
+test("listApprovals: refleja el estado REAL y actual de EmailMessage (incl. después de una reconciliación), nunca un snapshot del momento del envío", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("list-reflects-current-state");
+  const company = await prisma.company.create({ data: { tenantId, name: "List State Co", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador para List State Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@liststate.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+
+    const beforeReconciliation = await listApprovals("SENT");
+    const beforeItem = beforeReconciliation.find((a) => a.id === approval.id);
+    assert.equal(beforeItem?.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
+
+    // Simula lo que reconciliation.ts hace de verdad tras encontrar el
+    // mensaje real en Sent Items -- nunca se llama acá al reconciliador
+    // completo, solo se replica su efecto sobre la fila para probar que
+    // listApprovals lee el estado actual, no uno cacheado.
+    const emailMessage = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
+    await prisma.emailMessage.update({ where: { id: emailMessage.id }, data: { status: "SENT_CONFIRMED", sentItemsConfirmedAt: new Date() } });
+
+    const afterReconciliation = await listApprovals("SENT");
+    const afterItem = afterReconciliation.find((a) => a.id === approval.id);
+    assert.equal(afterItem?.emailSendResult?.status, "SENT_CONFIRMED");
+    assert.ok(afterItem?.emailSendResult?.sentItemsConfirmedAt);
+    // El ApprovalRequest.status en sí sigue significando lo mismo de
+    // siempre ("SENT" = la acción humana de envío se completó) -- la
+    // verdad más fina vive únicamente en emailSendResult.
+    assert.equal(afterItem?.status, "SENT");
+  });
 });

@@ -236,6 +236,38 @@ async function computeRecipientWarnings(proposedActions: unknown[]): Promise<Rec
   });
 }
 
+/**
+ * F27 Fase 9: reconstruye emailSendResult para un ApprovalRequest ya
+ * enviado (SENT/FAILED con intento real) a partir del ESTADO ACTUAL de su
+ * EmailMessage real -- nunca lo que decía en el instante del /send. El
+ * reconciliador (reconciliation.ts) puede haber movido esa fila a
+ * SENT_CONFIRMED/BOUNCED/DELIVERY_UNKNOWN desde entonces; la UI (Approvals.tsx)
+ * debe reflejar SIEMPRE la verdad más reciente, no un snapshot viejo.
+ */
+async function loadEmailSendResults(approvalIds: string[]): Promise<Map<string, ApprovalEmailSendResult>> {
+  if (approvalIds.length === 0) return new Map();
+  const rows = await scopedDb.emailMessage.findMany({
+    where: { approvalRequestId: { in: approvalIds } },
+    orderBy: { createdAt: "desc" },
+  });
+  const byApproval = new Map<string, ApprovalEmailSendResult>();
+  for (const row of rows) {
+    if (!row.approvalRequestId || byApproval.has(row.approvalRequestId)) continue; // más reciente primero, nunca pisa con uno viejo
+    byApproval.set(row.approvalRequestId, {
+      status: row.status as never,
+      providerMessageId: row.providerMessageId,
+      internetMessageId: row.internetMessageId,
+      conversationId: row.conversationId,
+      correlationId: row.correlationId,
+      errorMessage: row.errorMessage,
+      acceptedAt: row.acceptedAt?.toISOString() ?? null,
+      sentItemsConfirmedAt: row.sentItemsConfirmedAt?.toISOString() ?? null,
+      ndrDetail: row.ndrDetail,
+    });
+  }
+  return byApproval;
+}
+
 export async function listApprovals(status?: string): Promise<ApprovalRequestListItem[]> {
   const approvals = await scopedDb.approvalRequest.findMany({
     where: { status: status as never },
@@ -250,8 +282,9 @@ export async function listApprovals(status?: string): Promise<ApprovalRequestLis
   }
   const userLabels = await labelUsers(Array.from(userIds));
   const recipientWarnings = await computeRecipientWarnings(approvals.map((a) => a.proposedAction));
+  const emailSendResults = await loadEmailSendResults(approvals.map((a) => a.id));
 
-  return approvals.map((a, idx) => toListItem(a, userLabels, null, recipientWarnings[idx]));
+  return approvals.map((a, idx) => toListItem(a, userLabels, emailSendResults.get(a.id) ?? null, recipientWarnings[idx]));
 }
 
 /**

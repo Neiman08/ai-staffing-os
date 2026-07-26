@@ -166,14 +166,25 @@ export const riskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
 // código nuevo lo escribe. ACCEPTED_BY_PROVIDER es el único estado de
 // éxito real que sendEmail() puede devolver desde F27 (ver
 // email-service.ts) -- Graph aceptó el /send (202), nunca "se entregó".
+// F27 Fase 9: los 4 estados finos que solo el reconciliador (nunca
+// email-service.ts, ver comentario ahí) puede escribir -- viajan acá para
+// que la UI muestre exactamente lo que dice EmailMessage.status HOY
+// (puede haber cambiado desde el momento del envío original, ver
+// reconciliation.ts), nunca lo que decía en el instante del /send.
 export const approvalEmailSendResultSchema = z
   .object({
-    status: z.enum(["SENT", "ACCEPTED_BY_PROVIDER", "FAILED", "RETRYABLE"]),
+    status: z.enum(["SENT", "ACCEPTED_BY_PROVIDER", "SENT_CONFIRMED", "DELIVERED", "BOUNCED", "DELIVERY_UNKNOWN", "FAILED", "RETRYABLE"]),
     providerMessageId: z.string().nullable(),
     internetMessageId: z.string().nullable().optional(),
     conversationId: z.string().nullable().optional(),
     correlationId: z.string().nullable().optional(),
     errorMessage: z.string().nullable(),
+    // F27 Fase 9: evidencia real para la UI -- cuándo Graph aceptó,
+    // cuándo el reconciliador confirmó Sent Items, y el detalle real del
+    // NDR si rebotó. `undefined` = fila anterior a F27, sin este dato.
+    acceptedAt: z.string().nullable().optional(),
+    sentItemsConfirmedAt: z.string().nullable().optional(),
+    ndrDetail: z.string().nullable().optional(),
   })
   .nullable();
 export type ApprovalEmailSendResult = z.infer<typeof approvalEmailSendResultSchema>;

@@ -10,6 +10,9 @@ import { DISPATCHED_EMAIL_STATUSES } from "./send-limits";
 import { reconcileMailbox } from "./reconciliation";
 import { resolveSender } from "./sender-profiles";
 import { getTenancyContext } from "../../core/tenancy/context";
+import { getEmailProviderHealth } from "./health";
+import { getPdlMonthlyBudgetStatus } from "../agents/pdl-budget";
+import { getProviderHealth } from "../agents/tools/provider-health";
 
 /**
  * F17: "correos manuales enviados desde el CRM" -- el único punto donde
@@ -107,6 +110,65 @@ emailRouter.get("/emails/reconciliation-alerts", requirePermission("settings.man
       orderBy: { discoveredAt: "desc" },
     });
     res.json(alerts);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * F27 Fase 9: un solo panel real para lo que hoy vive repartido entre
+ * varios módulos silenciosos (circuit breaker en memoria de
+ * provider-health.ts, presupuesto de PDL, caché de Hunter, salud de
+ * Graph) -- nunca inventa un número, cada campo viene de una lectura
+ * real. El estado de DNS es la única pieza que NO se puede verificar en
+ * vivo desde este proceso (requiere `dig` externo) -- se expone como un
+ * hecho ya verificado y documentado (ver
+ * docs/F27_EMAIL_DNS_REMEDIATION.md), con la fecha de la última
+ * verificación real, nunca como "resuelto" mientras no se re-confirme.
+ */
+emailRouter.get("/emails/provider-status", requirePermission("settings.manage"), async (req, res, next) => {
+  try {
+    const ctx = getTenancyContext();
+    if (!ctx) throw AppError.unauthorized();
+
+    const [graphHealth, pdlBudget] = await Promise.all([getEmailProviderHealth(), getPdlMonthlyBudgetStatus(ctx.tenantId)]);
+    const pdlCircuit = getProviderHealth("people_data_labs");
+    const hunterCircuit = getProviderHealth("hunter_domain_search");
+
+    const now = new Date();
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const hunterDomainsCachedThisMonth = await scopedDb.hunterDomainSearchCache.count({ where: { queriedAt: { gte: startOfMonth } } });
+
+    res.json({
+      microsoftGraph: graphHealth,
+      peopleDataLabs: {
+        configured: !!env.PEOPLEDATALABS_API_KEY,
+        circuitStatus: pdlCircuit?.status ?? "AVAILABLE",
+        circuitReason: pdlCircuit?.reason ?? null,
+        monthlyCreditBudget: pdlBudget.monthlyCreditBudget,
+        creditsUsedThisMonth: pdlBudget.creditsUsedThisMonth,
+        remainingThisMonth: pdlBudget.remainingThisMonth,
+      },
+      hunter: {
+        configured: !!env.HUNTER_API_KEY,
+        circuitStatus: hunterCircuit?.status ?? "AVAILABLE",
+        circuitReason: hunterCircuit?.reason ?? null,
+        domainsQueriedOrCachedThisMonth: hunterDomainsCachedThisMonth,
+      },
+      // F27 Fase 8: verificado por `dig` real el 2026-07-25 -- ver
+      // docs/F27_EMAIL_DNS_REMEDIATION.md para el detalle exacto y la
+      // remediación. `degraded: true` hasta que un admin corrija SPF/DKIM
+      // en GoDaddy/M365 y este valor se actualice en el código junto con
+      // una nueva verificación real.
+      deliverability: {
+        degraded: true,
+        spfPass: false,
+        dkimPass: false,
+        dmarcPolicy: "quarantine",
+        lastVerifiedAt: "2026-07-25",
+        detail: "SPF le falta include:spf.protection.outlook.com; ambos CNAME de DKIM apuntan a un host que no resuelve -- ver docs/F27_EMAIL_DNS_REMEDIATION.md",
+      },
+    });
   } catch (err) {
     next(err);
   }
