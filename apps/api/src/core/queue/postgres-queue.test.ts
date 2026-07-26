@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../tenancy/context";
-import { claimNextTasks, reclaimExpiredLeases } from "./postgres-queue";
+import { claimNextTasks, reclaimExpiredLeases, recoverOrphanedTasksAtBoot } from "./postgres-queue";
 
 /**
  * F25.2 Fase 3: pruebas de integración contra Postgres real (local) de
@@ -205,4 +205,68 @@ test("concurrencia: M reclaimers concurrentes sobre N leases vencidos -- cada ta
     assert.equal(t.status, "RETRY_SCHEDULED", `AgentTask ${t.id} debe haber transicionado exactamente una vez, nunca reprocesada`);
     assert.equal(t.attempt, 1, `AgentTask ${t.id} debe tener attempt=1 -- un attempt>1 significaría que se procesó dos veces`);
   }
+});
+
+/**
+ * Bug real encontrado en auditoría de "primera misión real":
+ * task-executor.ts:executeTaskById nunca escribe leaseExpiresAt --
+ * reclaimExpiredLeases() (arriba) nunca puede recuperar esas filas
+ * porque su query exige leaseExpiresAt IS NOT NULL. recoverOrphanedTasksAtBoot
+ * cubre exactamente ese hueco, y solo ese -- nunca debe tocar una fila
+ * con lease real (vigente o vencido), esa sigue siendo responsabilidad
+ * exclusiva de reclaimExpiredLeases.
+ */
+test("recoverOrphanedTasksAtBoot recupera una tarea RUNNING sin lease (camino síncrono viejo, huérfana de un proceso anterior)", async () => {
+  const { tenantId, agentInstanceId } = await setupTenant("boot-recovery-running");
+  const task = await createTask(tenantId, agentInstanceId);
+  await runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, () =>
+    prisma.agentTask.update({ where: { id: task.id }, data: { status: "RUNNING" } }),
+  );
+
+  const { recoveredTaskIds } = await recoverOrphanedTasksAtBoot();
+  assert.ok(recoveredTaskIds.includes(task.id));
+
+  const reloaded = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+  assert.equal(reloaded.status, "RETRY_SCHEDULED");
+});
+
+test("recoverOrphanedTasksAtBoot recupera una tarea CLAIMED sin lease", async () => {
+  const { tenantId, agentInstanceId } = await setupTenant("boot-recovery-claimed");
+  const task = await createTask(tenantId, agentInstanceId);
+  await runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, () =>
+    prisma.agentTask.update({ where: { id: task.id }, data: { status: "CLAIMED", claimedBy: "dead-worker" } }),
+  );
+
+  const { recoveredTaskIds } = await recoverOrphanedTasksAtBoot();
+  assert.ok(recoveredTaskIds.includes(task.id));
+});
+
+test("recoverOrphanedTasksAtBoot nunca toca una tarea RUNNING con lease real, vigente o vencido -- eso sigue siendo trabajo de reclaimExpiredLeases", async () => {
+  const { tenantId, agentInstanceId } = await setupTenant("boot-recovery-has-lease");
+  const activeLease = await createTask(tenantId, agentInstanceId);
+  const expiredLease = await createTask(tenantId, agentInstanceId);
+  await runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, async () => {
+    await prisma.agentTask.update({ where: { id: activeLease.id }, data: { status: "RUNNING", claimedBy: "alive-worker", leaseExpiresAt: new Date(Date.now() + 60_000) } });
+    await prisma.agentTask.update({ where: { id: expiredLease.id }, data: { status: "RUNNING", claimedBy: "dead-worker", leaseExpiresAt: new Date(Date.now() - 1_000) } });
+  });
+
+  const { recoveredTaskIds } = await recoverOrphanedTasksAtBoot();
+  assert.ok(!recoveredTaskIds.includes(activeLease.id));
+  assert.ok(!recoveredTaskIds.includes(expiredLease.id), "una tarea con lease vencido es responsabilidad de reclaimExpiredLeases, no de la recuperación de arranque");
+
+  const reloadedActive = await prisma.agentTask.findUniqueOrThrow({ where: { id: activeLease.id } });
+  const reloadedExpired = await prisma.agentTask.findUniqueOrThrow({ where: { id: expiredLease.id } });
+  assert.equal(reloadedActive.status, "RUNNING");
+  assert.equal(reloadedExpired.status, "RUNNING");
+});
+
+test("recoverOrphanedTasksAtBoot nunca toca QUEUED/DONE", async () => {
+  const { tenantId, agentInstanceId } = await setupTenant("boot-recovery-untouched");
+  const queued = await createTask(tenantId, agentInstanceId);
+  const done = await createTask(tenantId, agentInstanceId);
+  await runWithTenancyContext({ tenantId, userId: "test", permissions: [] }, () => prisma.agentTask.update({ where: { id: done.id }, data: { status: "DONE" } }));
+
+  const { recoveredTaskIds } = await recoverOrphanedTasksAtBoot();
+  assert.ok(!recoveredTaskIds.includes(queued.id));
+  assert.ok(!recoveredTaskIds.includes(done.id));
 });

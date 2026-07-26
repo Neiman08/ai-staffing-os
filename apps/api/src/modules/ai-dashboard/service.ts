@@ -24,6 +24,17 @@ function startOfDay(): Date {
  * suma el costo de las tareas encadenadas (parentTaskId) a partir de
  * CampaignCompany.createdByAgentTaskId — no captura measureCampaign/
  * optimizeCampaign invocadas sueltas (costo marginal, ver nota abajo).
+ *
+ * Bug real encontrado en auditoría de "primera misión real": a
+ * diferencia de crm/service.ts, campaign-tools.impl.ts y public/service.ts,
+ * las consultas directas sobre Company de este dashboard nunca excluían
+ * origin=DEMO_SEED/INTERNAL_TEST — un operador real vería conteos/score
+ * promedio/desglose por industria y estado inflados o distorsionados
+ * por datos de demo o de la prueba de aceptación interna. Los conteos
+ * derivados de Lead/Opportunity/CampaignCompany no se tocan en este
+ * fix — ninguno de los otros módulos de exclusión ya existentes en el
+ * repo los filtra tampoco (harían falta joins hasta Company que no
+ * existen hoy en ningún lado); documentado como riesgo residual menor.
  */
 export async function getAiDashboardSummary(): Promise<AiDashboardSummary> {
   const ctx = getTenancyContext();
@@ -55,9 +66,9 @@ export async function getAiDashboardSummary(): Promise<AiDashboardSummary> {
     outreachCostUsd,
   ] = await Promise.all([
     scopedDb.agentTask.count({ where: { type: "score_company", status: "DONE", completedAt: { gte: today } } }),
-    scopedDb.company.count({ where: { createdAt: { gte: today } } }),
+    scopedDb.company.count({ where: { createdAt: { gte: today }, origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } } }),
     scopedDb.lead.count({ where: { createdByAgentTaskId: { not: null }, createdAt: { gte: today } } }),
-    scopedDb.company.aggregate({ _avg: { commercialScore: true }, where: { commercialScore: { not: null } } }),
+    scopedDb.company.aggregate({ _avg: { commercialScore: true }, where: { commercialScore: { not: null }, origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } } }),
     getMonthlyBudgetStatus(ctx.tenantId),
     scopedDb.opportunity.findMany({
       where: { createdByAgentTaskId: { not: null } },
@@ -65,8 +76,8 @@ export async function getAiDashboardSummary(): Promise<AiDashboardSummary> {
     }),
     scopedDb.lead.count({ where: { createdByAgentTaskId: { not: null }, status: { in: ["NEW", "CONTACTED"] } } }),
     scopedDb.approvalRequest.count({ where: { status: "PENDING" } }),
-    scopedDb.company.groupBy({ by: ["industryId"], _count: { _all: true } }),
-    scopedDb.company.groupBy({ by: ["state"], _count: { _all: true } }),
+    scopedDb.company.groupBy({ by: ["industryId"], _count: { _all: true }, where: { origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } } }),
+    scopedDb.company.groupBy({ by: ["state"], _count: { _all: true }, where: { origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } } }),
     scopedDb.campaign.count({ where: { status: "ACTIVE" } }),
     scopedDb.campaign.count({ where: { status: "COMPLETED" } }),
     scopedDb.campaignCompany.groupBy({ by: ["campaignId"], _count: { _all: true } }),

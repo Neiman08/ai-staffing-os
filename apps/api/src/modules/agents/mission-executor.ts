@@ -443,7 +443,7 @@ function extractHttpStatus(errorText: string): number | null {
 
 async function executeOneQuery(
   query: FinalQuery,
-  deps: { taskId: string; abortSignal?: AbortSignal; providers: DiscoveryProviderPort; googlePlacesApiKey: string | undefined; tenantId: string },
+  deps: { taskId: string; abortSignal?: AbortSignal; providers: DiscoveryProviderPort; googlePlacesApiKey: string | undefined; tenantId: string; missionSpentSoFarUsd: number },
 ): Promise<{ result: ProviderSearchResult; origin: "API_PROVIDER" | "EXTERNAL_DISCOVERY" | null; provider: string | null; omittedNote: string | null }> {
   const stateName = SUPPORTED_STATE_CODES[query.state] ?? query.state;
   let omittedNote: string | null = null;
@@ -451,8 +451,17 @@ async function executeOneQuery(
   if (deps.googlePlacesApiKey) {
     const health = getProviderHealth(PROVIDER_KEY_GOOGLE_PLACES);
     const budget = await getDataProviderBudgetStatus(deps.tenantId);
-    if (budget.exceeded) {
-      omittedNote = `Google Places omitido: presupuesto de proveedor de datos excedido ($${budget.spentUsd.toFixed(2)}/$${budget.budgetUsd.toFixed(2)}).`;
+    // Bug real encontrado en auditoría: budget.spentUsd solo suma
+    // AgentTask.costUsd ya persistido -- esta misión escribe su propio
+    // totalCostUsd recién al final (ver el update de childTask), así
+    // que nunca se veía a sí misma mientras corría. Sumar
+    // missionSpentSoFarUsd (el acumulado en memoria de ESTA corrida,
+    // actualizado en cada query del loop de arriba) cierra ese hueco --
+    // mismo criterio que PdlMissionBudget en pdl-budget.ts para el
+    // guardia de PDL.
+    const effectiveSpentUsd = budget.spentUsd + deps.missionSpentSoFarUsd;
+    if (effectiveSpentUsd >= budget.budgetUsd) {
+      omittedNote = `Google Places omitido: presupuesto de proveedor de datos excedido ($${effectiveSpentUsd.toFixed(2)}/$${budget.budgetUsd.toFixed(2)}).`;
     } else if (health && health.status !== "AVAILABLE") {
       omittedNote = `Google Places omitido: marcado ${health.status} (${health.reason}).`;
     } else {
@@ -685,6 +694,18 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     triggeredBy: "AGENT",
     parentTaskId: params.missionTaskId,
   });
+  // Bug real encontrado en auditoría: mientras esta fila queda en QUEUED
+  // (todo lo de abajo puede tardar minutos -- llamadas reales a
+  // proveedores con reintentos/backoff), el Orchestrator autónomo
+  // (mismo `type`, tick cada 30s) puede reclamarla de verdad y ejecutar
+  // discovery.executor.ts en paralelo sobre la misma fila -- ese
+  // executor rechaza el input (no tiene el shape que espera) y marca
+  // FAILED/RETRY_SCHEDULED, carrera de escritura real contra el update
+  // final de acá abajo. Se cierra la ventana marcándola RUNNING
+  // inmediatamente -- mismo patrón ya usado por executeTaskById en
+  // task-executor.ts para tareas que se ejecutan y cierran síncronamente
+  // en el mismo proceso, nunca vía el loop de claim.
+  await scopedDb.agentTask.update({ where: { id: childTask.id }, data: { status: "RUNNING" } });
 
   const queryExecutions: QueryExecutionRecord[] = [];
   const rejectedCandidates: RejectedCandidateRecord[] = [];
@@ -838,6 +859,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
       providers,
       googlePlacesApiKey,
       tenantId: ctx.tenantId,
+      missionSpentSoFarUsd: totalCostUsd,
     });
     if (omittedNote) providersOmitted.add(omittedNote);
     if (result.costUsd > 0) totalCostUsd += result.costUsd;

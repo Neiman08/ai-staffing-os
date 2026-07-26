@@ -95,6 +95,14 @@ test("pausePilotMission / resumePilotMission: cambian controlState real, isPilot
   const resumed = await withTenant(tenantId, () => resumePilotMission(mission.missionTaskId));
   assert.equal(resumed.controlState, "ACTIVE");
   assert.equal(await withTenant(tenantId, () => isPilotMissionActive(mission.correlationId)), true);
+
+  // Bug real encontrado en auditoría: pause/resume nunca quedaban en el
+  // AuditLog real (a diferencia de cancel) -- solo cancelPilotMission lo
+  // hacía.
+  const pausedAudit = await prisma.auditLog.findFirst({ where: { entityId: mission.missionTaskId, action: "mission.pilot_paused" } });
+  const resumedAudit = await prisma.auditLog.findFirst({ where: { entityId: mission.missionTaskId, action: "mission.pilot_resumed" } });
+  assert.ok(pausedAudit, "pausePilotMission debe dejar un AuditLog real");
+  assert.ok(resumedAudit, "resumePilotMission debe dejar un AuditLog real");
 });
 
 test("cancelPilotMission: marca CANCELED el AgentTask raíz QUEUED, controlState=CANCELED, isPilotMissionActive=false", async () => {

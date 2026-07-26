@@ -1,4 +1,5 @@
 import { prisma, Prisma, type AgentTask } from "@ai-staffing-os/db";
+import { AgentError } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../tenancy/context";
 import { recordTaskFailure } from "../../modules/agents/task-lifecycle";
 
@@ -153,4 +154,45 @@ export async function reclaimExpiredLeases(): Promise<{ reclaimedTaskIds: string
   }
 
   return { reclaimedTaskIds: expired.map((t) => t.id) };
+}
+
+/**
+ * Bug real encontrado en auditoría de "primera misión real": un
+ * AgentTask ejecutado por el camino síncrono viejo
+ * (task-executor.ts:executeTaskById) nunca escribe `leaseExpiresAt` --
+ * reclaimExpiredLeases() de arriba filtra explícitamente
+ * `leaseExpiresAt IS NOT NULL`, así que nunca lo toca. Un crash/redeploy
+ * real a mitad de esa ejecución deja la fila en RUNNING para siempre,
+ * sin ningún sweep periódico que la recupere jamás.
+ *
+ * Corrección: una recuperación de ARRANQUE, exactamente una vez por
+ * vida de proceso -- nunca desde un scheduler periódico. Un proceso
+ * recién arrancado todavía no reclamó ni ejecutó nada, así que
+ * cualquier fila ya en RUNNING/CLAIMED con lease NULL en ese instante
+ * es necesariamente huérfana de un proceso ANTERIOR. Llamar a esto
+ * durante la vida normal del proceso (no al arrancar) sería un bug
+ * nuevo: mataría trabajo legítimo de executeTaskById todavía en vuelo
+ * en ese mismo proceso.
+ */
+export async function recoverOrphanedTasksAtBoot(): Promise<{ recoveredTaskIds: string[] }> {
+  const orphaned = await prisma.$queryRaw<{ id: string; tenantId: string }[]>`
+    SELECT "id", "tenantId" FROM "AgentTask"
+    WHERE "status" IN ('CLAIMED', 'RUNNING') AND "leaseExpiresAt" IS NULL
+  `;
+
+  for (const task of orphaned) {
+    // RETRYABLE_TIMEOUT, no UNKNOWN -- mismo criterio que
+    // reclaimExpiredLeases arriba: un worker que murió a mitad de
+    // ejecución es una falla de infraestructura, no un error
+    // permanente de la tarea en sí, así que merece el mismo reintento
+    // con backoff, nunca FAILED directo.
+    await runWithTenancyContext({ tenantId: task.tenantId, userId: "system-boot-recovery", permissions: [] }, () =>
+      recordTaskFailure(
+        task.id,
+        new AgentError("RETRYABLE_TIMEOUT", "Huérfana de un proceso anterior: seguía RUNNING/CLAIMED sin lease al arrancar este proceso (probable crash/redeploy a mitad de ejecución)."),
+      ),
+    );
+  }
+
+  return { recoveredTaskIds: orphaned.map((t) => t.id) };
 }

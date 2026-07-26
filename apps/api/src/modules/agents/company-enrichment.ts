@@ -246,7 +246,11 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
           },
         });
         companyContactPointsCreated++;
-        log(params.taskId, "contact point persisted", { companyId: company.id, email: trust.normalizedEmail, status: trust.status });
+        // Bug real encontrado en auditoría: nunca loguear el email en
+        // texto plano por stdout (PII real) -- el AuditLog de abajo ya
+        // registra el email de verdad, con el mismo control de acceso
+        // que cualquier otro dato de negocio sensible.
+        log(params.taskId, "contact point persisted", { companyId: company.id, status: trust.status });
 
         await logAuditEvent({
           action: "company.contact_point_created_by_agent",
@@ -260,7 +264,7 @@ export async function enrichCompanyWithOrganizationalEmails(params: CompanyEnric
         await scopedDb.company.update({ where: { id: company.id }, data: { email: trust.normalizedEmail! } });
         companyEmailUpdated = true;
         companyHasEmail = true;
-        log(params.taskId, "company email updated", { companyId: company.id, email: trust.normalizedEmail });
+        log(params.taskId, "company email updated", { companyId: company.id });
       }
     }
 

@@ -335,7 +335,14 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
     const pa = (approval.proposedAction && typeof approval.proposedAction === "object" ? approval.proposedAction : {}) as Record<string, unknown>;
     const draft = await resolveDraftEmail(approval.proposedAction);
     const companyId = draft?.companyId ?? null;
-    const company = companyId ? await scopedDb.company.findUnique({ where: { id: companyId }, select: { origin: true, commercialStatus: true } }) : null;
+    const company = companyId
+      ? await scopedDb.company.findUnique({ where: { id: companyId }, select: { origin: true, commercialStatus: true, discoveryMetadata: true } })
+      : null;
+    // Bug real encontrado en auditoría: mismo shape de extracción que
+    // outreach-tools.impl.ts/sales-tools.impl.ts usan al crear el
+    // borrador -- acá se re-evalúa con el estado ACTUAL de la Company,
+    // que puede haber cambiado desde entonces.
+    const discoveryMeta = (company?.discoveryMetadata as { isClientOwnerCandidate?: boolean; opportunityRecommendation?: { recommendation?: string } } | null) ?? null;
 
     const gate = evaluateApprovalQualityGate({
       companyOrigin: company?.origin ?? null,
@@ -344,6 +351,8 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
       subject: typeof pa.subject === "string" ? pa.subject : null,
       body: typeof pa.body === "string" ? pa.body : null,
       hasOtherActiveDuplicateApproval: companyId ? await hasOtherActiveApprovalForCompany(companyId, id) : false,
+      isClientOwnerCandidate: !!discoveryMeta?.isClientOwnerCandidate,
+      opportunityRecommendation: discoveryMeta?.opportunityRecommendation?.recommendation ?? null,
     });
 
     if (!gate.passed) {
@@ -517,6 +526,21 @@ export async function sendApproval(id: string, deps: SendApprovalDeps = {}): Pro
     // Vuelve a FAILED (nunca se queda trabada en SENDING) -- caso real:
     // proposedAction sin `to` resoluble (dato viejo/canal no-EMAIL).
     await scopedDb.approvalRequest.update({ where: { id }, data: { status: "FAILED" } });
+    // Bug real encontrado en auditoría: a diferencia del bloqueo de
+    // límites justo abajo, este FAILED nunca dejaba rastro en el
+    // AuditLog -- un operador real vería un envío fallido sin ninguna
+    // explicación forense de por qué.
+    await scopedDb.auditLog.create({
+      data: {
+        tenantId: ctx.tenantId,
+        actorType: "HUMAN",
+        actorId: ctx.userId,
+        action: "approval.send_failed_no_recipient",
+        entityType: "approvalRequest",
+        entityId: id,
+        after: { reason: "No se pudo resolver un destinatario de email real para este borrador -- revisar el canal de contacto." } as never,
+      },
+    });
     throw AppError.badRequest("No se pudo resolver un destinatario de email real para este borrador -- revisar el canal de contacto.");
   }
 

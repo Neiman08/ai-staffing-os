@@ -1,6 +1,6 @@
 import { DEFAULT_POLICY_ENVELOPE, type AgentExecutionContext, type AgentExecutor } from "@ai-staffing-os/agents";
 import { claimNextTasks, DEFAULT_LEASE_MS } from "../../core/queue/postgres-queue";
-import { recordTaskSuccess, recordTaskFailure } from "./task-lifecycle";
+import { recordTaskSuccess, recordTaskFailure, heartbeatTask } from "./task-lifecycle";
 import { publishEvent } from "../../core/events/outbox";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { logger } from "../../core/logger";
@@ -98,7 +98,32 @@ export class Orchestrator {
           return;
         }
 
-        const result = await executor.execute(context, parsedInput);
+        // Bug real encontrado en auditoría: heartbeatTask (Fase 1, ya
+        // probado) nunca se llamaba desde ningún camino de producción --
+        // un executor real (p.ej. draft_outreach, llamada real a un LLM)
+        // que tarde más que `leaseMs` (5 min default) hace que
+        // reclaimExpiredLeases() libere el lease MIENTRAS execute()
+        // sigue corriendo de verdad. Un segundo tick del scheduler
+        // reclama la misma fila y la ejecuta en paralelo; cuando el
+        // primer execute() finalmente resuelve, recordTaskSuccess/
+        // recordTaskFailure la pisan sin chequear si el lease seguía
+        // siendo suyo -- doble ejecución real y un lost-update en el
+        // estado final de la tarea. Renovar el lease en cada intervalo
+        // mientras execute() sigue en vuelo cierra la ventana; el
+        // heartbeat se detiene apenas execute() resuelve (éxito o error).
+        const heartbeatIntervalMs = Math.floor(leaseMs / 2);
+        const heartbeatHandle = setInterval(() => {
+          heartbeatTask(task.id, workerId, leaseMs).catch((err) => {
+            logger.error("orchestrator_heartbeat_failed", { taskId: task.id, workerId, message: err instanceof Error ? err.message : String(err) });
+          });
+        }, heartbeatIntervalMs);
+
+        let result;
+        try {
+          result = await executor.execute(context, parsedInput);
+        } finally {
+          clearInterval(heartbeatHandle);
+        }
 
         if (result.success) {
           await recordTaskSuccess(task.id, result.output);

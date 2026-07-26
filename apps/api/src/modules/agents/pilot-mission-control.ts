@@ -117,6 +117,10 @@ export async function pausePilotMission(missionTaskId: string): Promise<PilotMis
     where: { id: missionTaskId },
     data: { output: { ...((task.output as object) ?? {}), pilotMissionControl: "PAUSED" } as never },
   });
+  // Bug real encontrado en auditoría: a diferencia de cancelPilotMission,
+  // esta transición nunca quedaba en el AuditLog real -- solo en el
+  // logger.info (no auditable/consultable vía GET /audit-log).
+  await logAuditEvent({ action: "mission.pilot_paused", entityType: "agentTask", entityId: missionTaskId, after: { correlationId: task.correlationId } });
   logger.info("pilot_mission_paused", { missionTaskId, correlationId: task.correlationId });
   return toSummary(updated);
 }
@@ -130,6 +134,8 @@ export async function resumePilotMission(missionTaskId: string): Promise<PilotMi
     where: { id: missionTaskId },
     data: { output: { ...((task.output as object) ?? {}), pilotMissionControl: "ACTIVE" } as never },
   });
+  // Bug real encontrado en auditoría: mismo hueco que pausePilotMission.
+  await logAuditEvent({ action: "mission.pilot_resumed", entityType: "agentTask", entityId: missionTaskId, after: { correlationId: task.correlationId } });
   logger.info("pilot_mission_resumed", { missionTaskId, correlationId: task.correlationId });
   return toSummary(updated);
 }

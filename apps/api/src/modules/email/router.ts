@@ -84,10 +84,10 @@ emailRouter.get("/emails/:id/investigate-delivery", requirePermission("approvals
  * permiso sensible que el resto de acciones administrativas
  * (settings.manage). Reconcilia el ÚNICO buzón real que este repo usa
  * para envíos reales (sales@<dominio>, ver sender-profiles.ts) contra el
- * tenant del contexto actual. No hay ejecución periódica automática
- * todavía -- pedido explícito de la Fase 4 (si se agrega más adelante,
- * debe ser configurable, apagada por defecto en tests, y con guarda de
- * liderazgo de proceso).
+ * tenant del contexto actual. Desde la auditoría de "primera misión
+ * real" también corre automáticamente cada 30 min vía
+ * email/scheduler.ts (ver ese archivo) -- este endpoint sigue existiendo
+ * para forzar una corrida inmediata sin esperar al próximo tick.
  */
 emailRouter.post("/emails/reconcile", requirePermission("settings.manage"), async (req, res, next) => {
   try {

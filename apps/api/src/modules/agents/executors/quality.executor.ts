@@ -71,7 +71,7 @@ const ENRICHMENT_CHECKS = new Set(["contact_valid", "email_valid"]);
 export function deriveQualityVerdict(failures: ApprovalQualityCheckFailure[]): QualityVerdict {
   if (failures.length === 0) return "PASS";
   const checks = new Set(failures.map((f) => f.check));
-  if (checks.has("no_duplicates")) return "HUMAN_REVIEW";
+  if (checks.has("no_duplicates") || checks.has("client_owner_review")) return "HUMAN_REVIEW";
   if ([...checks].some((c) => STRUCTURAL_BLOCK_CHECKS.has(c))) return "BLOCKED";
   if ([...checks].some((c) => ENRICHMENT_CHECKS.has(c))) return "NEEDS_ENRICHMENT";
   return "NEEDS_REVISION";

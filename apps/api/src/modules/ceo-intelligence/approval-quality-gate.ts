@@ -27,6 +27,21 @@ export interface ApprovalQualityGateInput {
   body: string | null;
   /** true si existe OTRO ApprovalRequest activo (no este mismo) para la misma Company. */
   hasOtherActiveDuplicateApproval: boolean;
+  /**
+   * Bug real encontrado en auditoría de "primera misión real":
+   * evaluateDraftCreationGate (draft-creation-gate.ts) solo se evalúa al
+   * CREAR el borrador. Un re-discovery/re-enrichment posterior puede
+   * marcar la Company como isClientOwnerCandidate=true/MANUAL_REVIEW
+   * DESPUÉS de que el borrador ya existe y sigue PENDING -- sin este
+   * re-chequeo acá, un humano podía aprobar outreach hacia lo que el
+   * propio sistema ya detectó como el cliente final real. Opcionales
+   * (default false/null) para no romper a los callers existentes
+   * (quality.executor.ts, vía el pipeline reactivo) que todavía no los
+   * pasan -- decideApproval (approvals/service.ts), el gate humano
+   * final y autoritativo, sí los pasa siempre con el dato fresco.
+   */
+  isClientOwnerCandidate?: boolean;
+  opportunityRecommendation?: string | null;
 }
 
 export interface ApprovalQualityCheckFailure {
@@ -38,7 +53,8 @@ export interface ApprovalQualityCheckFailure {
     | "no_placeholders"
     | "no_duplicates"
     | "content_complete"
-    | "minimal_metadata";
+    | "minimal_metadata"
+    | "client_owner_review";
   reason: string;
 }
 
@@ -63,6 +79,18 @@ export function evaluateApprovalQualityGate(input: ApprovalQualityGateInput): Ap
   // ✓ clasificación válida
   if (input.companyCommercialStatus === "DISCOVERY_CANDIDATE") {
     failures.push({ check: "classification_valid", reason: "Company.commercialStatus=DISCOVERY_CANDIDATE -- tipo de negocio todavía sin validar." });
+  }
+
+  // ✓ nunca aprobable si un (re-)discovery posterior a la creación del
+  // borrador marcó esta Company como probable cliente final real -- mismo
+  // criterio exacto que evaluateDraftCreationGate al crear el borrador.
+  if (input.isClientOwnerCandidate || input.opportunityRecommendation === "MANUAL_REVIEW") {
+    failures.push({
+      check: "client_owner_review",
+      reason: input.isClientOwnerCandidate
+        ? "Esta Company fue marcada isClientOwnerCandidate=true -- probablemente el cliente final (ej. el propio data center), no un contratista real. Requiere revisión humana antes de aprobar outreach."
+        : "opportunityRecommendation=MANUAL_REVIEW -- evidencia mixta o insuficiente, requiere revisión humana antes de aprobar outreach.",
+    });
   }
 
   // ✓ contacto válido

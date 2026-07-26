@@ -176,6 +176,49 @@ test("runOnce con falla HUMAN_ACTION_REQUIRED marca la tarea HUMAN_REVIEW", asyn
   assert.equal(updated.status, "HUMAN_REVIEW");
 });
 
+test("runOnce renueva el lease (heartbeat) mientras un executor real sigue en vuelo más allá del lease original", async () => {
+  // Bug real encontrado en auditoría: heartbeatTask (Fase 1) nunca se
+  // llamaba desde ningún camino de producción. Con un lease corto (200ms)
+  // y un executor que tarda 500ms, sin heartbeat el lease habría
+  // expirado ~300ms antes de que execute() termine -- acá se verifica en
+  // vivo, a mitad de la ejecución, que leaseExpiresAt sigue en el futuro.
+  const { tenantId, agentInstanceId } = await setupTenant("heartbeat");
+  const task = await createTask(tenantId, agentInstanceId, "slow_task", {});
+  const leaseMs = 200;
+
+  // Objeto holder, no una variable local -- TS no puede probar que el
+  // closure de `execute` corrió antes de las lecturas de abajo, así que
+  // narrowing sobre una `let` capturada colapsaría el tipo a `null`
+  // incorrectamente; una propiedad de objeto no sufre ese narrowing.
+  const midFlight: { leaseExpiresAt: Date | null; checkTime: number } = { leaseExpiresAt: null, checkTime: 0 };
+  const orchestrator = new Orchestrator();
+  orchestrator.registerExecutor({
+    taskType: "slow_task",
+    stage: "DISCOVERY",
+    inputSchema: z.unknown(),
+    execute: async () => {
+      await new Promise((r) => setTimeout(r, 350));
+      const reloaded = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+      midFlight.leaseExpiresAt = reloaded.leaseExpiresAt;
+      midFlight.checkTime = Date.now(); // capturado en el mismo instante -- nunca comparar contra un Date.now() evaluado después
+      await new Promise((r) => setTimeout(r, 200));
+      return agentSuccess({ ok: true });
+    },
+  });
+
+  const metrics = await orchestrator.runOnce("worker-1", 10, leaseMs);
+
+  assert.equal(metrics.completed, 1, "el heartbeat nunca debe impedir que la tarea complete normalmente");
+  if (!midFlight.leaseExpiresAt) throw new Error("el lease debía seguir activo (no nulo) 350ms después de un lease de 200ms");
+  assert.ok(
+    midFlight.leaseExpiresAt.getTime() > midFlight.checkTime,
+    "heartbeatTask debe haber renovado leaseExpiresAt más allá del lease original, medido en el instante en que se leyó",
+  );
+
+  const updated = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+  assert.equal(updated.status, "DONE");
+});
+
 test("runOnce con input que no cumple el schema del executor falla sin invocar execute()", async () => {
   const { tenantId, agentInstanceId } = await setupTenant("bad-input");
   const task = await createTask(tenantId, agentInstanceId, "echo_test_task", { value: 123 }); // debería ser string

@@ -318,6 +318,12 @@ test("sin ningún canal real resoluble -- sendApproval falla honestamente (FAILE
 
     const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
     assert.equal(stored.status, "FAILED", "nunca se queda trabado en SENDING");
+
+    // Bug real encontrado en auditoría: este FAILED nunca dejaba rastro
+    // en el AuditLog -- a diferencia del bloqueo por límites de envío,
+    // que sí lo hacía.
+    const audit = await prisma.auditLog.findFirst({ where: { entityId: approval.id, action: "approval.send_failed_no_recipient" } });
+    assert.ok(audit, "un FAILED por falta de destinatario resoluble debe dejar un AuditLog real, igual que el bloqueo por límites");
   });
   assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 0);
 });
@@ -347,6 +353,37 @@ test("Quality Gate: decideApproval(APPROVED) rechaza un borrador sin destinatari
 
     const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
     assert.equal(stored.status, "PENDING", "nunca avanza a READY_TO_SEND sin un destinatario real");
+  });
+});
+
+test("Bug real encontrado en auditoría: decideApproval re-chequea isClientOwnerCandidate con el estado ACTUAL de la Company, no solo al crear el borrador", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("client-owner-review-after-draft");
+  const company = await prisma.company.create({ data: { tenantId, name: "Real Data Center Co", industryId, status: "LEAD", email: "info@realdatacenter.example" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    // El borrador se creó ANTES de que un re-discovery posterior marcara
+    // la Company como probable cliente final real -- ese es exactamente
+    // el escenario real que evaluateDraftCreationGate, evaluado solo al
+    // crear, no puede cubrir por sí solo.
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador creado antes del re-discovery",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@realdatacenter.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    await prisma.company.update({ where: { id: company.id }, data: { discoveryMetadata: { isClientOwnerCandidate: true } } });
+
+    await assert.rejects(
+      () => decideApproval(approval.id, { decision: "APPROVED" }),
+      (err: unknown) => err instanceof AppError && err.status === 400 && /cliente final/i.test(err.message),
+    );
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
+    assert.equal(stored.status, "PENDING", "nunca avanza a READY_TO_SEND hacia una Company marcada como probable cliente final real");
   });
 });
 

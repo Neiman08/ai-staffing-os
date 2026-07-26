@@ -142,11 +142,16 @@ async function fetchGooglePlacesTextSearch(
   textQuery: string,
   maxResultCount: number,
   abortSignal: AbortSignal | undefined,
-): Promise<{ places: GooglePlace[] } | { error: string; cancelled?: boolean }> {
+): Promise<{ places: GooglePlace[] } | { error: string; cancelled?: boolean; requestSent?: boolean }> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     if (isCancellation(abortSignal)) {
       log(taskId, "provider request cancelled", { textQuery, attempt });
-      return { error: "cancelled by user", cancelled: true };
+      // Bug real encontrado en auditoría: cancelado ANTES de que este
+      // intento llegue a `fetch` -- requestSent=false, nunca se le pegó
+      // a la API real, así que searchGooglePlaces no debe cobrar nada
+      // por esto (a diferencia de una cancelación a mitad de vuelo, más
+      // abajo, donde el request real ya salió).
+      return { error: "cancelled by user", cancelled: true, requestSent: false };
     }
 
     log(taskId, "provider requested", { provider: "Google Places", textQuery, attempt, maxAttempts: MAX_RETRIES });
@@ -225,7 +230,11 @@ export async function searchGooglePlaces(params: ProviderSearchParams, apiKey: s
       candidates: [],
       // Se cobra por request aunque la respuesta sea un error != a la key/cuota (ver arriba, esos ni se reintentan) —
       // registramos costo solo si de verdad se le pegó a la API (no en errores de validación local).
-      costUsd: TEXT_SEARCH_COST_PER_REQUEST_USD,
+      // Bug real encontrado en auditoría: una cancelación previa a
+      // cualquier fetch (requestSent=false) nunca le pegó a la API real
+      // -- cobrar acá inflaba el gasto registrado sin ningún request de
+      // verdad detrás.
+      costUsd: result.requestSent === false ? 0 : TEXT_SEARCH_COST_PER_REQUEST_USD,
       sourcesUsed: [],
       patternsFailed: [`${params.queryPhrase ?? params.industryName}:google_places_text_search (${result.error})`],
       cancelled: !!result.cancelled,

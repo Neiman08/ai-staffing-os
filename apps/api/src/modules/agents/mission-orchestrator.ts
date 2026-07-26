@@ -449,10 +449,20 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
   // Hospitality antes de esta fase).
   const explicitVolumeInsufficient = interpreted.desiredVolume != null;
   if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0)) {
+    // Bug real encontrado en auditoría: sin excluir DEMO_SEED/INTERNAL_TEST
+    // (mismo criterio que crm/service.ts y campaign-tools.impl.ts), una
+    // misión real podía ver "suficiente" oferta interna por culpa de
+    // empresas de demo/prueba y saltarse el fallback de descubrimiento
+    // externo que en realidad necesitaba.
     const internalSupply =
       industries.length > 0
         ? await scopedDb.company.count({
-            where: { industryId: { in: industries.map((i) => i.id) }, state: interpreted.state ?? undefined, city: interpreted.city ?? undefined },
+            where: {
+              industryId: { in: industries.map((i) => i.id) },
+              state: interpreted.state ?? undefined,
+              city: interpreted.city ?? undefined,
+              origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] },
+            },
           })
         : 0;
     if (internalSupply < perCampaignVolume) {
