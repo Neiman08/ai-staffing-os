@@ -179,7 +179,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         // gastar ningún request al LLM -- nunca se redacta un "borrador
         // de email" para una empresa sin ningún email real.
         const channelResolution = resolveBestContactChannel({
-          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus })),
+          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus, source: c.source })),
           contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
           companyEmail: company.email,
           companyPhone: company.phone,
@@ -216,6 +216,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
             CAREERS_PAGE: "página de careers/jobs",
             LINKEDIN: "LinkedIn",
             PHONE: "teléfono principal",
+            INTERNAL_TEST_EMAIL: "email de prueba interna de aceptación",
             NONE: "ningún canal",
           };
           const followUp = await followUpsService.createFollowUp({

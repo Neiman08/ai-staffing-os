@@ -49,7 +49,7 @@ export async function listPublicJobOpenings(): Promise<PublicJobOpening[]> {
   const jobOrders = await scopedDb.jobOrder.findMany({
     where: {
       status: { in: ["OPEN", "PARTIALLY_FILLED"] },
-      company: { origin: { not: "DEMO_SEED" } },
+      company: { origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } },
     },
     include: { category: { include: { industry: true } } },
     orderBy: { createdAt: "desc" },
@@ -86,7 +86,7 @@ export interface PublicStats {
 export async function getPublicStats(): Promise<PublicStats> {
   const [industriesServed, realCompanies, aiAgentsActive] = await Promise.all([
     scopedDb.industry.count(),
-    scopedDb.company.findMany({ where: { origin: { not: "DEMO_SEED" } }, select: { state: true } }),
+    scopedDb.company.findMany({ where: { origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } }, select: { state: true } }),
     scopedDb.agentInstance.count({ where: { isActive: true } }),
   ]);
   const statesActive = new Set(realCompanies.map((c) => c.state).filter((s): s is string => !!s)).size;

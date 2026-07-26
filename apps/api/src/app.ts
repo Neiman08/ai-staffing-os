@@ -46,6 +46,7 @@ import { productionReadinessRouter } from "./modules/production-readiness/router
 import { publicRouter } from "./modules/public/router";
 import { authWebhookRouter } from "./modules/auth/webhook.router";
 import { analyticsRouter } from "./modules/analytics/router";
+import { internalTestingRouter } from "./modules/internal-testing/router";
 
 /**
  * F17 (dominio propio, transición): "https://a.com, https://b.com" ->
@@ -257,6 +258,7 @@ export function createApp() {
   app.use("/api/v1", brandingRouter);
   app.use("/api/v1", productionReadinessRouter);
   app.use("/api/v1", analyticsRouter);
+  app.use("/api/v1", internalTestingRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

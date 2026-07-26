@@ -572,6 +572,12 @@ enum CompanyOrigin {
   CSV_IMPORT
   EXTERNAL_DISCOVERY
   API_PROVIDER
+  // F27 (Internal Acceptance Test): creado EXCLUSIVAMENTE por
+  // internal-testing/service.ts, nunca por ningún endpoint genérico de
+  // creación de Company -- ver comentario extendido en ese archivo.
+  // Excluido de campañas/métricas comerciales igual que DEMO_SEED (ver
+  // campaign-tools.impl.ts, crm/service.ts, public/service.ts).
+  INTERNAL_TEST
 }
 
 // F4.5: UNVERIFIED es el default honesto para todo lo previo a F4.5 (nadie
@@ -722,6 +728,13 @@ enum ContactVerificationStatus {
   UNVERIFIED
   CONFIRMED
   INFERRED
+  // F27 (Internal Acceptance Test): NUNCA equivalente a CONFIRMED/VERIFIED
+  // comercial -- resolveBestContactChannel (contact-channel.ts) solo lo
+  // trata como email-capable cuando TAMBIÉN Contact.source="INTERNAL_TEST"
+  // (marcador doble, ninguno de los 2 solo alcanza). Escrito EXCLUSIVAMENTE
+  // por internal-testing/service.ts, nunca por el endpoint genérico de
+  // creación de Contact (contactInputSchema no expone este campo).
+  INTERNAL_TEST_VERIFIED
 }
 
 // F4.7: estado de ENTREGABILIDAD del email, distinto de

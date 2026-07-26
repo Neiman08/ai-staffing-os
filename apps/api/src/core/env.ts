@@ -108,6 +108,20 @@ const envSchema = z.object({
   // pasar a true en cualquier entorno real. Ver core/production-mode.ts.
   PRODUCTION_MODE: z.coerce.boolean().default(false),
 
+  // F27 (Internal Acceptance Test): mismo criterio de "bandera segura
+  // explícita" que el resto de guardas sensibles de este archivo -- por
+  // defecto false, así que con PRODUCTION_MODE=true la prueba interna
+  // queda bloqueada salvo que un admin la habilite explícitamente acá.
+  // Con PRODUCTION_MODE=false (el default de hoy), la prueba ya está
+  // permitida sin necesitar esta bandera -- ver
+  // internal-testing/service.ts's isInternalAcceptanceTestEnvironmentSafe().
+  INTERNAL_ACCEPTANCE_TEST_ENABLED: z.coerce.boolean().default(false),
+  // Allowlist real de destinatarios de prueba, coma-separados -- nunca un
+  // wildcard, nunca vacío por default. El gate de internal-testing/
+  // service.ts rechaza cualquier destinatario fuera de esta lista, sin
+  // excepción.
+  INTERNAL_ACCEPTANCE_TEST_ALLOWED_RECIPIENTS: z.string().default("neimangroupllc@gmail.com"),
+
   // F4.8: qué Tenant sirve el sitio público (dreistaff.com) — este
   // pilot es de un solo tenant real ("titan", el mismo de siempre en
   // seed.ts), pero el valor sigue siendo configurable por env, nunca

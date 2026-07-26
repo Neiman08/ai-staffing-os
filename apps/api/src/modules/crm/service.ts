@@ -62,7 +62,7 @@ export async function listCompanies(query: CompanyQuery): Promise<Paginated<Comp
   const excludeDemo = query.excludeDemo || isProductionMode();
   const rows = await scopedDb.company.findMany({
     ...buildCursorArgs(query),
-    where: excludeDemo ? { origin: { not: "DEMO_SEED" } } : undefined,
+    where: excludeDemo ? { origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } } : undefined,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
       industry: true,
@@ -304,7 +304,7 @@ export async function listContacts(query: ContactQuery): Promise<Paginated<Conta
         state: query.companyState,
         industry: query.industryName ? { name: query.industryName } : undefined,
         name: query.companyName ? { contains: query.companyName, mode: "insensitive" } : undefined,
-        origin: excludeDemo ? { not: "DEMO_SEED" } : undefined,
+        origin: excludeDemo ? { notIn: ["DEMO_SEED", "INTERNAL_TEST"] } : undefined,
       },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

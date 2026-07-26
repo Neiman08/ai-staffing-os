@@ -228,6 +228,10 @@ export const approvalRequestListItemSchema = z.object({
   emailSendResult: approvalEmailSendResultSchema.optional(),
   recipientWarning: recipientWarningSchema.optional(),
   placeholderWarning: placeholderWarningSchema.optional(),
+  // F27 (Internal Acceptance Test): true cuando la Company vinculada tiene
+  // origin="INTERNAL_TEST" -- la UI nunca debe mostrar esto como un lead
+  // comercial real (ver Approvals.tsx).
+  isInternalTest: z.boolean().optional(),
 });
 export type ApprovalRequestListItem = z.infer<typeof approvalRequestListItemSchema>;
 

@@ -197,7 +197,15 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
               </Link>
             )}
           </div>
-          <Badge variant={STATUS_BADGE_VARIANT[approval.status] ?? "warning"}>{formatStatusLabel(approval.status)}</Badge>
+          <div className="flex items-center gap-1.5">
+            {/* F27 (Internal Acceptance Test): nunca debe leerse como un lead comercial real. */}
+            {approval.isInternalTest && (
+              <Badge variant="warning" className="border-dashed">
+                INTERNAL TEST
+              </Badge>
+            )}
+            <Badge variant={STATUS_BADGE_VARIANT[approval.status] ?? "warning"}>{formatStatusLabel(approval.status)}</Badge>
+          </div>
         </div>
         {!isEditing && action.to && (
           <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">

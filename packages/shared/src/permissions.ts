@@ -62,6 +62,12 @@ const SPECIAL_PERMISSION_KEYS = [
   // recurso PROPIO del usuario -- nunca encaja como "update" genérico
   // (update implicaría poder editar el contenido de la notificación).
   "notifications.markRead",
+  // F27: ejecutar la prueba interna de aceptación de producción (crea
+  // Company/Lead/Contact/ApprovalRequest marcados INTERNAL_TEST y corre
+  // Approve & Send real contra un destinatario allowlisted) -- nunca
+  // confundir con approvals.decide, que actúa sobre borradores
+  // comerciales reales ya existentes.
+  "internalTests.run",
 ] as const;
 
 const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number], string> = {
@@ -79,6 +85,7 @@ const SPECIAL_PERMISSION_LABELS: Record<(typeof SPECIAL_PERMISSION_KEYS)[number]
   "matching.run": "Run AI matching",
   "clientJobs.approve": "Approve/convert a client job request",
   "notifications.markRead": "Mark own notifications as read",
+  "internalTests.run": "Run the internal production acceptance test",
 };
 
 type Resource = (typeof PERMISSION_RESOURCES)[number];
@@ -130,4 +137,5 @@ export const MFA_REQUIRED_PERMISSIONS: PermissionKey[] = [
   "invoices.send",
   "approvals.decide",
   "compliance.block",
+  "internalTests.run",
 ];

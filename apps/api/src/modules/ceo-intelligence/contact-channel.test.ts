@@ -191,13 +191,60 @@ test("contacto personal (tier 1) contaminado con teléfono también se descarta,
   assert.equal(r.value, "info@acme.com");
 });
 
-test("isEmailCapableChannel refleja exactamente los 3 primeros tiers, nunca los 4 canales alternativos", () => {
+test("isEmailCapableChannel refleja exactamente los 3 tiers comerciales + INTERNAL_TEST_EMAIL, nunca los 4 canales alternativos", () => {
   assert.equal(isEmailCapableChannel("VERIFIED_PERSON_EMAIL"), true);
   assert.equal(isEmailCapableChannel("VERIFIED_ORG_EMAIL"), true);
   assert.equal(isEmailCapableChannel("WEBSITE_ORG_EMAIL"), true);
+  assert.equal(isEmailCapableChannel("INTERNAL_TEST_EMAIL"), true);
   assert.equal(isEmailCapableChannel("CONTACT_FORM"), false);
   assert.equal(isEmailCapableChannel("CAREERS_PAGE"), false);
   assert.equal(isEmailCapableChannel("LINKEDIN"), false);
   assert.equal(isEmailCapableChannel("PHONE"), false);
   assert.equal(isEmailCapableChannel("NONE"), false);
+});
+
+// ---------- F27 (Internal Acceptance Test): marcador doble, nunca una verificación comercial ----------
+
+test("INTERNAL_TEST_EMAIL: un contacto con AMBOS marcadores (source + verificationStatus) gana sobre cualquier otro canal, incluso VERIFIED_PERSON_EMAIL", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        { email: "real-person@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null },
+        { email: "test@example.com", emailVerificationStatus: null, linkedinUrl: null, verificationStatus: "INTERNAL_TEST_VERIFIED", source: "INTERNAL_TEST" },
+      ],
+    }),
+  );
+  assert.equal(r.channel, "INTERNAL_TEST_EMAIL");
+  assert.equal(r.value, "test@example.com");
+  assert.equal(r.isEmailCapable, true);
+});
+
+test("INTERNAL_TEST_EMAIL: verificationStatus=INTERNAL_TEST_VERIFIED SOLO (sin source=INTERNAL_TEST) nunca es tratado como email-capable por este canal -- el marcador simple nunca alcanza", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "suspicious@example.com", emailVerificationStatus: null, linkedinUrl: null, verificationStatus: "INTERNAL_TEST_VERIFIED", source: null }],
+    }),
+  );
+  assert.notEqual(r.channel, "INTERNAL_TEST_EMAIL");
+});
+
+test("INTERNAL_TEST_EMAIL: source=INTERNAL_TEST SOLO (sin verificationStatus=INTERNAL_TEST_VERIFIED) nunca es tratado como email-capable por este canal -- el marcador simple nunca alcanza", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "suspicious@example.com", emailVerificationStatus: null, linkedinUrl: null, verificationStatus: "CONFIRMED", source: "INTERNAL_TEST" }],
+    }),
+  );
+  // CONFIRMED sí es un tier 1 real (import manual/CSV) -- pero nunca vía el canal INTERNAL_TEST_EMAIL específicamente.
+  assert.notEqual(r.channel, "INTERNAL_TEST_EMAIL");
+});
+
+test("INTERNAL_TEST_EMAIL nunca se interpreta como una verificación comercial: un contacto real de un proveedor real (Hunter.io/PDL/Website Intelligence) jamás produce este canal", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "jane@realcompany.com", emailVerificationStatus: "NOT_VERIFIED", linkedinUrl: null, verificationStatus: "CONFIRMED", source: "Hunter.io" }],
+    }),
+  );
+  assert.notEqual(r.channel, "INTERNAL_TEST_EMAIL");
+  // Sigue siendo tier 1 real (CONFIRMED), nunca degradado por tener un `source` real -- el chequeo de INTERNAL_TEST_EMAIL es aditivo, nunca interfiere con el resto de la lógica.
+  assert.equal(r.channel, "VERIFIED_PERSON_EMAIL");
 });

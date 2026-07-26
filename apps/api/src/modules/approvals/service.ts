@@ -85,6 +85,7 @@ function toListItem(
   userLabels: Map<string, string>,
   emailSendResult?: ApprovalEmailSendResult | null,
   recipientWarning?: RecipientWarning,
+  isInternalTest?: boolean,
 ): ApprovalRequestListItem {
   return {
     id: approval.id,
@@ -105,6 +106,8 @@ function toListItem(
     emailSendResult,
     recipientWarning: recipientWarning ?? null,
     placeholderWarning: computePlaceholderWarning(approval.proposedAction),
+    // F27 (Internal Acceptance Test): nunca confundir con un lead comercial real.
+    isInternalTest: isInternalTest ?? false,
   };
 }
 
@@ -237,6 +240,19 @@ async function computeRecipientWarnings(proposedActions: unknown[]): Promise<Rec
 }
 
 /**
+ * F27 (Internal Acceptance Test, req. explícito: "la interfaz debe
+ * mostrar claramente INTERNAL TEST"): batch real sobre
+ * ApprovalRequest.companyId (columna directa, nunca parseando
+ * proposedAction) -- un solo findMany, nunca N+1.
+ */
+async function loadIsInternalTest(companyIds: (string | null)[]): Promise<Map<string, boolean>> {
+  const ids = Array.from(new Set(companyIds.filter((id): id is string => !!id)));
+  if (ids.length === 0) return new Map();
+  const companies = await scopedDb.company.findMany({ where: { id: { in: ids } }, select: { id: true, origin: true } });
+  return new Map(companies.map((c) => [c.id, c.origin === "INTERNAL_TEST"]));
+}
+
+/**
  * F27 Fase 9: reconstruye emailSendResult para un ApprovalRequest ya
  * enviado (SENT/FAILED con intento real) a partir del ESTADO ACTUAL de su
  * EmailMessage real -- nunca lo que decía en el instante del /send. El
@@ -283,8 +299,9 @@ export async function listApprovals(status?: string): Promise<ApprovalRequestLis
   const userLabels = await labelUsers(Array.from(userIds));
   const recipientWarnings = await computeRecipientWarnings(approvals.map((a) => a.proposedAction));
   const emailSendResults = await loadEmailSendResults(approvals.map((a) => a.id));
+  const isInternalTestByCompanyId = await loadIsInternalTest(approvals.map((a) => a.companyId));
 
-  return approvals.map((a, idx) => toListItem(a, userLabels, emailSendResults.get(a.id) ?? null, recipientWarnings[idx]));
+  return approvals.map((a, idx) => toListItem(a, userLabels, emailSendResults.get(a.id) ?? null, recipientWarnings[idx], a.companyId ? isInternalTestByCompanyId.get(a.companyId) : false));
 }
 
 /**
