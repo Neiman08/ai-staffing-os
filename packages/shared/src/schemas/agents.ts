@@ -266,10 +266,16 @@ export const sendManualEmailInputSchema = z.object({
 });
 export type SendManualEmailInput = z.infer<typeof sendManualEmailInputSchema>;
 
+// F27: refleja el contrato real de SendEmailResult (email-service.ts) --
+// "SENT" quedó legado ahí (nunca lo escribe código nuevo, ver ese
+// archivo); un envío manual exitoso siempre es ACCEPTED_BY_PROVIDER hoy.
 export const sendManualEmailResultSchema = z.object({
   emailMessageId: z.string(),
-  status: z.enum(["SENT", "FAILED", "RETRYABLE"]),
+  correlationId: z.string(),
+  status: z.enum(["SENT", "ACCEPTED_BY_PROVIDER", "FAILED", "RETRYABLE"]),
   providerMessageId: z.string().nullable(),
+  internetMessageId: z.string().nullable(),
+  conversationId: z.string().nullable(),
   errorMessage: z.string().nullable(),
 });
 export type SendManualEmailResult = z.infer<typeof sendManualEmailResultSchema>;
