@@ -1,7 +1,15 @@
 # F27 — Informe final: corrección integral de correo y enriquecimiento de contactos
 
-Rama: `fix/email-integration-hardening` (8 commits, ninguno pusheado — el usuario decide
-cuándo y a dónde). Ningún merge a `main` fue hecho ni intentado.
+Rama: `fix/email-integration-hardening`, ninguno pusheado — el usuario decide cuándo y a
+dónde. Ningún merge a `main` fue hecho ni intentado.
+
+> **Nota (post-informe)**: este documento describe el estado de la misión de 12 fases tal
+> como se cerró originalmente (8 commits, hasta `b6ba0d7`). Después de entregado, el
+> usuario pidió una prueba final de aceptación que reveló una brecha real (sin forma
+> oficial de crear un `ApprovalRequest` de prueba sin falsificar una verificación
+> comercial) — corregida en commits posteriores (`390ea93` en adelante). Ver
+> `docs/F27_INTERNAL_ACCEPTANCE_TEST_REPORT.md` para ese trabajo y
+> `RELEASE_READINESS.md` para el estado consolidado y final de toda la rama.
 
 ## 1. Resumen ejecutivo
 

@@ -54,7 +54,11 @@ poder generar un borrador real.
 14. Sin créditos de Hunter/PDL — ✅ (verificado por test automatizado: 0 actividad de `HunterDomainSearchCache`, 0 `AgentTask` de tipo `find_contacts`).
 15. Ningún prospecto real contactado — ✅.
 
-## Pruebas automatizadas (43 nuevas, todas verdes)
+## Pruebas automatizadas (18 nuevas, todas verdes)
+
+_(Corrección post-informe: la primera versión de este documento y el mensaje del commit
+`390ea93` decían "43"/"47" -- conteo real verificado durante la auditoría de release:
+5 + 4 + 5 + 4 = 18 tests nuevos específicos de esta funcionalidad.)_
 
 - `contact-channel.test.ts` (+5): marcador doble obligatorio, un solo marcador nunca alcanza, nunca interfiere con verificación comercial real.
 - `draft-creation-gate.test.ts` (+4): par de señales Company+Contact obligatorio, DEMO_SEED sigue ganando, origin solo no autoriza nada.
