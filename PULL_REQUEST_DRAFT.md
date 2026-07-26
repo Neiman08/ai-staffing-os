@@ -144,7 +144,7 @@ Ningún `DROP`/`RENAME`/`ALTER COLUMN ... SET NOT NULL` sobre datos existentes.
   sin rastro), no funcionalidades opcionales — desactivarlas reintroduciría el problema
   original que motivó todo este trabajo.
 
-## Lista exacta de commits (12, en orden)
+## Lista exacta de commits (13, en orden)
 
 1. `3b0f7b6` — fix(email): stop conflating Graph 202 with a confirmed send, add reconciliation
 2. `ae3af5a` — fix(email): require a real EmailMessage before sendGraphMail will touch Graph
@@ -158,15 +158,14 @@ Ningún `DROP`/`RENAME`/`ALTER COLUMN ... SET NOT NULL` sobre datos existentes.
 10. `390ea93` — feat(internal-testing): add a gated Internal Acceptance Test flow
 11. `f382485` — test(public): fix stats test to match the widened INTERNAL_TEST exclusion
 12. `d525526` — docs: final release audit -- RELEASE_READINESS.md, GO with documented caveats
+13. `971c6ec` — docs: correct release audit inaccuracies, add exact non-pass test evidence, prepare PR draft
 
-(Este PR se preparó antes de un 13er commit que corrige la documentación de DNS/SPF y
-agrega este mismo borrador — se agregará a la lista cuando se cree.)
+## Lista exacta de archivos modificados (56 hasta el commit `971c6ec`)
 
-## Lista exacta de archivos modificados (55 hasta el commit `d525526`)
-
-**Nuevos (24)**:
+**Nuevos (25)**:
 ```
 RELEASE_READINESS.md
+PULL_REQUEST_DRAFT.md
 apps/api/src/modules/agents/hunter-domain-cache.test.ts
 apps/api/src/modules/agents/hunter-domain-cache.ts
 apps/api/src/modules/agents/pdl-budget.test.ts
