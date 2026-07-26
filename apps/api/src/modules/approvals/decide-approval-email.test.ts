@@ -376,6 +376,18 @@ test("un fallo real del proveedor deja el ApprovalRequest en FAILED (reintentabl
     // poder volver a intentarlo (a diferencia de SENT).
     const retry = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
     assert.equal(retry.status, "SENT");
+
+    // F27 Fase 10 ("un reintento nunca duplica un EmailMessage exitoso"):
+    // cada intento REAL (el fallido y el exitoso) deja su propia fila --
+    // eso es evidencia real de 2 intentos distintos, nunca "duplicación".
+    // Lo que SÍ nunca puede pasar es que dos filas terminen ambas en un
+    // estado real de despacho (ACCEPTED_BY_PROVIDER/SENT/etc.) para el
+    // MISMO ApprovalRequest -- solo el intento que de verdad ganó.
+    const allAttempts = await prisma.emailMessage.findMany({ where: { tenantId, approvalRequestId: approval.id }, orderBy: { createdAt: "asc" } });
+    assert.equal(allAttempts.length, 2, "un intento fallido y su reintento dejan 2 filas reales -- 2 intentos, nunca uno solo corrompido");
+    assert.equal(allAttempts[0]!.status, "FAILED");
+    assert.equal(allAttempts[1]!.status, "ACCEPTED_BY_PROVIDER");
+    assert.notEqual(allAttempts[0]!.correlationId, allAttempts[1]!.correlationId, "cada intento real tiene su propio correlationId, nunca comparten uno");
   });
 });
 

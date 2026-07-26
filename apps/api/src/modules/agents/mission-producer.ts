@@ -130,7 +130,7 @@ export async function createPilotMission(input: PilotMissionInput): Promise<Pilo
   };
 
   let task: AgentTask;
-  let alreadyExisted = false;
+  const alreadyExisted = false;
   try {
     task = await scopedDb.agentTask.create({
       data: {
