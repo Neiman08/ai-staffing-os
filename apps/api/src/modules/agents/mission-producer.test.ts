@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { createPilotMission, type PilotMissionInput } from "./mission-producer";
+import type { PipelineFlags } from "../../core/pipeline-flags";
 
 /**
  * F25.2 (activación controlada, Prioridad 1): pruebas de integración
@@ -10,7 +11,26 @@ import { createPilotMission, type PilotMissionInput } from "./mission-producer";
  * nunca llama a Discovery real (solo CREA el AgentTask, no lo ejecuta
  * -- eso es responsabilidad del Orchestrator, ver Prioridad 6 para el
  * flujo completo).
+ *
+ * Este archivo prueba el productor con el pipeline real habilitado --
+ * inyecta el flag vía el segundo parámetro de createPilotMission (no
+ * depende de MISSION_TASK_PRODUCTION_ENABLED en el entorno real, mismo
+ * patrón que pilot-mission-e2e.test.ts).
  */
+
+function allFlagsOn(): PipelineFlags {
+  return {
+    autonomousWorkerEnabled: true,
+    missionTaskProductionEnabled: true,
+    discoveryAgentEnabled: true,
+    contactIntelligenceAgentEnabled: true,
+    qualityAgentEnabled: true,
+    eventHandlersEnabled: true,
+    draftAgentEnabled: true,
+    externalActionsEnabled: false,
+    autonomousSendingEnabled: false,
+  };
+}
 
 const TEST_PREFIX = "F25-2-MISSION-PRODUCER";
 const createdTenantIds: string[] = [];
@@ -57,28 +77,28 @@ test("rechaza autonomyLevel distinto de 1 (defensa en profundidad, más allá de
   const tenantId = await setupTenant("autonomy-level");
   const input = { ...baseInput(), autonomyLevel: 2 } as unknown as PilotMissionInput;
 
-  await assert.rejects(() => withTenant(tenantId, () => createPilotMission(input)), /autonomyLevel=1/);
+  await assert.rejects(() => withTenant(tenantId, () => createPilotMission(input, allFlagsOn())), /autonomyLevel=1/);
 });
 
 test("rechaza un estado no soportado", async () => {
   const tenantId = await setupTenant("state");
   const input = baseInput({ region: { state: "ZZ", cities: ["Nowhere"] }, idempotencyKey: `pilot-state-${Date.now()}` });
 
-  await assert.rejects(() => withTenant(tenantId, () => createPilotMission(input)), /no soportado/);
+  await assert.rejects(() => withTenant(tenantId, () => createPilotMission(input, allFlagsOn())), /no soportado/);
 });
 
 test("rechaza un trade que no matchea ninguna entrada real de la taxonomía -- nunca inventa un plan", async () => {
   const tenantId = await setupTenant("unknown-trade");
   const input = baseInput({ trade: "asdfqwertyunrecognizedtrade12345", idempotencyKey: `pilot-unknown-${Date.now()}` });
 
-  await assert.rejects(() => withTenant(tenantId, () => createPilotMission(input)), /no matcheó ninguna entrada real/);
+  await assert.rejects(() => withTenant(tenantId, () => createPilotMission(input, allFlagsOn())), /no matcheó ninguna entrada real/);
 });
 
 test("dryRun=true nunca crea un AgentTask -- solo devuelve el plan", async () => {
   const tenantId = await setupTenant("dry-run");
   const input = baseInput({ dryRun: true, idempotencyKey: `pilot-dryrun-${Date.now()}` });
 
-  const result = await withTenant(tenantId, () => createPilotMission(input));
+  const result = await withTenant(tenantId, () => createPilotMission(input, allFlagsOn()));
 
   assert.equal(result.dryRun, true);
   assert.equal(result.status, "DRY_RUN");
@@ -95,7 +115,7 @@ test("crea un AgentTask real (discover_companies, QUEUED) con correlationId/idem
   const idempotencyKey = `pilot-real-${Date.now()}`;
   const input = baseInput({ idempotencyKey });
 
-  const result = await withTenant(tenantId, () => createPilotMission(input));
+  const result = await withTenant(tenantId, () => createPilotMission(input, allFlagsOn()));
 
   assert.equal(result.alreadyExisted, false);
   assert.equal(result.dryRun, false);
@@ -121,8 +141,10 @@ test("idempotencia real: la misma idempotencyKey nunca crea una segunda tarea", 
   const idempotencyKey = `pilot-idem-${Date.now()}`;
   const input = baseInput({ idempotencyKey });
 
-  const first = await withTenant(tenantId, () => createPilotMission(input));
-  const second = await withTenant(tenantId, () => createPilotMission(baseInput({ idempotencyKey, name: "Solicitud repetida (nombre distinto, misma idempotencyKey)" })));
+  const first = await withTenant(tenantId, () => createPilotMission(input, allFlagsOn()));
+  const second = await withTenant(tenantId, () =>
+    createPilotMission(baseInput({ idempotencyKey, name: "Solicitud repetida (nombre distinto, misma idempotencyKey)" }), allFlagsOn()),
+  );
 
   assert.equal(first.alreadyExisted, false);
   assert.equal(second.alreadyExisted, true);

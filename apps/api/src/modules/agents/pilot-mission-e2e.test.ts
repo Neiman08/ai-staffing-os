@@ -344,7 +344,7 @@ test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligenc
       autonomyLevel: 1,
       dryRun: false,
       idempotencyKey,
-    }),
+    }, allFlagsOn()),
   );
   assert.equal(mission.dryRun, false);
   assert.ok(mission.missionTaskId);
@@ -433,7 +433,7 @@ test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligenc
       autonomyLevel: 1,
       dryRun: false,
       idempotencyKey, // misma clave
-    }),
+    }, allFlagsOn()),
   );
   assert.equal(secondAttempt.alreadyExisted, true);
   assert.equal(secondAttempt.missionTaskId, mission.missionTaskId);
@@ -460,7 +460,7 @@ test("tenant isolation real: dos misiones piloto en tenants distintos nunca comp
       autonomyLevel: 1,
       dryRun: false,
       idempotencyKey: `e2e-isolation-a-${tenantA}`,
-    }),
+    }, allFlagsOn()),
   );
   const missionB = await withTenant(tenantB, () =>
     createPilotMission({
@@ -472,7 +472,7 @@ test("tenant isolation real: dos misiones piloto en tenants distintos nunca comp
       autonomyLevel: 1,
       dryRun: false,
       idempotencyKey: `e2e-isolation-b-${tenantB}`,
-    }),
+    }, allFlagsOn()),
   );
 
   await runUntilIdle(orchestrator, dispatcher);

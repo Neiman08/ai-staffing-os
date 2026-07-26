@@ -9,7 +9,7 @@ import { AppError } from "../../core/errors";
 import { logAuditEvent } from "../../core/audit-log";
 import { logger } from "../../core/logger";
 import { resolveAgentInstance } from "./task-executor";
-import { PIPELINE_FLAGS } from "../../core/pipeline-flags";
+import { PIPELINE_FLAGS, type PipelineFlags } from "../../core/pipeline-flags";
 
 /**
  * F25.2 (activación controlada del pipeline real, Prioridad 1):
@@ -77,12 +77,19 @@ export interface PilotMissionResult {
  * primera AgentTask real de una misión piloto. `dryRun=true` nunca
  * escribe ningún AgentTask -- solo devuelve el plan que se hubiera
  * usado, mismo espíritu que POST /missions/plan (camino viejo).
+ *
+ * `flags` sigue el mismo patrón de inyección que
+ * `registerPipelineHandlers`/`buildProductionOrchestrator`
+ * (pipeline-handlers.ts, orchestrator-scheduler.ts): default al
+ * singleton real `PIPELINE_FLAGS`, override explícito solo en tests
+ * que necesitan ejercitar el pipeline con el flag encendido sin mutar
+ * variables de entorno globales.
  */
-export async function createPilotMission(input: PilotMissionInput): Promise<PilotMissionResult> {
+export async function createPilotMission(input: PilotMissionInput, flags: PipelineFlags = PIPELINE_FLAGS): Promise<PilotMissionResult> {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
-  if (!PIPELINE_FLAGS.missionTaskProductionEnabled) {
+  if (!flags.missionTaskProductionEnabled) {
     throw new AppError(403, "PIPELINE_DISABLED", "missionTaskProductionEnabled está apagado -- ver PIPELINE_FLAGS.");
   }
   if (input.autonomyLevel !== 1) {

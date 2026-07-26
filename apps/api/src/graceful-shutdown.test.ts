@@ -11,21 +11,9 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
 
 const apiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const repoRoot = path.resolve(apiRoot, "../..");
 const PORT = 4099;
-
-function loadDotEnv(): Record<string, string> {
-  const raw = readFileSync(path.join(repoRoot, ".env"), "utf-8");
-  const vars: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
-    const match = /^([A-Z_]+)=(.*)$/.exec(line.trim());
-    if (match) vars[match[1]!] = match[2]!.replace(/^"|"$/g, "");
-  }
-  return vars;
-}
 
 async function waitForHealth(timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -42,10 +30,15 @@ async function waitForHealth(timeoutMs = 15_000): Promise<void> {
 }
 
 test("SIGTERM real: la API cierra ordenadamente (schedulers, servidor, Prisma) y termina con exit code 0", async () => {
-  const dotEnvVars = loadDotEnv();
+  // El propio proceso de test ya tiene todas las variables reales en
+  // process.env -- vía `dotenv -e ../../.env` en local (ver el script
+  // "test" de package.json) o vía el bloque `env:` del workflow en CI.
+  // Nunca se vuelve a leer ".env" del disco: ese archivo no existe en
+  // GitHub Actions ni en un checkout aislado (worktree), y hacerlo así
+  // rompía el test en ambos casos sin motivo -- process.env ya alcanza.
   const child = spawn("node", ["--import", "tsx", "src/index.ts"], {
     cwd: apiRoot,
-    env: { ...process.env, ...dotEnvVars, PORT: String(PORT) },
+    env: { ...process.env, PORT: String(PORT) },
   });
 
   const logLines: string[] = [];

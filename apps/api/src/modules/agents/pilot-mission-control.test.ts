@@ -4,6 +4,7 @@ import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { createPilotMission, type PilotMissionInput } from "./mission-producer";
 import { listPilotMissions, pausePilotMission, resumePilotMission, cancelPilotMission, isPilotMissionActive } from "./pilot-mission-control";
+import type { PipelineFlags } from "../../core/pipeline-flags";
 
 /**
  * F25.2 (activación controlada, Prioridad 8): control de ciclo de vida
@@ -11,7 +12,26 @@ import { listPilotMissions, pausePilotMission, resumePilotMission, cancelPilotMi
  * isPilotMissionActive() efectivamente bloquee la creación de tareas
  * reactivas nuevas (probado end-to-end en pipeline-handlers.test.ts,
  * acá solo la función en sí + el estado que expone).
+ *
+ * Inyecta el pipeline habilitado vía el segundo parámetro de
+ * createPilotMission (mismo patrón que mission-producer.test.ts /
+ * pilot-mission-e2e.test.ts) -- nunca depende de
+ * MISSION_TASK_PRODUCTION_ENABLED en el entorno real.
  */
+
+function allFlagsOn(): PipelineFlags {
+  return {
+    autonomousWorkerEnabled: true,
+    missionTaskProductionEnabled: true,
+    discoveryAgentEnabled: true,
+    contactIntelligenceAgentEnabled: true,
+    qualityAgentEnabled: true,
+    eventHandlersEnabled: true,
+    draftAgentEnabled: true,
+    externalActionsEnabled: false,
+    autonomousSendingEnabled: false,
+  };
+}
 
 const TEST_PREFIX = "F25-2-MISSION-CONTROL";
 const createdTenantIds: string[] = [];
@@ -53,7 +73,7 @@ function baseInput(overrides: Partial<PilotMissionInput> = {}): PilotMissionInpu
 
 test("listPilotMissions: devuelve las misiones del tenant, más reciente primero, con controlState=ACTIVE por defecto", async () => {
   const tenantId = await setupTenant("list");
-  const mission = await withTenant(tenantId, () => createPilotMission(baseInput()));
+  const mission = await withTenant(tenantId, () => createPilotMission(baseInput(), allFlagsOn()));
 
   const missions = await withTenant(tenantId, () => listPilotMissions());
   assert.equal(missions.length, 1);
@@ -64,7 +84,7 @@ test("listPilotMissions: devuelve las misiones del tenant, más reciente primero
 
 test("pausePilotMission / resumePilotMission: cambian controlState real, isPilotMissionActive lo refleja", async () => {
   const tenantId = await setupTenant("pause-resume");
-  const mission = await withTenant(tenantId, () => createPilotMission(baseInput()));
+  const mission = await withTenant(tenantId, () => createPilotMission(baseInput(), allFlagsOn()));
 
   assert.equal(await withTenant(tenantId, () => isPilotMissionActive(mission.correlationId)), true);
 
@@ -79,7 +99,7 @@ test("pausePilotMission / resumePilotMission: cambian controlState real, isPilot
 
 test("cancelPilotMission: marca CANCELED el AgentTask raíz QUEUED, controlState=CANCELED, isPilotMissionActive=false", async () => {
   const tenantId = await setupTenant("cancel");
-  const mission = await withTenant(tenantId, () => createPilotMission(baseInput()));
+  const mission = await withTenant(tenantId, () => createPilotMission(baseInput(), allFlagsOn()));
 
   const canceled = await withTenant(tenantId, () => cancelPilotMission(mission.missionTaskId));
   assert.equal(canceled.controlState, "CANCELED");
@@ -93,7 +113,7 @@ test("cancelPilotMission: marca CANCELED el AgentTask raíz QUEUED, controlState
 
 test("cancelPilotMission: cancela también las tareas hijas no-terminales de la misma correlationId", async () => {
   const tenantId = await setupTenant("cancel-children");
-  const mission = await withTenant(tenantId, () => createPilotMission(baseInput()));
+  const mission = await withTenant(tenantId, () => createPilotMission(baseInput(), allFlagsOn()));
 
   const contactIntelDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "contact_intelligence" } });
   const contactIntelInstance = await prisma.agentInstance.create({ data: { tenantId, definitionId: contactIntelDefinition.id, isActive: true } });
@@ -117,7 +137,7 @@ test("cancelPilotMission: cancela también las tareas hijas no-terminales de la 
 
 test("pausePilotMission / resumePilotMission: una misión ya cancelada rechaza ambas acciones -- 409", async () => {
   const tenantId = await setupTenant("cancel-then-pause");
-  const mission = await withTenant(tenantId, () => createPilotMission(baseInput()));
+  const mission = await withTenant(tenantId, () => createPilotMission(baseInput(), allFlagsOn()));
   await withTenant(tenantId, () => cancelPilotMission(mission.missionTaskId));
 
   await assert.rejects(withTenant(tenantId, () => pausePilotMission(mission.missionTaskId)), /ya está cancelada/);
@@ -133,7 +153,7 @@ test("isPilotMissionActive: correlationId sin AgentTask raíz (no es una misión
 test("Seguridad (Prioridad 9): un tenant nunca puede pausar/reanudar/cancelar la misión piloto de otro tenant", async () => {
   const tenantA = await setupTenant("isolation-owner");
   const tenantB = await setupTenant("isolation-attacker");
-  const mission = await withTenant(tenantA, () => createPilotMission(baseInput()));
+  const mission = await withTenant(tenantA, () => createPilotMission(baseInput(), allFlagsOn()));
 
   await assert.rejects(withTenant(tenantB, () => pausePilotMission(mission.missionTaskId)), /Misión piloto no encontrada/);
   await assert.rejects(withTenant(tenantB, () => resumePilotMission(mission.missionTaskId)), /Misión piloto no encontrada/);
@@ -147,8 +167,8 @@ test("Seguridad (Prioridad 9): un tenant nunca puede pausar/reanudar/cancelar la
 test("Seguridad (Prioridad 9): listPilotMissions de un tenant nunca incluye misiones de otro tenant", async () => {
   const tenantA = await setupTenant("list-isolation-a");
   const tenantB = await setupTenant("list-isolation-b");
-  await withTenant(tenantA, () => createPilotMission(baseInput()));
-  await withTenant(tenantB, () => createPilotMission(baseInput()));
+  await withTenant(tenantA, () => createPilotMission(baseInput(), allFlagsOn()));
+  await withTenant(tenantB, () => createPilotMission(baseInput(), allFlagsOn()));
 
   const missionsA = await withTenant(tenantA, () => listPilotMissions());
   const missionsB = await withTenant(tenantB, () => listPilotMissions());
