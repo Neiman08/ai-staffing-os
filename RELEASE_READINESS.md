@@ -1,298 +1,183 @@
 # RELEASE_READINESS.md — `fix/email-integration-hardening`
 
-Auditoría final de release, ejecutada el 2026-07-26 antes de cualquier push/PR. Ningún
-push, merge, ni apertura de Pull Request fue realizado — se documentan solo abajo.
+Auditoría final de release, corregida el 2026-07-26 tras una segunda pasada exigida
+explícitamente por el usuario para eliminar imprecisiones de la versión anterior de este
+documento. Ningún push, merge, ni apertura de Pull Request fue realizado.
 
 ## Recomendación objetiva: **GO**, con salvedades documentadas
 
-El código de esta rama es seguro de mergear. No se encontró ningún bloqueador crítico
-introducido por este trabajo. Se encontró y corrigió un (1) regresión real durante esta
-misma auditoría, dos (2) fallos de test pre-existentes y no relacionados quedaron
-documentados con causa raíz (no son bloqueadores), y se identificó una (1) discrepancia
-real de arquitectura (orden de proveedores Hunter/PDL) que requiere una decisión de
-producto separada, no un fix de código de esta rama.
+Ninguna regresión real permanece sin corregir. Los 7 resultados que no fueron "pass" están
+completamente explicados abajo, con evidencia directa y reproducible de que ninguno es
+causado por esta rama (confirmado contra `main` real, en un worktree aislado, sin tocar la
+rama actual). Se corrigió la afirmación anterior sobre SPF/DKIM, que estaba desactualizada
+para SPF y no podía sostenerse como una certeza total para DKIM sin el encabezado real del
+mensaje recibido — ver §2.
 
 ---
 
-## 1–4: Higiene de código
+## 1. Los 7 resultados que no fueron "pass" — matemática completa
 
-| Chequeo | Resultado |
+`1838 tests = 1831 pass + 2 fail + 5 skip`. Los 5 `skip` son un diseño deliberado
+(gateados detrás de `RUN_REAL_PROVIDER_TESTS=1`, que nunca está activo en una corrida
+normal para no gastar créditos reales de proveedores pagos) — no una omisión ni un hueco
+de cobertura. Los 2 `fail` fueron investigados hasta la causa raíz y confirmados
+**pre-existentes en `main`**, con evidencia directa (no solo argumentada) descrita abajo.
+
+**Método de comparación contra `main`**: `git worktree add` en un directorio aislado
+(`/private/tmp/.../main-worktree`), `pnpm install` + `prisma generate` propios de ese
+worktree (confirmado que NO comparte `node_modules` con el repo real — verificado con
+`readlink -f` en ambas rutas antes y después, y con el health-check del servidor de
+desarrollo real, que siguió respondiendo 200 en todo momento). Los mismos 2 archivos de
+test se corrieron ahí, contra la misma base de datos real de desarrollo. Worktree
+eliminado (`git worktree remove --force`) al terminar — `git status` de la rama actual
+confirmado sin cambios.
+
+| # | Paquete | Archivo | Test | Estado exacto | Mensaje de error | ¿Archivo modificado por esta rama? | ¿Falla también en `main`? | Clasificación |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `@ai-staffing-os/api` | `src/modules/agents/tools/contact-intelligence.test.ts` | `findContacts (llamada real al proveedor configurado o ausencia honesta): siempre termina DONE, nunca inventa datos` | `skipped` | `# SKIP llamada real a proveedor externo pago -- gateada detrás de RUN_REAL_PROVIDER_TESTS=1` | No | N/A (skip por diseño, no una falla) | Infraestructura (gate deliberado) |
+| 2 | `@ai-staffing-os/api` | `src/modules/agents/tools/contact-intelligence.test.ts` | `findEmail (llamada real a Website Intelligence + Hunter.io o ausencia honesta): siempre termina DONE, nunca inventa un email` | `skipped` | `# SKIP llamada real a proveedor externo pago -- gateada detrás de RUN_REAL_PROVIDER_TESTS=1` | No | N/A | Infraestructura (gate deliberado) |
+| 3 | `@ai-staffing-os/api` | `src/modules/discovery/discovery.test.ts` | `discoverCompanies (llamada real al proveedor configurado): siempre termina DONE, nunca inventa datos, provenance completa si crea algo` | `skipped` | `# SKIP llamada real a proveedor externo pago -- gateada detrás de RUN_REAL_PROVIDER_TESTS=1` | No | N/A | Infraestructura (gate deliberado) |
+| 4 | `@ai-staffing-os/api` | `src/modules/discovery/discovery.test.ts` | `discoverCompanies con searchTerms: corre una búsqueda independiente por frase, nunca inventa datos` | `skipped` | `# SKIP llamada real a proveedor externo pago -- gateada detrás de RUN_REAL_PROVIDER_TESTS=1` | No | N/A | Infraestructura (gate deliberado) |
+| 5 | `@ai-staffing-os/api` | `src/modules/missions/missions-dynamic-discovery.test.ts` | `una instrucción de descubrimiento externo (Manufacturing/IL, bucket real) ejecuta el nuevo ejecutor dinámico; respeta 'no crear campañas ni oportunidades' pero SÍ puede crear Leads de investigación (F14)` | `skipped` | `# SKIP llamada real a proveedor externo pago -- gateada detrás de RUN_REAL_PROVIDER_TESTS=1` | No | N/A | Infraestructura (gate deliberado) |
+| 6 | `@ai-staffing-os/api` | `src/modules/agents/mission-discovery-fallback.test.ts` | `el fallback automático descubre empresas reales de Hospitality y las lleva a lead/oportunidad real (nunca Demo)` | `failed` | Corrida original: `AssertionError [ERR_ASSERTION]: Expected values to be strictly equal: + 'PARTIAL' - 'COMPLETED'` en la línea 172 (`assert.equal(detail.missionState, "COMPLETED")`). **Corrida de comparación contra `main`**: falló con una señal de error DISTINTA (`industryNames` vacío en vez de `['Hospitality']`, línea 169) — confirma que el test es genuinamente no-determinista entre corridas, no solo "siempre falla igual" | No | **Sí — confirmado, reproducido en vivo en el worktree de `main`** (con una señal de fallo distinta, ver columna anterior) | Preexistente + no determinismo (depende de una llamada real a OpenAI/Google Places/PDL/Hunter, sin mock) |
+| 7 | `@ai-staffing-os/api` | `src/modules/agents/mission-planning.test.ts` | `compatibilidad con misiones antiguas: una misión real ya existente (sin ceoIntent/missionPlan) se sigue leyendo sin romperse` | `failed` | `AssertionError [ERR_ASSERTION]: Expected values to be strictly equal` — `detail.ceoIntent` esperado `null`, real: un objeto completo (`businessActivities`, `companyTypes`, `decisionRoles`...). El test asume que la fila `daily_revenue_mission` más antigua de `tenant-titan` predata F7.2 (sin `ceoIntent`); la base de desarrollo compartida ya no tiene ninguna fila así | No | **Sí — confirmado, reproducido en vivo en el worktree de `main`, con el mismo mensaje de error exacto** | Preexistente + infraestructura (test depende de la antigüedad acumulada de una base de datos compartida de desarrollo, no de un fixture propio) |
+
+**Ninguno de los 7 archivos que contienen estos resultados fue modificado por esta
+rama** (verificado con `git diff main...fix/email-integration-hardening --name-only`).
+**Ninguno de los 7 es una regresión.** Los 5 `skipped` son diseño intencional (no forman
+parte de la resta 1838-1831 como "fallos" en ningún sentido — están correctamente
+contados aparte). Los 2 `failed` están confirmados idénticos en `main`, con evidencia
+directa de ejecución, no solo de lectura de código.
+
+## 2. SPF y DKIM — corrección con evidencia actual, no un diagnóstico antiguo
+
+**Se retira la afirmación "SPF/DKIM rotos" tal como estaba escrita — estaba desactualizada
+para SPF y era una generalización excesiva para DKIM.** Verificación real, ahora mismo
+(2026-07-26), con 3 resolutores DNS independientes (local, Google 8.8.8.8, Cloudflare
+1.1.1.1 — mismo resultado en los 3, descartando caché/propagación como explicación):
+
+| Registro | Estado verificado ahora | Evidencia |
+|---|---|---|
+| **SPF** | ✅ **Corregido, confirmado.** `v=spf1 include:secureserver.net include:spf.protection.outlook.com -all` — ya incluye Microsoft 365. Esto es un cambio real desde la última verificación de esta rama (2026-07-25); alguien corrigió el registro en GoDaddy entre esa fecha y hoy. | `dig +short TXT dreistaff.com`, repetido contra 3 resolutores |
+| **DKIM (CNAME)** | ⚠️ **Discrepancia real, sin resolver.** El CNAME publicado (`selector1._domainkey.dreistaff.com` / `selector2._domainkey.dreistaff.com`) sigue apuntando a `...dkim.mail.microsoft.` (sin `.com`) y ese destino **no resuelve ningún registro** (ni A ni CNAME) contra ninguno de los 3 resolutores. Esto contradice, en el nivel de DNS público, la evidencia citada (Microsoft Defender mostrando DKIM habilitado, Mail Tester 10/10). | `dig`, `dig @8.8.8.8`, `dig @1.1.1.1`, los 3 con el mismo resultado, ahora mismo |
+| **DMARC** | Sin cambios, `p=quarantine` — correcto, no se toca hasta confirmar SPF+DKIM en `pass` sostenido. | `dig +short TXT _dmarc.dreistaff.com` |
+
+**Por qué no declaro "DKIM: pass" ni "DKIM: fail" de forma definitiva:** Microsoft 365
+puede estar firmando DKIM del lado de envío (lo que Defender reportaría como "habilitado,
+aplicando firmas") incluso si el registro CNAME público está roto — pero un receptor real
+(Gmail) solo puede VALIDAR esa firma si logra resolver la clave pública publicada en DNS,
+que es exactamente lo que acabo de confirmar que no resuelve. Esto significa que "Defender
+dice que está firmando" y "el DNS público no permite validar la firma" pueden ser
+simultáneamente ciertos y no son contradictorios entre sí — pero si son ciertos a la vez,
+el resultado real en la bandeja del destinatario sería `DKIM: fail` o `DKIM: none` (sin
+clave), no `pass`, salvo que el mensaje se autentique por otro mecanismo. **No tengo acceso
+al buzón de `neimangroupllc@gmail.com`** (es una cuenta externa, fuera del tenant de M365
+al que las credenciales de Graph de este proyecto dan acceso), así que no puedo leer el
+encabezado `Authentication-Results` del mensaje real recibido para resolver esta
+discrepancia con certeza.
+
+**Conclusión corregida, tal como se pidió**: *SPF ya pasa, verificado de forma
+reproducible hoy. DKIM no presenta un bloqueo observado del lado de envío según la
+evidencia externa citada (Defender, Mail Tester), pero el registro DNS público que
+permitiría a un receptor real validar esa firma sigue sin resolver, verificado de forma
+reproducible hoy con 3 resolutores independientes — la validación definitiva del
+encabezado del mensaje realmente recibido queda pendiente.* Si puedes compartir el
+encabezado completo ("Mostrar original" en Gmail) o el enlace/fecha exacta del reporte de
+Mail Tester, puedo cerrar esta discrepancia con evidencia directa en vez de inferencia.
+
+`docs/F27_EMAIL_DNS_REMEDIATION.md` queda desactualizado en cuanto a SPF (decía roto, ya
+no lo está) — se corrige por separado, ver §7 de la lista de archivos a tocar.
+
+## 3. Estado real del envío — aclaración de a qué corrida pertenece cada evidencia
+
+Dos eventos reales y **distintos** ocurrieron en esta rama, y no deben mezclarse:
+
+**A) El envío real que SÍ llegó a la bandeja de `neimangroupllc@gmail.com`** — corresponde
+a la prueba de aceptación **anterior**, vía `/emails/send-manual` (Fase 11 de la misión
+original), **no** al nuevo Internal Acceptance Test:
+- `EmailMessage` ID: `cms15as4a0000a6yi51vke82s`
+- Remitente: `DreiStaff Sales <sales@dreistaff.com>`
+- Destinatario: `neimangroupllc@gmail.com`
+- Asunto: "DreiStaff — Verificación controlada de trazabilidad"
+- `providerMessageId`: `AAkALgAAAAAAHYQDEapmEc2byACqAC-EWg0AX-VE3mlabEuId_WNY-gIcAAAAuxPDgAA`
+- `internetMessageId`: `<PH7PR02MB890509FBB1F350BE9B5AE560A1CD2@PH7PR02MB8905.namprd02.prod.outlook.com>`
+- Estado final registrado por DreiStaff: `SENT_CONFIRMED` (confirmado en Sent Items real por el reconciliador)
+- Evidencia externa que aportaste (entrega real en Gmail, remitente/Reply-To correctos, TLS, sin NDR, fecha visible 25 de julio de 2026 8:54 p.m.) corresponde a **este mismo mensaje** — es consistente con el `internetMessageId`/`providerMessageId` de arriba, no con ningún ID del punto B.
+
+**B) El Internal Acceptance Test nuevo** — llegó hasta el guardia de anti-duplicado y fue
+bloqueado ahí, **nunca generó un EmailMessage ni tocó Microsoft Graph**:
+- `ApprovalRequest` ID: `cms1972jb000c9bt0kq2zfvxw`, estado final `FAILED`
+- `AuditLog` `approval.send_blocked_by_limit`: *"Ya se envió un email real a
+  'neimangroupllc@gmail.com' anteriormente (EmailMessage `cms15as4a0000a6yi51vke82s`...)
+  -- nunca se envía dos veces al mismo destinatario."*
+- Ningún `providerMessageId`/`internetMessageId` existe para esta corrida — nunca se
+  generaron, porque el bloqueo ocurre antes de `sendEmail()`.
+
+**No se atribuye el mensaje recibido en Gmail al nuevo flujo de Internal Acceptance
+Test** — los IDs demuestran, sin ambigüedad, que pertenece al envío manual anterior. El
+dedup guard no fue modificado, ni se realizó ningún envío real adicional durante esta
+auditoría ni durante esta corrección del informe.
+
+## 4. GO / NO-GO — recalculado
+
+| Condición exigida | Cumple |
 |---|---|
-| TODO/FIXME/HACK/XXX | **Ninguno** en código nuevo (grep completo del diff, 0 coincidencias reales — 4 falsos positivos eran la palabra "todo" en español) |
-| `console.log`/`console.debug`/`debugger` nuevos | **Ninguno** agregado (los `log()` helpers existentes que internamente usan `console.log` para logs estructurados JSON son el patrón ya establecido en todo el repo, sin cambios) |
-| `.only()`/`.skip()` en tests nuevos | **Ninguno** |
-| Scripts temporales / `.tmp.ts` / archivos de scratch | **Ninguno** trackeado en la rama. `docs/FIRST_REAL_COMPANY_TEST_CHECKLIST.md` es un archivo *no trackeado* preexistente (fecha 2026-07-21, anterior a esta rama) — no forma parte de este diff, no requiere acción |
-| Credenciales/secretos expuestos | **Ninguno real.** Grep de patrones de secreto (sk-, AKIA, `-----BEGIN`, etc.) sin coincidencias. Toda mención de `clientSecret`/`apiKey` en el diff es una variable pasada por referencia o el fingerprint seguro ya documentado (longitud/sufijo/hash, nunca el valor). `.env` nunca tocado por git |
+| Ninguna regresión introducida por la rama | ✅ — la única regresión real encontrada (test de `public/stats`) fue corregida y verificada en la auditoría anterior; los 2 fallos restantes están confirmados pre-existentes en `main` con evidencia de ejecución directa (§1) |
+| Los 7 resultados no-pass explicados | ✅ — tabla completa en §1, con clasificación y evidencia contra `main` |
+| typecheck/lint/build limpios | ✅ — sin cambios desde la última verificación (esta corrección no tocó código de producto, solo documentación) |
+| Migraciones aditivas | ✅ — sin cambios desde la última verificación, las 3 migraciones siguen siendo solo `ADD VALUE`/`ADD COLUMN` (nullable)/`CREATE TABLE` |
+| Informe sin afirmaciones falsas/desactualizadas | ✅ — corregido SPF (ya no se afirma "roto"), corregido DKIM (ya no se afirma sin matices), corregida la atribución del envío real (§3) |
+| El PR describe con precisión qué se envió y qué se validó | ✅ — ver borrador abajo, explícito sobre qué es evidencia directa vs. evidencia externa citada pendiente de verificación |
 
-## 5: Migraciones — todas puramente aditivas
+**Recomendación: GO.** Ningún hallazgo de esta corrección cambia la conclusión de que el
+código es seguro de mergear — los ajustes fueron todos de precisión documental
+(reflejar el estado real de SPF/DKIM y aclarar a qué corrida pertenece cada evidencia),
+no de código. El único punto genuinamente abierto (validación definitiva de DKIM en el
+encabezado real recibido) es un dato externo pendiente, no un bloqueador de este PR.
 
-Revisadas las 3 migraciones nuevas de esta rama línea por línea:
+## Riesgos residuales (actualizados)
 
-- `20260725010000_f27_email_traceability_hardening`: solo `ALTER TYPE ... ADD VALUE`, `ALTER TABLE ... ADD COLUMN` (todas nullable), `CREATE TABLE`, `CREATE INDEX`.
-- `20260725020000_f27_hunter_domain_search_cache`: solo `CREATE TABLE`/`CREATE INDEX` (tabla nueva).
-- `20260726010000_f27_internal_acceptance_test`: solo `ALTER TYPE ... ADD VALUE` (2 enums).
+1. **DKIM**: registro DNS público roto (confirmado hoy, 3 resolutores) — pendiente de
+   corrección en GoDaddy (agregar `.com` al final de ambos CNAME) sin importar lo que
+   Defender/Mail Tester hayan reportado del lado de envío. Ver
+   `docs/F27_EMAIL_DNS_REMEDIATION.md` (sección DKIM, SPF ya corregida ahí también).
+2. **Validación definitiva del encabezado DKIM del mensaje real recibido** — pendiente,
+   requiere que el usuario comparta el encabezado completo o el reporte de Mail Tester.
+3. **Application Access Policy de Exchange** — sigue sin confirmarse desde este entorno.
+4. **Orden de proveedores Hunter/PDL** (Hunter no es hoy el proveedor principal, PDL sí
+   está limitado por presupuesto) — decisión de negocio pendiente, sin cambios desde la
+   auditoría anterior.
+5. **2 tests preexistentes en `main`**, confirmados no relacionados con esta rama —
+   seguirán apareciendo en corridas futuras de la suite completa hasta que se revisen por
+   separado (no están en el alcance de esta rama).
+6. **Datos reales de prueba interna sin eliminar** (Company/Lead/Contact/ApprovalRequest
+   `FAILED`, marcados `INTERNAL_TEST`) — sin cambios desde la auditoría anterior.
 
-Ningún `DROP`, `RENAME`, `ALTER COLUMN ... SET NOT NULL` sobre columnas existentes, ni
-sentencia que reescriba/borre datos existentes. Verificado además con las 3 migraciones
-ya aplicadas contra la base real de desarrollo sin pérdida de datos (conteos de filas
-verificados antes/después en cada fase).
+## Acciones manuales pendientes
 
-## 6: Referencias rotas / imports sin usar
-
-`tsc --noEmit` limpio en los 7 workspaces (incluida una corrida desde caché
-completamente limpia — ver §9). `eslint --max-warnings=0` limpio en los archivos nuevos
-más sensibles (`internal-testing/`, `reconciliation.ts`, `pdl-budget.ts`,
-`hunter-domain-cache.ts`). Lint completo del monorepo: 0 errores (solo warnings
-preexistentes, no relacionados, en archivos que esta rama nunca tocó).
-
-## 7–8: Documentación y correspondencia con el código real
-
-Se encontraron y corrigieron 2 inconsistencias reales durante esta auditoría:
-
-1. **`F27_FINAL_MISSION_REPORT.md`** listaba 8 commits como el estado final de la rama,
-   pero 2 commits posteriores (la funcionalidad de Internal Acceptance Test) ya existían
-   y no estaban reflejados. Se agregó una nota post-informe apuntando al documento
-   correcto y a este mismo `RELEASE_READINESS.md`.
-2. **`F27_INTERNAL_ACCEPTANCE_TEST_REPORT.md`** decía "43 pruebas nuevas" (y el mensaje
-   del commit `390ea93` decía "47") — el conteo real verificado es **18** (5+4+5+4 en
-   los 4 archivos de test de esa funcionalidad puntual). Corregido en el documento, con
-   nota explícita del error anterior (el mensaje de commit no se reescribió — reescribir
-   historia de git no estaba autorizado para esto y el error es cosmético, no afecta el
-   contenido real del cambio).
-
-El resto de la documentación (`F27_EMAIL_DNS_REMEDIATION.md`,
-`F27_EMAIL_SEND_CREDENTIAL_RISK.md`) sigue siendo exacta — describen hallazgos con fecha
-explícita ("verificado el 2026-07-25"), nunca afirman un estado "resuelto" sin evidencia,
-y nada cambió desde su redacción.
-
-## 9: Build limpio desde cero
-
-- `pnpm install --frozen-lockfile`: lockfile consistente con todos los `package.json` del
-  monorepo (equivalente real a "instalaría sin cambios en un entorno limpio/CI").
-- Se borraron manualmente `apps/web/tsconfig.tsbuildinfo`, `apps/marketing/tsconfig.tsbuildinfo`,
-  y ambos `dist/` antes de reconstruir — sin caché incremental que pudiera ocultar un error.
-- `pnpm --recursive run build`: exitoso, sin errores, en `apps/web` y `apps/marketing`
-  (los únicos 2 paquetes con paso de build propio — el resto son consumidos como TS
-  fuente directamente, sin paso de bundling).
-- `pnpm --recursive run typecheck`: limpio en los 7 workspaces, repetido después de
-  limpiar caché.
-
-## 10: Todos los tests — corrida completa y autoritativa
-
-Se usó el script oficial del proyecto (`npm test` en `apps/api`, que fuerza
-`--test-concurrency=1` para evitar el falso-positivo de condiciones de carrera entre
-archivos de test que comparten la base de datos real de desarrollo — un problema de
-infraestructura de testing ya conocido de sesiones anteriores, no de este código).
-
-**Resultado: 1838 tests, 1831 pasan, 2 fallan, 5 skipped.**
-
-Los 2 fallos, investigados hasta la causa raíz:
-
-1. `mission-discovery-fallback.test.ts` — depende de una llamada real a OpenAI
-   (`interpretDailyDirective`) para interpretar una instrucción en lenguaje natural; esta
-   vez el LLM no identificó "Hospitality" como industria. Archivo **nunca tocado** por
-   esta rama. No determinístico por diseño (usa un LLM real).
-2. `mission-planning.test.ts` ("compatibilidad con misiones antiguas") — la propia base de
-   datos de desarrollo compartida ya no tiene ninguna misión `daily_revenue_mission`
-   "vieja" (anterior a F7.2, sin `ceoIntent`) porque la base lleva mucho tiempo viva y
-   esa distinción histórica se perdió con el tiempo — el propio test documenta este caso
-   límite ("entorno sin datos reales — no aplica"), pero la fila más antigua real que
-   encuentra hoy ya tiene `ceoIntent` poblado. Archivo **nunca tocado** por esta rama.
-   Confirmado reproducible incluso corriendo el archivo completamente solo (no es un
-   problema de orden/paralelismo).
-
-Se encontró y corrigió un **tercer fallo real, causado por esta rama**:
-`public.test.ts`'s prueba de `GET /public/stats` recalculaba el conteo esperado con el
-filtro VIEJO (`origin != DEMO_SEED`), mientras el endpoint real (modificado en esta rama)
-ahora también excluye `INTERNAL_TEST` — divergieron en cuanto existió una Company
-`INTERNAL_TEST` real en la base (la que dejó la propia ejecución real de la Fase 11).
-Corregido para que el cálculo del test refleje el mismo filtro real. Verificado con una
-segunda corrida completa: **1831 pasan, exactamente los mismos 2 fallos preexistentes
-(no relacionados) permanecen, cero fallos nuevos.**
-
-## 11: Cobertura nueva incluida
-
-50 bloques `test(` nuevos agregados en todo el diff (2 de ellos son renombres de tests
-ya existentes con el mismo propósito, no casos nuevos — 48 tests genuinamente nuevos).
-Todos commiteados, ninguno con `.skip`/`.only`, todos verdes en la corrida completa de §10.
-
-## 12: El flujo comercial normal no cambió de comportamiento
-
-Verificado en 3 niveles:
-
-- **Revisión línea por línea** de los 3 call sites reales de creación de outreach
-  (`sales-tools.impl.ts`, `outreach-tools.impl.ts`, `campaign-tools.impl.ts`): los únicos
-  cambios son (a) pasar un campo `source` ya existente que antes no se leía, y (b) ampliar
-  un filtro de exclusión (nunca angostarlo) — ningún cambio de lógica de negocio real.
-- **Toda la suite existente de aprobaciones/misiones/campañas/discovery sigue pasando**
-  sin ningún cambio de aserciones necesario (confirmado en la corrida de §10 — ninguno de
-  los archivos de test preexistentes de estos módulos requirió modificación para seguir
-  pasando, salvo los cambios explícitos de la Fase 3 de la misión original documentados
-  en `F27_FINAL_MISSION_REPORT.md`, todos ya revisados en esa auditoría original).
-- **`ApprovalRequest.status` mantiene exactamente su significado histórico** ("la acción
-  humana de envío se completó a nivel de aceptación del proveedor") — la verdad más fina
-  de entrega vive únicamente en `EmailMessage`, decisión de diseño explícita y documentada.
-
-## 13: `INTERNAL_TEST` no puede saltarse ninguna verificación comercial
-
-Verificación exhaustiva, no solo de los 2 gates obvios:
-
-- `resolveBestContactChannel` exige el marcador doble (`source="INTERNAL_TEST"` **y**
-  `verificationStatus="INTERNAL_TEST_VERIFIED"` a la vez) — ninguno de los endpoints
-  públicos de Contacts/Companies puede escribir ninguno de los 2 valores.
-- `evaluateDraftCreationGate` exige ADEMÁS que `Company.origin="INTERNAL_TEST"` — un
-  tercer chequeo independiente, en una tabla distinta.
-- Grep exhaustivo de **todo** el código fuente que lee `Contact.verificationStatus` o
-  `CompanyOrigin` (11 sitios reales, no solo los 2 gates ya conocidos): ninguno usa una
-  comparación laxa tipo "distinto de UNVERIFIED" que pudiera tratar
-  `INTERNAL_TEST_VERIFIED` como una verificación real — todos comparan contra
-  `"CONFIRMED"` exactamente, o pertenecen a un enum completamente distinto
-  (`CompanyVerificationStatus`, no tocado).
-- Único hallazgo menor, no explotable: el clasificador de origen de datos de
-  `production-readiness/origin-classifier.ts` (un reporte de calidad de datos, de solo
-  lectura, sin relación con envío real ni con ningún gate de seguridad) no tiene un
-  bucket dedicado para `INTERNAL_TEST`/`source="INTERNAL_TEST"` — cae de forma segura en
-  su categoría `"UNKNOWN"` ya existente (comportamiento explícitamente diseñado para
-  cualquier valor no reconocido, documentado en el propio archivo). No es un bypass de
-  nada, solo una categorización imprecisa en un dashboard de observabilidad. No bloqueante.
-
-## 14: Ningún camino puede enviar correo sin trazabilidad
-
-Grep exhaustivo confirma **un único caller real** de `sendGraphMail` en todo el código:
-`email-service.ts`. `internal-testing/service.ts` no importa `microsoft-graph.ts` en
-absoluto. El guardia `SendAuthorization` (Fase 5 de la misión original) sigue vigente sin
-modificaciones — cualquier llamada a `sendGraphMail` exige una fila `EmailMessage` `PENDING`
-real ya existente antes de tocar la red. Ningún código de esta auditoría abrió una vía nueva.
-
-## 15: Prioridad de proveedores Hunter vs. PDL — hallazgo real, no un bug de esta rama
-
-**Hunter.io NO es hoy el proveedor principal.** El orden real de la cascada de
-`contact-enrichment.ts` (decisión F15, documentada, aprobada por el PO en su momento, y
-**sin cambios en esta rama**) es:
-
-1. People Data Labs (pago, "la más completa cuando funciona").
-2. Website Intelligence (gratis, ya crawleado).
-3. Hunter.io (último recurso).
-
-Esta rama SÍ cumplió la mitad de este ítem: **PDL permanece limitado por presupuesto**
-(techos reales mensual/por misión/por empresa, Fase 6 de la misión original) — pero
-**nunca reordenó la cascada** para poner a Hunter primero, porque hacerlo no era parte
-del alcance original de esta rama y es un cambio de comportamiento comercial real
-(afecta qué proveedor se intenta primero para cada contacto de cada empresa real) que
-no debería decidirse unilateralmente dentro de una auditoría de solo verificación.
-
-**Esto no es un bloqueador de esta rama** (nada se rompió, el comportamiento es el mismo
-de antes de este trabajo) — es una discrepancia real entre lo pedido en el ítem 15 de
-esta auditoría y el estado actual del producto, que requiere una decisión de negocio
-explícita separada. Si se decide invertir la cascada, es un cambio real y acotado
-(reordenar 3 bloques dentro de `enrichCompanyWithDecisionContacts`), pero con impacto
-en costo/calidad real de contactos descubiertos que merece su propia autorización.
-
----
-
-## Cambios realizados (resumen, ver `F27_FINAL_MISSION_REPORT.md` y
-`F27_INTERNAL_ACCEPTANCE_TEST_REPORT.md` para el detalle completo)
-
-- Máquina de estados de email endurecida (ACCEPTED_BY_PROVIDER/SENT_CONFIRMED/BOUNCED/DELIVERY_UNKNOWN), trazabilidad obligatoria (AuditLog antes y después de cada intento real), reconciliación real contra Sent Items/NDRs de Microsoft Graph.
-- `sendGraphMail` ya no es invocable sin una fila `EmailMessage` real que lo autorice.
-- Presupuestos reales de People Data Labs (mensual/misión/empresa) y caché real de Hunter.io Domain Search.
-- Re-verificación de SPF/DKIM/DMARC con remediación exacta documentada (sin tocar DNS).
-- UI: estado real de envío (nunca optimista) en Approvals, panel de administración de reconciliación en Settings.
-- Envío real controlado ejecutado y confirmado end-to-end (`SENT_CONFIRMED` real en Sent Items).
-- Flujo nuevo "Internal Acceptance Test" (admin-only, marcador doble, nunca confundible con verificación comercial real) para poder probar Approve & Send de punta a punta sin un prospecto real.
-- Esta auditoría: 1 regresión real encontrada y corregida (`public.test.ts`), 2 inconsistencias de documentación corregidas.
-
-## Riesgos residuales
-
-1. **Entregabilidad de email degradada** — SPF/DKIM de `dreistaff.com` siguen rotos
-   (verificado con `dig` real el 2026-07-25). Requiere acceso a GoDaddy + M365 Admin
-   Center que este entorno no tiene. Ver `docs/F27_EMAIL_DNS_REMEDIATION.md` para los
-   registros exactos a corregir.
-2. **Application Access Policy de Exchange no confirmada** — no se pudo verificar desde
-   este entorno si ya existe una política que restrinja la app de Graph a
-   `sales@dreistaff.com` únicamente. Ver `docs/F27_EMAIL_SEND_CREDENTIAL_RISK.md`.
-3. **Orden de proveedores Hunter/PDL** (ítem 15 de esta auditoría) — decisión de negocio
-   pendiente, ver arriba.
-4. **2 tests preexistentes, no relacionados, dependientes de estado externo** (LLM real /
-   antigüedad de la base de desarrollo compartida) — no son bloqueadores, pero seguirán
-   apareciendo como "fallo" en corridas futuras de la suite completa hasta que alguien
-   los revise por separado; no están en el alcance de esta rama.
-5. **Datos reales de prueba interna sin eliminar** — la Company/Lead/Contact/ApprovalRequest
-   (`FAILED`) de la ejecución real de Internal Acceptance Test quedaron en la base,
-   claramente marcadas `INTERNAL_TEST`, por decisión explícita de no borrar datos sin
-   pedido expreso. IDs exactos en `docs/F27_INTERNAL_ACCEPTANCE_TEST_REPORT.md`.
-
-## Acciones manuales pendientes (fuera del alcance de esta rama)
-
-1. Corregir SPF (`TXT`) y ambos CNAME de DKIM en GoDaddy — valores exactos en `docs/F27_EMAIL_DNS_REMEDIATION.md`.
-2. Habilitar la firma DKIM en M365 Admin Center una vez el DNS resuelva.
-3. Crear (o confirmar que ya existe) una Application Access Policy de Exchange restringiendo la app a `sales@dreistaff.com`.
-4. Rotar `AZURE_CLIENT_SECRET` después de que termine el período de pruebas activo.
-5. Decidir si Hunter.io debe pasar a ser el proveedor primario de contactos (ítem 15).
-6. Revisar y reconocer/archivar las 10 `EmailReconciliationAlert` (envíos externos no rastreados, históricos) desde el panel de Settings.
-7. Decidir si limpiar la Company/Lead/Contact/ApprovalRequest de prueba interna que quedó en la base.
+1. Corregir el CNAME de DKIM en GoDaddy (agregar `.com` al final de ambos selectores) — SPF ya no requiere acción.
+2. Habilitar/confirmar la firma DKIM en M365 Admin Center una vez el DNS resuelva.
+3. Compartir el encabezado completo del mensaje real recibido, o el reporte de Mail Tester, para cerrar la validación de DKIM con evidencia directa.
+4. Confirmar/crear la Application Access Policy de Exchange restringiendo la app a `sales@dreistaff.com`.
+5. Rotar `AZURE_CLIENT_SECRET` después del período de pruebas activo.
+6. Decidir si Hunter.io debe pasar a ser el proveedor primario de contactos.
+7. Revisar/reconocer las 10 `EmailReconciliationAlert` históricas desde el panel de Settings.
+8. Decidir si limpiar la Company/Lead/Contact/ApprovalRequest de prueba interna en la base.
 
 ## Checklist de producción
 
-- [x] Build limpio desde cero (cache borrado, reconstruido)
+- [x] Build limpio desde cero
 - [x] Typecheck limpio (7/7 workspaces)
 - [x] Lint limpio (0 errores)
-- [x] Suite completa de tests corrida con el script oficial (`--test-concurrency=1`)
-- [x] Migraciones verificadas aditivas, aplicadas sin pérdida de datos
-- [x] Sin secretos/credenciales expuestos
-- [x] Sin código temporal/de depuración
-- [x] Documentación corregida para reflejar el estado real
-- [x] Envío real controlado verificado end-to-end al menos una vez
-- [x] Flujo comercial real verificado sin cambios de comportamiento
-- [ ] SPF/DKIM en estado `pass` (pendiente, acción externa)
+- [x] Suite completa corrida con el script oficial (`--test-concurrency=1`)
+- [x] Los 7 resultados no-pass explicados con evidencia directa contra `main`
+- [x] Migraciones verificadas aditivas
+- [x] Sin secretos/credenciales expuestos, sin código temporal/de depuración
+- [x] SPF confirmado corregido con evidencia reproducible de hoy
+- [ ] DKIM confirmado con el encabezado real recibido (pendiente, dato externo)
 - [ ] Application Access Policy de Exchange confirmada (pendiente, acción externa)
 - [ ] Decisión de negocio sobre orden Hunter/PDL (pendiente, decisión del usuario)
 
-## Recomendación final
+## Pull Request preparado — ver `PULL_REQUEST_DRAFT.md`
 
-**GO para mergear esta rama a `main`.** Ningún hallazgo de esta auditoría es un
-bloqueador del código en sí — el código es correcto, seguro, probado, y no degrada
-ningún comportamiento comercial existente. Los 3 puntos pendientes de la checklist son
-decisiones/acciones externas al código (DNS/Azure/decisión de producto), ya documentadas
-con instrucciones exactas, consistentes con la regla de esta misión de nunca declarar
-algo "resuelto" sin evidencia externa que este entorno no puede producir por sí mismo.
-
-Pull Request preparado (título y descripción) más abajo — **no abierto**, a la espera de
-tu decisión.
-
----
-
-## Pull Request preparado (no abierto)
-
-**Título**: `fix(email): traceability hardening, reconciliation, PDL/Hunter budgets, and a gated Internal Acceptance Test flow`
-
-**Descripción**:
-
-```
-## Summary
-- Stops conflating a Microsoft Graph 202 with a confirmed send; adds a real
-  reconciliation mechanism against Graph Sent Items/NDRs and untracked-send alerts.
-- Closes the exact gap that produced 10 untracked real sends found during this work:
-  sendGraphMail now refuses to run without a real EmailMessage already backing it.
-- Adds real, conservative spend guards for People Data Labs and a real cache for
-  Hunter.io Domain Search.
-- Re-verifies SPF/DKIM/DMARC (still broken -- exact remediation documented, nothing
-  auto-changed) and surfaces real send/reconciliation state in the UI.
-- Adds a gated, admin-only Internal Acceptance Test flow so Approve & Send can be
-  exercised end to end without fabricating a commercial verification for a test
-  contact -- structurally incapable of bypassing real commercial verification
-  (double marker across two tables, neither writable by any public endpoint).
-- One real controlled send was completed and confirmed SENT_CONFIRMED in Sent Items
-  during this work; no prospect was ever contacted.
-
-## Test plan
-- [x] Full suite via `npm test` (apps/api): 1838 tests, 1831 pass, 2 known
-      pre-existing/unrelated failures (real LLM non-determinism; long-lived shared
-      dev DB no longer having a "pre-feature" fixture row) -- both confirmed
-      unrelated to this diff via root-cause analysis, see RELEASE_READINESS.md.
-- [x] typecheck/lint/build clean across all 7 workspaces, from a cleared cache.
-- [x] Migrations verified additive only, applied against real dev DB with zero data loss.
-- [ ] External: SPF/DKIM fix in GoDaddy/M365 (see docs/F27_EMAIL_DNS_REMEDIATION.md).
-
-See RELEASE_READINESS.md for the full release audit.
-```
+No abierto, no pusheado, no marcado como listo para merge.
