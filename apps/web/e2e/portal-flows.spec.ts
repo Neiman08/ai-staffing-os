@@ -68,7 +68,12 @@ test.describe("Portal end-to-end flows", () => {
     // test en un dato compartido de seed).
     await page.getByLabel("Disponibilidad").fill("");
     await page.getByRole("button", { name: "Guardar cambios" }).click();
-    await expect(page.getByText("Perfil actualizado")).toBeVisible({ timeout: 10_000 });
+    // toast.tsx apila notificaciones independientes (cada una expira sola a
+    // los 4s, ver ToastProvider) -- el toast del primer guardado puede
+    // seguir visible cuando llega este segundo, dejando dos elementos con
+    // el mismo texto. .last() apunta al toast de ESTE guardado sin volverse
+    // ambiguo (confirmado real en CI: strict mode violation, 2 elements).
+    await expect(page.getByText("Perfil actualizado").last()).toBeVisible({ timeout: 10_000 });
   });
 
   test("Worker Portal: onboarding real, assignment view con detalle, document checklist", async ({ page }) => {
