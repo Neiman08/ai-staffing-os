@@ -31,6 +31,8 @@ import {
   History,
   PanelLeftClose,
   PanelLeftOpen,
+  Gavel,
+  TestTube2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -86,9 +88,11 @@ const NAV_SECTIONS: NavSection[] = [
   {
     items: [
       { to: "/missions", label: "Daily Mission", icon: Rocket },
+      { to: "/pilot-missions", label: "Pilot Missions", icon: TestTube2 },
       { to: "/discovery", label: "External Discovery", icon: Radar },
       { to: "/agents", label: "AI Agents", icon: Bot },
       { to: "/approvals", label: "Approvals", icon: CheckSquare },
+      { to: "/human-review", label: "Human Review", icon: Gavel },
       { to: "/ai-dashboard", label: "AI Dashboard", icon: Sparkles },
       { to: "/production-readiness", label: "Production Readiness", icon: ShieldAlert },
       { to: "/audit-log", label: "Audit Trail", icon: History },

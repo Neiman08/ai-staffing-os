@@ -1,7 +1,12 @@
 import { Router } from "express";
+import { z } from "zod";
 import { agentTaskQuerySchema, invokeSalesAgentInputSchema } from "@ai-staffing-os/shared";
 import { requirePermission } from "../../core/rbac/require-permission";
+import { missionLaunchLimiter } from "../../core/rate-limiters";
 import * as agentsService from "./service";
+import { getMissionTimeline, getOrchestratorHealth } from "./observability";
+import { pilotMissionInputSchema, createPilotMission } from "./mission-producer";
+import { listPilotMissions, pausePilotMission, resumePilotMission, cancelPilotMission } from "./pilot-mission-control";
 
 /**
  * DESVIACIÓN DOCUMENTADA: 02_F0_PROMPT.md (Paso 1) no lista un módulo
@@ -45,6 +50,63 @@ agentsRouter.get("/agents/tasks", requirePermission("agents.view"), async (req, 
 agentsRouter.get("/agents/tasks/:id", requirePermission("agents.view"), async (req, res, next) => {
   try {
     res.json(await agentsService.getAgentTaskDetail(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F25.2 Fase 9: observabilidad -- timeline de una misión/workflow (todas
+// las AgentTask + DomainEvent que comparten correlationId, ver
+// observability.ts) y salud cross-tenant de la cola/outbox.
+agentsRouter.get("/agents/missions/:correlationId/timeline", requirePermission("agents.view"), async (req, res, next) => {
+  try {
+    res.json(await getMissionTimeline(req.params.correlationId!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+agentsRouter.get("/agents/orchestrator/health", requirePermission("agents.view"), async (_req, res, next) => {
+  try {
+    res.json(await getOrchestratorHealth());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F25.2 (activación controlada, Prioridad 1): productor real de
+// AgentTask -- distinto de POST /missions (instrucción en lenguaje
+// natural, camino de ejecución directa/viejo). Mismo rate limit que
+// el camino viejo (gasta presupuesto real de discovery cuando
+// dryRun=false).
+agentsRouter.post("/agents/missions", missionLaunchLimiter, requirePermission("missions.create"), async (req, res, next) => {
+  try {
+    const input = pilotMissionInputSchema.parse(req.body);
+    res.status(201).json(await createPilotMission(input));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F25.2 (activación controlada, Prioridad 8): listado + control de
+// ciclo de vida de misiones piloto -- ver pilot-mission-control.ts.
+agentsRouter.get("/agents/missions", requirePermission("agents.view"), async (_req, res, next) => {
+  try {
+    res.json(await listPilotMissions());
+  } catch (err) {
+    next(err);
+  }
+});
+
+const pilotMissionActionSchema = z.object({ action: z.enum(["pause", "resume", "cancel"]) });
+
+agentsRouter.patch("/agents/missions/:id", requirePermission("missions.create"), async (req, res, next) => {
+  try {
+    const { action } = pilotMissionActionSchema.parse(req.body);
+    const missionTaskId = req.params.id!;
+    if (action === "pause") res.json(await pausePilotMission(missionTaskId));
+    else if (action === "resume") res.json(await resumePilotMission(missionTaskId));
+    else res.json(await cancelPilotMission(missionTaskId));
   } catch (err) {
     next(err);
   }

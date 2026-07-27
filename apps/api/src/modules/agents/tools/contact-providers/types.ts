@@ -32,6 +32,16 @@ export interface ContactProviderSearchResult {
   // puede responder nada ahora" (CREDIT_EXHAUSTED/UNAUTHORIZED/
   // UNAVAILABLE) — ver provider-health.ts.
   providerStatus: ProviderHealthStatus;
+  // F27 Fase 6: créditos REALES consumidos por esta llamada (registros
+  // devueltos por los que el proveedor cobra), separado de costUsd
+  // (nuestra estimación en USD) -- pdl-budget.ts lo usa para descontar
+  // del presupuesto de la misión sin depender de una conversión USD/crédito
+  // aproximada. `undefined`/0 cuando el proveedor no se llegó a llamar,
+  // falló, o no reporta este dato -- opcional a propósito para no romper
+  // fixtures de tests pre-existentes que no les importa este campo
+  // (people-data-labs.ts, el único proveedor de créditos reales hoy,
+  // siempre lo setea explícitamente).
+  creditsUsed?: number;
 }
 
 export interface ContactProviderSearchParams {
@@ -46,9 +56,17 @@ export interface ContactProviderSearchParams {
   // devolvió literal.
   priorityTitles: string[];
   limit: number;
+  // F27 Fase 6: techo real de resultados que el llamador autoriza para
+  // ESTA llamada puntual, ya calculado contra el presupuesto mensual +
+  // de la misión + por empresa (ver pdl-budget.ts) -- el proveedor nunca
+  // pide más que esto, sin importar cuánto "le gustaría" pedir por su
+  // propia heurística interna (ver people-data-labs.ts). `undefined` =
+  // sin techo explícito del llamador (solo aplica el techo interno del
+  // proveedor) -- usado por callers que todavía no pasan presupuesto.
+  maxResults?: number;
   abortSignal?: AbortSignal;
 }
 
 export function emptyContactResult(): ContactProviderSearchResult {
-  return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE" };
+  return { candidates: [], costUsd: 0, sourcesUsed: [], patternsFailed: [], cancelled: false, providerStatus: "AVAILABLE", creditsUsed: 0 };
 }

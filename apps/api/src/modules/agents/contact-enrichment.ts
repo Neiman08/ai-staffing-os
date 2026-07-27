@@ -4,6 +4,8 @@ import { AppError } from "../../core/errors";
 import { env } from "../../core/env";
 import { logAuditEvent } from "../../core/audit-log";
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
+import { getPdlMonthlyBudgetStatus, createPdlMissionBudget, consumePdlMissionBudget, computeAllowedPdlSearchSize, type PdlMissionBudget } from "./pdl-budget";
+import { getFreshHunterDomainCache, recordHunterDomainQuery } from "./hunter-domain-cache";
 import { searchPeopleDataLabs } from "./tools/contact-providers/people-data-labs";
 import type { ContactCandidate } from "./tools/contact-providers/types";
 import { searchHunterEmails } from "./tools/email-providers/hunter";
@@ -98,6 +100,16 @@ export interface ContactEnrichmentParams {
   // criterio que contactProvider.
   hunterProvider?: HunterContactProviderPort;
   hunterApiKey?: string;
+  // F27 Fase 6: presupuesto de créditos de PDL compartido por TODAS las
+  // empresas de una misión -- lo crea UNA vez el orquestador (ver
+  // mission-executor.ts) antes de su loop de empresas y lo pasa acá en
+  // cada llamada, para que ninguna empresa individual pueda gastar más
+  // de lo que le queda a la misión completa. Cuando no se pasa (ej. el
+  // executor de F25.2, que procesa una empresa por invocación sin
+  // visibilidad de "la misión"), se crea uno nuevo de un solo uso acá --
+  // sigue respetando el techo mensual y por empresa, solo pierde el
+  // reparto entre empresas de la misma misión.
+  pdlMissionBudget?: PdlMissionBudget;
 }
 
 export interface CreatedContactRecord {
@@ -433,33 +445,52 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
         `People Data Labs omitido: presupuesto de proveedor de datos excedido ($${budgetStatus.spentUsd.toFixed(2)}/$${budgetStatus.budgetUsd.toFixed(2)}) -- se continúa con las demás fuentes.`,
       );
     } else {
-      const provider = params.contactProvider ?? REAL_CONTACT_PROVIDER;
-      const limit = Math.min(targetRoles.length * 2, 10);
-      const result = await provider.searchPeopleDataLabs(
-        {
-          taskId: params.taskId,
-          companyName: params.companyName,
-          companyWebsite: params.companyWebsite,
-          companyState: params.companyState,
-          companyCity: params.companyCity,
-          industryName: params.industryName,
-          priorityTitles: targetRoles,
-          limit,
-          abortSignal: params.abortSignal,
-        },
-        pdlApiKey,
-      );
+      // F27 Fase 6: nunca se le pide a PDL más de lo que el presupuesto
+      // real (mensual + de esta misión + techo fijo por empresa) permite
+      // -- calculado ANTES de la llamada, nunca después. missionBudget
+      // por defecto es de un solo uso (esta empresa sola) cuando el
+      // orquestador no comparte uno real entre empresas de la misma
+      // misión -- ver comentario de pdlMissionBudget arriba.
+      const missionBudget = params.pdlMissionBudget ?? createPdlMissionBudget();
+      const monthlyStatus = await getPdlMonthlyBudgetStatus(ctx.tenantId);
+      const allowedSize = computeAllowedPdlSearchSize({ requestedSize: 20, missionBudget, monthlyRemaining: monthlyStatus.remainingThisMonth });
 
-      providerStatus = result.providerStatus;
-      costUsd += result.costUsd;
-      patternsFailed.push(...result.patternsFailed);
-
-      if (result.cancelled) {
-        cancelled = true;
+      if (allowedSize <= 0) {
+        log(params.taskId, "PDL skipped — credit budget exhausted", { ...monthlyStatus, missionRemaining: missionBudget.remaining });
+        providersOmitted.push(
+          `People Data Labs omitido: presupuesto de créditos agotado (mes: ${monthlyStatus.creditsUsedThisMonth}/${monthlyStatus.monthlyCreditBudget}, misión: ${missionBudget.remaining} restantes) -- se continúa con las demás fuentes.`,
+        );
       } else {
-        for (const candidate of result.candidates as ContactCandidate[]) {
-          const outcome = await processCandidate(fromPdlCandidate(candidate), "People Data Labs", ctx, params, targetRoles, result.providerStatus);
-          await applyOutcome(outcome, "People Data Labs");
+        const provider = params.contactProvider ?? REAL_CONTACT_PROVIDER;
+        const limit = Math.min(targetRoles.length * 2, 10);
+        const result = await provider.searchPeopleDataLabs(
+          {
+            taskId: params.taskId,
+            companyName: params.companyName,
+            companyWebsite: params.companyWebsite,
+            companyState: params.companyState,
+            companyCity: params.companyCity,
+            industryName: params.industryName,
+            priorityTitles: targetRoles,
+            limit,
+            maxResults: allowedSize,
+            abortSignal: params.abortSignal,
+          },
+          pdlApiKey,
+        );
+
+        consumePdlMissionBudget(missionBudget, result.creditsUsed ?? 0);
+        providerStatus = result.providerStatus;
+        costUsd += result.costUsd;
+        patternsFailed.push(...result.patternsFailed);
+
+        if (result.cancelled) {
+          cancelled = true;
+        } else {
+          for (const candidate of result.candidates as ContactCandidate[]) {
+            const outcome = await processCandidate(fromPdlCandidate(candidate), "People Data Labs", ctx, params, targetRoles, result.providerStatus);
+            await applyOutcome(outcome, "People Data Labs");
+          }
         }
       }
     }
@@ -488,33 +519,59 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
     if (!domain) {
       patternsFailed.push(`${params.companyName}:hunter_domain_search (sin dominio derivable de companyWebsite)`);
     } else {
-      const hunterProvider = params.hunterProvider ?? REAL_HUNTER_PROVIDER;
-      const hunterResult = await hunterProvider.searchHunterEmails(
-        {
-          taskId: params.taskId,
-          companyName: params.companyName,
-          companyWebsite: params.companyWebsite,
-          domain,
-          limit: Math.min(targetRoles.length * 2, 10),
-          abortSignal: params.abortSignal,
-        },
-        hunterApiKey,
-      );
+      // F27 Fase 7: Hunter free tier = 25 búsquedas/mes TOTAL (ver
+      // hunter.ts) -- nunca se repite una consulta real por el mismo
+      // dominio dentro de la ventana de frescura de la caché (30 días,
+      // ver hunter-domain-cache.ts). Un cache hit reconstruye exactamente
+      // el mismo shape que una respuesta real, nunca inventa nada nuevo.
+      const cacheHit = await getFreshHunterDomainCache(domain);
+      let hunterCandidates: EmailCandidate[];
+      let hunterCancelled = false;
 
-      costUsd += hunterResult.costUsd;
-      patternsFailed.push(...hunterResult.patternsFailed);
-      // Solo se sobreescribe providerStatus si PDL nunca corrió/no dio
-      // señal útil -- el estado más informativo (el de la última fuente
-      // que realmente respondió) es el que se reporta.
-      if (hunterResult.providerStatus !== "AVAILABLE" || providerStatus === "NOT_CONFIGURED") {
-        providerStatus = hunterResult.providerStatus;
+      if (cacheHit) {
+        log(params.taskId, "Hunter.io domain cache hit -- consulta real omitida", { domain, queriedAt: cacheHit.queriedAt.toISOString(), candidateCount: cacheHit.candidates.length });
+        patternsFailed.push(...cacheHit.patternsFailed);
+        if (cacheHit.providerStatus !== "AVAILABLE" || providerStatus === "NOT_CONFIGURED") providerStatus = cacheHit.providerStatus;
+        hunterCandidates = cacheHit.candidates;
+      } else {
+        const hunterProvider = params.hunterProvider ?? REAL_HUNTER_PROVIDER;
+        const hunterResult = await hunterProvider.searchHunterEmails(
+          {
+            taskId: params.taskId,
+            companyName: params.companyName,
+            companyWebsite: params.companyWebsite,
+            domain,
+            limit: Math.min(targetRoles.length * 2, 10),
+            abortSignal: params.abortSignal,
+          },
+          hunterApiKey,
+        );
+
+        costUsd += hunterResult.costUsd;
+        patternsFailed.push(...hunterResult.patternsFailed);
+        // Solo se sobreescribe providerStatus si PDL nunca corrió/no dio
+        // señal útil -- el estado más informativo (el de la última fuente
+        // que realmente respondió) es el que se reporta.
+        if (hunterResult.providerStatus !== "AVAILABLE" || providerStatus === "NOT_CONFIGURED") {
+          providerStatus = hunterResult.providerStatus;
+        }
+        hunterCandidates = hunterResult.candidates as EmailCandidate[];
+        hunterCancelled = hunterResult.cancelled;
+
+        // Nunca se cachea un intento cancelado a mitad de camino ni un
+        // resultado de un proveedor no disponible (CREDIT_EXHAUSTED/
+        // UNAUTHORIZED/UNAVAILABLE) -- eso no es "la respuesta real de
+        // Hunter para este dominio", es la ausencia de una consulta real.
+        if (!hunterCancelled && hunterResult.providerStatus === "AVAILABLE") {
+          await recordHunterDomainQuery(ctx.tenantId, domain, hunterCandidates, hunterResult.patternsFailed, hunterResult.providerStatus);
+        }
       }
 
-      if (hunterResult.cancelled) {
+      if (hunterCancelled) {
         cancelled = true;
       } else {
-        for (const candidate of hunterResult.candidates as EmailCandidate[]) {
-          const outcome = await processCandidate(fromHunterCandidate(candidate), "Hunter.io", ctx, params, targetRoles, hunterResult.providerStatus);
+        for (const candidate of hunterCandidates) {
+          const outcome = await processCandidate(fromHunterCandidate(candidate), "Hunter.io", ctx, params, targetRoles, providerStatus);
           await applyOutcome(outcome, "Hunter.io");
         }
       }

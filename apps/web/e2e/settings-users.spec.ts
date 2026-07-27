@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F4.9-11: email único por corrida — inviteUser bloquea duplicados por
 // email (correcto: ver user-management.test.ts), así que reusar un

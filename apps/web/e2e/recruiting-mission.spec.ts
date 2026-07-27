@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F8.11: Recruiting Mission UI integrado en JobOrderDetail (mismo
 // patrón que job-order-matching.spec.ts, F6.7) -- corre contra

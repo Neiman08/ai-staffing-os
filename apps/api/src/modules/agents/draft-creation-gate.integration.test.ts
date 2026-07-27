@@ -38,6 +38,7 @@ before(async () => {
 after(async () => {
   if (createdApprovalIds.length) await prisma.approvalRequest.deleteMany({ where: { id: { in: createdApprovalIds } } });
   if (createdTaskIds.length) {
+    await prisma.domainEvent.deleteMany({ where: { correlationId: { in: createdTaskIds } } });
     await prisma.approvalRequest.deleteMany({ where: { agentTaskId: { in: createdTaskIds } } });
     await prisma.agentTask.deleteMany({ where: { id: { in: createdTaskIds } } });
   }
@@ -292,4 +293,23 @@ test("hasActiveApprovalForCompany: refleja exactamente PENDING/READY_TO_SEND/SEN
       await prisma.approvalRequest.delete({ where: { id: approval.id } });
     }
   });
+});
+
+// ---------- outbox real (F25.2, consolidación): outreach.draft_created.v1 ----------
+
+test("draftOutreach: al crear un ApprovalRequest real, publica outreach.draft_created.v1 en el outbox real", async () => {
+  const company = await createCompany();
+  const lead = await prisma.lead.create({ data: { tenantId: "tenant-titan", companyId: company.id, industryId: company.industryId, status: "NEW" } });
+  createdLeadIds.push(lead.id);
+
+  const task = await invokeSalesTask({ type: "draft_outreach", input: { leadId: lead.id, channel: "EMAIL" } });
+  const settled = await waitForSettled(task.id);
+  assert.equal(settled.status, "AWAITING_APPROVAL");
+
+  const approval = await prisma.approvalRequest.findFirstOrThrow({ where: { agentTaskId: task.id } });
+  const event = await prisma.domainEvent.findFirst({ where: { correlationId: task.id, type: "outreach.draft_created.v1" } });
+
+  assert.ok(event, "el evento debe existir en DomainEvent, no solo en AuditLog");
+  assert.equal(event!.entityId, approval.id);
+  assert.equal((event!.payload as { approvalRequestId: string }).approvalRequestId, approval.id);
 });

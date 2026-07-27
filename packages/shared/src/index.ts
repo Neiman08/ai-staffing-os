@@ -26,3 +26,6 @@ export * from "./schemas/production-readiness";
 export * from "./schemas/public";
 export * from "./schemas/matching";
 export * from "./schemas/analytics";
+export * from "./schemas/human-review";
+export * from "./schemas/observability";
+export * from "./schemas/internal-testing";

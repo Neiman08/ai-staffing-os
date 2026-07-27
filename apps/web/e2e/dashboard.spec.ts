@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 test("dashboard carga con datos reales, banner de dev-bypass visible, sin errores de consola", async ({ page }) => {
   const errors: string[] = [];

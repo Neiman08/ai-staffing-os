@@ -16,7 +16,21 @@ export type AgentInstanceListItem = z.infer<typeof agentInstanceListItemSchema>;
 // F2: AgentTask invocation, status and approvals
 // ============================================================
 
-export const agentTaskStatusSchema = z.enum(["QUEUED", "RUNNING", "AWAITING_APPROVAL", "DONE", "FAILED"]);
+// F25.2 Fase 1: CLAIMED/RETRY_SCHEDULED/BLOCKED/CANCELED/HUMAN_REVIEW
+// agregados de forma aditiva junto al enum real (ver AgentTaskStatus en
+// schema.prisma) -- los 5 valores originales conservan su significado.
+export const agentTaskStatusSchema = z.enum([
+  "QUEUED",
+  "RUNNING",
+  "AWAITING_APPROVAL",
+  "DONE",
+  "FAILED",
+  "CLAIMED",
+  "RETRY_SCHEDULED",
+  "BLOCKED",
+  "CANCELED",
+  "HUMAN_REVIEW",
+]);
 export type AgentTaskStatusValue = z.infer<typeof agentTaskStatusSchema>;
 
 export const taskTriggerSchema = z.enum(["USER", "EVENT", "AGENT", "SCHEDULE"]);
@@ -148,11 +162,29 @@ export const riskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH"]);
 // listApprovals) -- feedback inmediato de si el envío real vía
 // Microsoft Graph funcionó. `null` = no era un borrador de email (ej.
 // LinkedIn, o la decisión fue REJECTED). Ver modules/email/email-service.ts.
+// F27: "SENT" queda solo por compatibilidad con filas viejas -- ningún
+// código nuevo lo escribe. ACCEPTED_BY_PROVIDER es el único estado de
+// éxito real que sendEmail() puede devolver desde F27 (ver
+// email-service.ts) -- Graph aceptó el /send (202), nunca "se entregó".
+// F27 Fase 9: los 4 estados finos que solo el reconciliador (nunca
+// email-service.ts, ver comentario ahí) puede escribir -- viajan acá para
+// que la UI muestre exactamente lo que dice EmailMessage.status HOY
+// (puede haber cambiado desde el momento del envío original, ver
+// reconciliation.ts), nunca lo que decía en el instante del /send.
 export const approvalEmailSendResultSchema = z
   .object({
-    status: z.enum(["SENT", "FAILED", "RETRYABLE"]),
+    status: z.enum(["SENT", "ACCEPTED_BY_PROVIDER", "SENT_CONFIRMED", "DELIVERED", "BOUNCED", "DELIVERY_UNKNOWN", "FAILED", "RETRYABLE"]),
     providerMessageId: z.string().nullable(),
+    internetMessageId: z.string().nullable().optional(),
+    conversationId: z.string().nullable().optional(),
+    correlationId: z.string().nullable().optional(),
     errorMessage: z.string().nullable(),
+    // F27 Fase 9: evidencia real para la UI -- cuándo Graph aceptó,
+    // cuándo el reconciliador confirmó Sent Items, y el detalle real del
+    // NDR si rebotó. `undefined` = fila anterior a F27, sin este dato.
+    acceptedAt: z.string().nullable().optional(),
+    sentItemsConfirmedAt: z.string().nullable().optional(),
+    ndrDetail: z.string().nullable().optional(),
   })
   .nullable();
 export type ApprovalEmailSendResult = z.infer<typeof approvalEmailSendResultSchema>;
@@ -196,6 +228,10 @@ export const approvalRequestListItemSchema = z.object({
   emailSendResult: approvalEmailSendResultSchema.optional(),
   recipientWarning: recipientWarningSchema.optional(),
   placeholderWarning: placeholderWarningSchema.optional(),
+  // F27 (Internal Acceptance Test): true cuando la Company vinculada tiene
+  // origin="INTERNAL_TEST" -- la UI nunca debe mostrar esto como un lead
+  // comercial real (ver Approvals.tsx).
+  isInternalTest: z.boolean().optional(),
 });
 export type ApprovalRequestListItem = z.infer<typeof approvalRequestListItemSchema>;
 
@@ -234,10 +270,16 @@ export const sendManualEmailInputSchema = z.object({
 });
 export type SendManualEmailInput = z.infer<typeof sendManualEmailInputSchema>;
 
+// F27: refleja el contrato real de SendEmailResult (email-service.ts) --
+// "SENT" quedó legado ahí (nunca lo escribe código nuevo, ver ese
+// archivo); un envío manual exitoso siempre es ACCEPTED_BY_PROVIDER hoy.
 export const sendManualEmailResultSchema = z.object({
   emailMessageId: z.string(),
-  status: z.enum(["SENT", "FAILED", "RETRYABLE"]),
+  correlationId: z.string(),
+  status: z.enum(["SENT", "ACCEPTED_BY_PROVIDER", "FAILED", "RETRYABLE"]),
   providerMessageId: z.string().nullable(),
+  internetMessageId: z.string().nullable(),
+  conversationId: z.string().nullable(),
   errorMessage: z.string().nullable(),
 });
 export type SendManualEmailResult = z.infer<typeof sendManualEmailResultSchema>;

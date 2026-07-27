@@ -32,7 +32,7 @@ import type { ContactChannelResolution } from "./contact-channel";
  */
 
 export type OutreachBlockReason = "NEEDS_ENRICHMENT" | "CLIENT_OWNER_REVIEW";
-export type DraftCreationBlockReason = "DEMO_SEED" | "DUPLICATE_ACTIVE" | OutreachBlockReason;
+export type DraftCreationBlockReason = "DEMO_SEED" | "DUPLICATE_ACTIVE" | OutreachBlockReason | "INTERNAL_TEST_NOT_AUTHORIZED";
 
 export interface DraftCreationGateInput {
   companyOrigin: string;
@@ -79,6 +79,25 @@ export function evaluateDraftCreationGate(input: DraftCreationGateInput): DraftC
         : "opportunityRecommendation=MANUAL_REVIEW -- evidencia mixta o insuficiente, requiere revisión humana antes de generar outreach automático.",
       companyBlockReasonToPersist: "CLIENT_OWNER_REVIEW",
     };
+  }
+
+  // F27 (Internal Acceptance Test) -- defensa en profundidad: un canal
+  // INTERNAL_TEST_EMAIL exige TAMBIÉN que la Company misma esté marcada
+  // origin="INTERNAL_TEST" (par de señales independientes, escritas en 2
+  // tablas distintas, ambas exclusivas de internal-testing/service.ts).
+  // Nunca puede pasar por casualidad: un Contact real jamás produce este
+  // channel (ver contact-channel.ts), y aunque lo hiciera, una Company
+  // comercial real nunca tiene este origin.
+  if (input.channel.channel === "INTERNAL_TEST_EMAIL") {
+    if (input.companyOrigin !== "INTERNAL_TEST") {
+      return {
+        allowed: false,
+        blockReason: "INTERNAL_TEST_NOT_AUTHORIZED",
+        reason: "Canal INTERNAL_TEST_EMAIL sin Company.origin=INTERNAL_TEST correspondiente -- nunca autorizado, posible inconsistencia de datos.",
+        companyBlockReasonToPersist: null,
+      };
+    }
+    return { allowed: true, blockReason: null, reason: "Contacto de prueba interna de aceptación, doblemente marcado y autorizado -- borrador permitido.", companyBlockReasonToPersist: null };
   }
 
   if (!input.channel.isEmailCapable) {

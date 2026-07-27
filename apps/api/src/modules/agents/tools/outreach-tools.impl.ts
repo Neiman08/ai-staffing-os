@@ -8,6 +8,8 @@ import {
   planSequenceInputSchema,
   suggestNextStepTool as suggestNextStepToolStub,
   suggestNextStepInputSchema,
+  buildEventEnvelope,
+  buildIdempotencyKey,
   type AgentTool,
   type LLMProvider,
 } from "@ai-staffing-os/agents";
@@ -16,6 +18,7 @@ import { DEFAULT_EMAIL_SIGNATURE } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { AppError } from "../../../core/errors";
+import { publishEventSafe } from "../../../core/events/outbox";
 import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
 import { resolveBestContactChannel, type ContactChannelType } from "../../ceo-intelligence/contact-channel";
@@ -176,7 +179,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         // gastar ningún request al LLM -- nunca se redacta un "borrador
         // de email" para una empresa sin ningún email real.
         const channelResolution = resolveBestContactChannel({
-          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus })),
+          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus, source: c.source })),
           contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
           companyEmail: company.email,
           companyPhone: company.phone,
@@ -213,6 +216,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
             CAREERS_PAGE: "página de careers/jobs",
             LINKEDIN: "LinkedIn",
             PHONE: "teléfono principal",
+            INTERNAL_TEST_EMAIL: "email de prueba interna de aceptación",
             NONE: "ningún canal",
           };
           const followUp = await followUpsService.createFollowUp({
@@ -334,8 +338,9 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           body: parsed.body,
         };
 
+        let approvalRequestId: string;
         try {
-          await scopedDb.approvalRequest.create({
+          const approval = await scopedDb.approvalRequest.create({
             data: {
               tenantId: ctx.tenantId,
               agentTaskId: deps.taskId,
@@ -345,6 +350,7 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
               riskLevel: "MEDIUM",
             },
           });
+          approvalRequestId = approval.id;
         } catch (err) {
           // F24 (Fase 2): perdió la carrera contra el índice único
           // parcial (otro request creó un ApprovalRequest activo para
@@ -377,6 +383,23 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           entityId: cc.id,
           after: proposedAction,
         });
+
+        // F25.2 (consolidación del outbox): correlationId=deps.taskId,
+        // mismo criterio que sales-tools.impl.ts. Nunca lanza.
+        await publishEventSafe(
+          buildEventEnvelope({
+            eventType: "outreach.draft_created.v1",
+            tenantId: ctx.tenantId,
+            correlationId: deps.taskId,
+            causationId: null,
+            actorType: "AGENT",
+            actorId: deps.agentInstanceId,
+            entityType: "approval_request",
+            entityId: approvalRequestId,
+            payload: { approvalRequestId, companyId: cc.companyId, channel: "EMAIL", subjectPreview: parsed.subject },
+            idempotencyKey: buildIdempotencyKey(deps.taskId, "outreach.draft_created.v1", approvalRequestId),
+          }),
+        );
 
         return { draftBody: parsed.body, subject: parsed.subject, channel: channelResolution.channel, alternativeChannelTaskId: null };
       },

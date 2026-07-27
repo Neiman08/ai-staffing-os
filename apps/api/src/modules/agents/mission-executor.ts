@@ -32,6 +32,7 @@ import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } f
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { enrichCompanyWithDecisionContacts, type ContactProviderPort, type HunterContactProviderPort } from "./contact-enrichment";
+import { createPdlMissionBudget } from "./pdl-budget";
 import { recommendOpportunityAction, type OpportunityRecommendationResult, type BestContactRankingTier } from "../ceo-intelligence/opportunity-recommendation";
 import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from "./discovery-conversion";
 
@@ -442,7 +443,7 @@ function extractHttpStatus(errorText: string): number | null {
 
 async function executeOneQuery(
   query: FinalQuery,
-  deps: { taskId: string; abortSignal?: AbortSignal; providers: DiscoveryProviderPort; googlePlacesApiKey: string | undefined; tenantId: string },
+  deps: { taskId: string; abortSignal?: AbortSignal; providers: DiscoveryProviderPort; googlePlacesApiKey: string | undefined; tenantId: string; missionSpentSoFarUsd: number },
 ): Promise<{ result: ProviderSearchResult; origin: "API_PROVIDER" | "EXTERNAL_DISCOVERY" | null; provider: string | null; omittedNote: string | null }> {
   const stateName = SUPPORTED_STATE_CODES[query.state] ?? query.state;
   let omittedNote: string | null = null;
@@ -450,8 +451,17 @@ async function executeOneQuery(
   if (deps.googlePlacesApiKey) {
     const health = getProviderHealth(PROVIDER_KEY_GOOGLE_PLACES);
     const budget = await getDataProviderBudgetStatus(deps.tenantId);
-    if (budget.exceeded) {
-      omittedNote = `Google Places omitido: presupuesto de proveedor de datos excedido ($${budget.spentUsd.toFixed(2)}/$${budget.budgetUsd.toFixed(2)}).`;
+    // Bug real encontrado en auditoría: budget.spentUsd solo suma
+    // AgentTask.costUsd ya persistido -- esta misión escribe su propio
+    // totalCostUsd recién al final (ver el update de childTask), así
+    // que nunca se veía a sí misma mientras corría. Sumar
+    // missionSpentSoFarUsd (el acumulado en memoria de ESTA corrida,
+    // actualizado en cada query del loop de arriba) cierra ese hueco --
+    // mismo criterio que PdlMissionBudget en pdl-budget.ts para el
+    // guardia de PDL.
+    const effectiveSpentUsd = budget.spentUsd + deps.missionSpentSoFarUsd;
+    if (effectiveSpentUsd >= budget.budgetUsd) {
+      omittedNote = `Google Places omitido: presupuesto de proveedor de datos excedido ($${effectiveSpentUsd.toFixed(2)}/$${budget.budgetUsd.toFixed(2)}).`;
     } else if (health && health.status !== "AVAILABLE") {
       omittedNote = `Google Places omitido: marcado ${health.status} (${health.reason}).`;
     } else {
@@ -684,12 +694,30 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     triggeredBy: "AGENT",
     parentTaskId: params.missionTaskId,
   });
+  // Bug real encontrado en auditoría: mientras esta fila queda en QUEUED
+  // (todo lo de abajo puede tardar minutos -- llamadas reales a
+  // proveedores con reintentos/backoff), el Orchestrator autónomo
+  // (mismo `type`, tick cada 30s) puede reclamarla de verdad y ejecutar
+  // discovery.executor.ts en paralelo sobre la misma fila -- ese
+  // executor rechaza el input (no tiene el shape que espera) y marca
+  // FAILED/RETRY_SCHEDULED, carrera de escritura real contra el update
+  // final de acá abajo. Se cierra la ventana marcándola RUNNING
+  // inmediatamente -- mismo patrón ya usado por executeTaskById en
+  // task-executor.ts para tareas que se ejecutan y cierran síncronamente
+  // en el mismo proceso, nunca vía el loop de claim.
+  await scopedDb.agentTask.update({ where: { id: childTask.id }, data: { status: "RUNNING" } });
 
   const queryExecutions: QueryExecutionRecord[] = [];
   const rejectedCandidates: RejectedCandidateRecord[] = [];
   const companyValidations: CompanyValidationRecord[] = [];
   const providersUsed = new Set<string>();
   const providersOmitted = new Set<string>();
+  // F27 Fase 6: UN presupuesto de créditos de PDL para TODA esta misión,
+  // compartido por cada empresa de su loop (ver contact-enrichment.ts) --
+  // así una misión de N empresas nunca puede gastar más que
+  // PDL_PER_MISSION_CREDIT_BUDGET en total, sin importar cuántos roles
+  // objetivo tenga cada empresa individual.
+  const pdlMissionBudget = createPdlMissionBudget();
   const validationWarnings = new Set<string>();
   const rejectionReasons = new Set<string>();
   const createdCompanyIds: string[] = [];
@@ -831,6 +859,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
       providers,
       googlePlacesApiKey,
       tenantId: ctx.tenantId,
+      missionSpentSoFarUsd: totalCostUsd,
     });
     if (omittedNote) providersOmitted.add(omittedNote);
     if (result.costUsd > 0) totalCostUsd += result.costUsd;
@@ -1123,6 +1152,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             abortSignal: params.abortSignal,
             contactProvider: params.contactProvider,
             peopleDataLabsApiKey: params.peopleDataLabsApiKey,
+            pdlMissionBudget,
             // F15: 2da y 3ra fuente de la cascada -- namedPeople viene
             // del MISMO crawl que ya hizo enrichCompanyWithOrganizationalEmails
             // arriba (nunca un segundo request al sitio); Hunter corre
@@ -1633,5 +1663,15 @@ async function persistAcceptedCandidate(params: {
     after: { name: raw.name, sourceUrl: raw.sourceUrl, confidenceScore, origin: candidate.origin },
   });
 
+  // F25.2 (activación controlada, Prioridad 2 -- simplificación): el
+  // publish de company.discovered.v1 vivía acá con
+  // correlationId=missionTaskId (el id de la child AgentTask interna de
+  // esta función, NO el correlationId real de la misión -- ver línea
+  // ~975). Ahora que discovery.executor.ts (el AgentExecutor real que
+  // envuelve executeDiscoveryPlan) publica el MISMO evento con el
+  // correlationId correcto de la misión (context.correlationId), esta
+  // segunda publicación era pura duplicación con un correlationId
+  // equivocado -- rompía la reconstrucción de timeline por misión.
+  // Un único publicador, en la capa que sí conoce el correlationId real.
   return company;
 }

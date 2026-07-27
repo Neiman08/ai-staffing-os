@@ -26,6 +26,7 @@ async function setupTenant(suffix: string): Promise<string> {
 
 after(async () => {
   if (createdTenantIds.length) {
+    await prisma.auditLog.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.emailMessage.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
   }
@@ -33,14 +34,15 @@ after(async () => {
 
 function fakeProvider(overrides: Partial<MicrosoftGraphProviderPort> = {}): MicrosoftGraphProviderPort {
   return {
-    sendGraphMail: async () => ({ kind: "sent", providerMessageId: "fake-id", conversationId: "fake-conv" }) as SendGraphMailResult,
+    sendGraphMail: async () =>
+      ({ kind: "sent", providerMessageId: "fake-id", conversationId: "fake-conv", internetMessageId: "<fake-id@dreistaff.com>", httpStatus: 202, clientRequestId: "fake-request-id" }) as SendGraphMailResult,
     ...overrides,
   };
 }
 
 const FAKE_AZURE = { azureTenantId: "fake-tenant", azureClientId: "fake-client", azureClientSecret: "fake-secret" };
 
-test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a SENT con messageId/conversationId reales del proveedor", async () => {
+test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a ACCEPTED_BY_PROVIDER (nunca SENT directo) con messageId/conversationId/internetMessageId reales del proveedor", async () => {
   const tenantId = await setupTenant("happy-path");
   const result = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
     sendEmail({
@@ -53,11 +55,17 @@ test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a SENT
     }),
   );
 
-  assert.equal(result.status, "SENT");
+  assert.equal(result.status, "ACCEPTED_BY_PROVIDER");
   assert.equal(result.providerMessageId, "fake-id");
+  assert.equal(result.internetMessageId, "<fake-id@dreistaff.com>");
+  assert.ok(result.correlationId);
 
   const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: result.emailMessageId } });
-  assert.equal(row.status, "SENT");
+  assert.equal(row.status, "ACCEPTED_BY_PROVIDER");
+  assert.equal(row.correlationId, result.correlationId);
+  assert.equal(row.internetMessageId, "<fake-id@dreistaff.com>");
+  assert.equal(row.httpStatusCode, 202);
+  assert.ok(row.acceptedAt);
   assert.equal(row.fromEmail, "sales@dreistaff.com");
   assert.equal(row.fromName, "DreiStaff Sales");
   assert.equal(row.toEmail, "prospect@example.com");
@@ -65,6 +73,13 @@ test("sendEmail: camino feliz -- crea EmailMessage PENDING y lo actualiza a SENT
   assert.equal(row.providerMessageId, "fake-id");
   assert.equal(row.conversationId, "fake-conv");
   assert.ok(row.sentAt);
+
+  // F27 Fase 10: "ningún email puede salir del flujo oficial sin
+  // AuditLog" -- se audita ANTES de llamar a Graph (send_requested) Y
+  // después de la respuesta real (accepted_by_provider), nunca solo uno
+  // de los dos.
+  const auditActions = (await prisma.auditLog.findMany({ where: { tenantId, entityType: "emailMessage", entityId: result.emailMessageId }, orderBy: { createdAt: "asc" } })).map((l) => l.action);
+  assert.deepEqual(auditActions, ["email.send_requested", "email.accepted_by_provider"]);
 });
 
 test("sendEmail: el proveedor falla (403 ErrorSendAsDenied) -- EmailMessage queda FAILED con el motivo real, NUNCA se marca SENT", async () => {
@@ -90,6 +105,11 @@ test("sendEmail: el proveedor falla (403 ErrorSendAsDenied) -- EmailMessage qued
   assert.match(row.errorMessage ?? "", /ErrorSendAsDenied/);
   assert.equal(row.sentAt, null);
   assert.equal(row.providerMessageId, null);
+
+  // F27 Fase 10: un fallo real también deja rastro completo -- se pidió
+  // Y se registró que falló, nunca un envío fantasma sin ningún AuditLog.
+  const auditActions = (await prisma.auditLog.findMany({ where: { tenantId, entityType: "emailMessage", entityId: result.emailMessageId }, orderBy: { createdAt: "asc" } })).map((l) => l.action);
+  assert.deepEqual(auditActions, ["email.send_requested", "email.send_failed"]);
 });
 
 test("sendEmail: error transitorio (429/5xx) -- EmailMessage queda RETRYABLE, nunca FAILED permanente ni SENT", async () => {
@@ -143,7 +163,7 @@ test("sendEmail: destinatario con formato inválido -- rechazado ANTES de crear 
         to: "not-an-email",
         subject: "Test",
         bodyText: "Test",
-        graphProvider: fakeProvider({ sendGraphMail: async () => { providerCalled = true; return { kind: "sent", providerMessageId: "x", conversationId: null }; } }),
+        graphProvider: fakeProvider({ sendGraphMail: async () => { providerCalled = true; return { kind: "sent", providerMessageId: "x", conversationId: null, internetMessageId: null, httpStatus: 202, clientRequestId: null }; } }),
         ...FAKE_AZURE,
       }),
     ),

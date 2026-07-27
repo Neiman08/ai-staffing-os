@@ -263,6 +263,39 @@ test("proveedor primario falla (402) -> se marca CREDIT_EXHAUSTED y se usa Overp
   assert.equal(health?.status, "CREDIT_EXHAUSTED");
 });
 
+test("Bug real encontrado en auditoría: el presupuesto de proveedor de datos se ve a sí mismo DENTRO de la misma misión, antes de que termine y persista su costo", async () => {
+  const tenantId = await setupTenant("mid-mission-budget");
+  await prisma.tenant.update({ where: { id: tenantId }, data: { settings: { dataProviderBudgetUsd: 0.03 } } }); // justo debajo del costo de 1 query (0.032)
+
+  let googlePlacesCalls = 0;
+  const providers: DiscoveryProviderPort = {
+    searchGooglePlaces: async () => {
+      googlePlacesCalls += 1;
+      return googleResult([candidateFixture({ name: `Mid Mission Co ${googlePlacesCalls}` })]);
+    },
+    searchOverpass: async () => emptyResult(),
+  };
+
+  // 2 ciudades -> 2 queries reales dentro de la MISMA corrida de
+  // executeDiscoveryPlan -- antes de este fix, getDataProviderBudgetStatus
+  // nunca veía el gasto de la query 1 (solo persistido al final de toda
+  // la misión), así que la query 2 también le pegaba a Google Places sin
+  // ningún guardia real.
+  const plan = manufacturingPlan({
+    cities: ["Chicago", "Aurora"],
+    objective: { type: "find_companies", targetCompanyCount: 5, rawText: "5 empresas de manufactura" },
+    stopConditions: { maxCompanies: 5, maxCostUsd: 3, maxDurationMinutes: 60 },
+  });
+  const report = await run(tenantId, plan, providers);
+
+  assert.equal(googlePlacesCalls, 1, "la query 2 nunca debe llegar a Google Places -- el presupuesto ya se vio excedido por el gasto de la query 1 dentro de la misma misión");
+  assert.ok(
+    report.providersOmitted.some((note) => note.includes("presupuesto de proveedor de datos excedido")),
+    "debe quedar registrado explícitamente que se omitió por presupuesto, no en silencio",
+  );
+  assert.equal(report.companiesCreated, 1, "solo la empresa de la query 1 (antes de agotar presupuesto) debe crearse");
+});
+
 test("todos los proveedores sin resultados -> NO_RESULTS, nunca COMPLETED con 0 empresas", async () => {
   const tenantId = await setupTenant("no-results");
   const report = await run(tenantId, manufacturingPlan(), fakeProviders());

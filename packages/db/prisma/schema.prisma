@@ -315,6 +315,40 @@ enum AgentTaskStatus {
   AWAITING_APPROVAL
   DONE
   FAILED
+
+  // F25.2 Fase 1 (ADR-0004): agregados de forma aditiva -- ningún valor
+  // existente cambia de significado. CLAIMED = lease tomado, aún no
+  // corre; RETRY_SCHEDULED = falla reintentable esperando nextAttemptAt;
+  // BLOCKED = política/datos insuficientes, terminal pero no es un
+  // "error" (nunca reintenta); CANCELED = cancelación explícita.
+  // FAILED sigue siendo el estado muerto/terminal, como ya lo usa
+  // task-executor.ts hoy.
+  CLAIMED
+  RETRY_SCHEDULED
+  BLOCKED
+  CANCELED
+  // Falla clasificada HUMAN_ACTION_REQUIRED (ver AgentErrorCategory) --
+  // no es un bug ni una política que bloquea, es una tarea que necesita
+  // que un humano decida algo antes de continuar (Fase 5, Human Review
+  // Center). Se agrega ahora junto al resto del vocabulario de Fase 1
+  // porque recordTaskFailure ya necesita mapear a este valor.
+  HUMAN_REVIEW
+}
+
+// F25.2 Fase 1 (ADR-0004): espeja AGENT_ERROR_CATEGORIES de
+// packages/agents/src/core/AgentError.ts -- única fuente de verdad
+// semántica es ese archivo TS, este enum solo persiste el mismo valor.
+enum AgentErrorCategory {
+  RETRYABLE_NETWORK
+  RETRYABLE_PROVIDER
+  RETRYABLE_RATE_LIMIT
+  RETRYABLE_TIMEOUT
+  INVALID_INPUT
+  POLICY_BLOCKED
+  DATA_INSUFFICIENT
+  PERMANENT_PROVIDER_ERROR
+  HUMAN_ACTION_REQUIRED
+  UNKNOWN
 }
 
 enum TaskTrigger {
@@ -538,6 +572,12 @@ enum CompanyOrigin {
   CSV_IMPORT
   EXTERNAL_DISCOVERY
   API_PROVIDER
+  // F27 (Internal Acceptance Test): creado EXCLUSIVAMENTE por
+  // internal-testing/service.ts, nunca por ningún endpoint genérico de
+  // creación de Company -- ver comentario extendido en ese archivo.
+  // Excluido de campañas/métricas comerciales igual que DEMO_SEED (ver
+  // campaign-tools.impl.ts, crm/service.ts, public/service.ts).
+  INTERNAL_TEST
 }
 
 // F4.5: UNVERIFIED es el default honesto para todo lo previo a F4.5 (nadie
@@ -688,6 +728,13 @@ enum ContactVerificationStatus {
   UNVERIFIED
   CONFIRMED
   INFERRED
+  // F27 (Internal Acceptance Test): NUNCA equivalente a CONFIRMED/VERIFIED
+  // comercial -- resolveBestContactChannel (contact-channel.ts) solo lo
+  // trata como email-capable cuando TAMBIÉN Contact.source="INTERNAL_TEST"
+  // (marcador doble, ninguno de los 2 solo alcanza). Escrito EXCLUSIVAMENTE
+  // por internal-testing/service.ts, nunca por el endpoint genérico de
+  // creación de Contact (contactInputSchema no expone este campo).
+  INTERNAL_TEST_VERIFIED
 }
 
 // F4.7: estado de ENTREGABILIDAD del email, distinto de
@@ -2134,8 +2181,49 @@ model AgentTask {
   createdAt       DateTime          @default(now())
   completedAt     DateTime?
 
+  // F25.2 Fase 1 (ADR-0004): lease/heartbeat/retry -- todas nullable u
+  // con default seguro, ningún row existente cambia (claimedAt=null,
+  // attempt=0, maxAttempts=3 se aplican vía @default a filas nuevas;
+  // filas existentes quedan con NULL/0 tras el backfill, ver migration.sql).
+  claimedAt          DateTime?
+  claimedBy          String? // worker id (proceso), no un usuario -- distinto de triggeredBy
+  leaseExpiresAt     DateTime?
+  attempt            Int                 @default(0)
+  maxAttempts        Int                 @default(3)
+  nextAttemptAt      DateTime?
+  lastErrorCategory  AgentErrorCategory?
+  canceledAt         DateTime?
+  canceledBy         String?
+
+  // F25.2 Fase 1: trazabilidad -- correlationId agrupa todas las tareas
+  // de una misma misión/workflow, causationId apunta al eventId que
+  // disparó esta tarea (ver AgentEventEnvelope). Ambos nullable: tareas
+  // pre-F25.2 y tareas disparadas directamente por un usuario (sin
+  // evento causante) son válidas sin ellos.
+  correlationId String?
+  causationId   String?
+
+  // F25.2 Fase 3 (ADR-0001): prioridad explícita para el claim de la
+  // cola -- default 0 (todo lo existente y toda tarea nueva sin
+  // prioridad especial queda igual que hoy). Mayor número = mayor
+  // prioridad, desempate por attempt (menos reintentos primero) y
+  // createdAt (más vieja primero) -- ver postgres-queue.ts.
+  priority Int @default(0)
+
+  // F25.2 (activación controlada del pipeline real): idempotencia real
+  // a nivel de DB para el productor de misiones piloto
+  // (mission-producer.ts) -- mismo patrón exacto que
+  // DomainEvent.idempotencyKey (Fase 2) y el índice único parcial de
+  // HumanReviewRequest (Fase 5): un choque real (P2002) se resuelve
+  // devolviendo la fila YA existente, nunca una segunda tarea para la
+  // misma solicitud. Nullable -- la inmensa mayoría de AgentTask
+  // (tools invocadas directamente, no misiones) nunca la usan.
+  idempotencyKey String? @unique
+
   @@index([tenantId, status])
   @@index([agentInstanceId, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, correlationId])
 }
 
 model AgentMemory {
@@ -2204,9 +2292,21 @@ model ApprovalRequest {
 
 enum EmailMessageStatus {
   PENDING // creada, todavía no se intentó el envío real
-  SENT // Microsoft Graph confirmó el envío (HTTP 202, con messageId real cuando Graph lo devuelve)
+  // F27 (endurecimiento de trazabilidad): SENT queda como estado LEGADO --
+  // ningún código nuevo lo escribe. Antes de F27 significaba "Graph
+  // aceptó el /send (202)", que es exactamente la confusión que este
+  // cambio corrige (202 = aceptado, NUNCA "enviado" ni "entregado"
+  // confirmado). Las filas viejas con SENT se preservan tal cual, sin
+  // reinterpretar ni migrar su significado retroactivamente.
+  SENT
   FAILED // error real de Graph que NO amerita reintento (ej. 403 ErrorSendAsDenied, remitente inválido)
   RETRYABLE // error transitorio real (429/5xx/timeout) -- puede reintentarse
+  // ---- F27: estados nuevos, más finos, que reemplazan a SENT hacia adelante ----
+  ACCEPTED_BY_PROVIDER // Graph devolvió 202 al /send -- confirma que la solicitud fue aceptada para procesar, NUNCA que se entregó ni que existe en Sent Items todavía.
+  SENT_CONFIRMED // el reconciliador encontró el mensaje real en la carpeta Sent Items del buzón remitente correcto -- confirmación real, no inferida.
+  DELIVERED // evidencia real de entrega en el buzón del destinatario (hoy no se implementa ningún chequeo automático de esto -- placeholder para una integración futura real, nunca se escribe sin evidencia).
+  BOUNCED // se encontró un NDR (Non-Delivery Report) real, relacionado por ventana temporal + destinatario, en el Inbox del buzón remitente.
+  DELIVERY_UNKNOWN // venció la ventana razonable de verificación sin encontrar el mensaje en Sent Items ni un NDR -- estado honesto de "no se pudo confirmar", nunca se fuerza a SENT_CONFIRMED ni BOUNCED sin evidencia.
 }
 
 // F17: distingue el propósito real del envío -- nunca un `from` de texto
@@ -2254,10 +2354,94 @@ model EmailMessage {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
+  // ---- F27 (endurecimiento de trazabilidad) -- todo aditivo, nulo en cualquier fila previa ----
+  // Id real de RFC 5322 (Message-ID header) -- distinto del providerMessageId
+  // (id interno de Graph, inmutable gracias a `Prefer: IdType="ImmutableId"`)
+  // y del conversationId (agrupa un hilo, no un mensaje puntual). Es el
+  // identificador más estable para buscar el mensaje real más adelante.
+  internetMessageId    String?
+  // Identificador interno único de ESTE intento de envío -- generado por
+  // DreiStaff antes de llamar a Graph, propagado a AuditLog y disponible
+  // para correlacionar logs/reportes sin depender de ningún id que
+  // devuelva un proveedor externo.
+  correlationId        String?   @unique
+  // Timestamps reales de cada transición verificable (nunca inferidos):
+  acceptedAt           DateTime? // Graph devolvió 202 al /send
+  sentItemsConfirmedAt DateTime? // el reconciliador lo encontró en Sent Items
+  lastCheckedAt        DateTime? // última vez que el reconciliador lo revisó, haya encontrado algo o no
+  ndrReceivedAt        DateTime?
+  ndrDetail            String? // texto plano del NDR real (SMTP diagnostic), nunca inventado
+  normalizedError      String? // clasificación corta y estable del error real (ej. "ErrorSendAsDenied"), separado de errorMessage (texto completo/legado)
+  // Metadata de la respuesta real de Graph -- nunca un token/secreto, solo
+  // encabezados/códigos de diagnóstico ya públicos en la respuesta HTTP.
+  graphClientRequestId String?
+  httpStatusCode       Int?
+  // Quién disparó este envío -- HUMAN (Approve & Send / envío manual) o
+  // AGENT (ningún camino real hoy, campo preparado para cuando exista).
+  actorType            ActorType?
+  actorId              String?
+
   @@index([tenantId, status])
   @@index([tenantId, approvalRequestId])
   @@index([tenantId, leadId])
   @@index([tenantId, opportunityId])
+  @@index([tenantId, internetMessageId])
+  @@index([status, acceptedAt])
+}
+
+// F27 (Fase 4, reconciliación): un mensaje real encontrado en Sent Items
+// del buzón configurado que NO tiene ningún EmailMessage correspondiente
+// -- el hallazgo real que motivó todo este endurecimiento (5 correos
+// reales sin ningún registro en el CRM). Nunca se inventa un
+// ApprovalRequest para esto -- es evidencia de que algo envió por fuera
+// del flujo oficial, se registra como tal para que un humano lo revise.
+model EmailReconciliationAlert {
+  id                String                         @id @default(cuid())
+  tenantId          String
+  mailbox           String
+  graphMessageId    String // id inmutable de Graph -- único por mensaje real
+  internetMessageId String?
+  subject           String?
+  toRecipients      String[]                       @default([])
+  sentDateTime      DateTime?
+  discoveredAt      DateTime                       @default(now())
+  status            EmailReconciliationAlertStatus @default(OPEN)
+  // Evidencia mínima seria (nunca el cuerpo completo del mensaje real) --
+  // suficiente para que un humano decida qué hacer, sin duplicar
+  // contenido sensible de un buzón real en esta base.
+  evidence          Json?
+  acknowledgedById  String?
+  acknowledgedAt    DateTime?
+  createdAt         DateTime                       @default(now())
+
+  @@unique([tenantId, mailbox, graphMessageId])
+  @@index([tenantId, status])
+}
+
+enum EmailReconciliationAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  DISMISSED
+}
+
+// F27 Fase 7: caché real de la última consulta real de Hunter.io Domain
+// Search por (tenant, dominio) -- el free tier de Hunter (25 búsquedas/mes,
+// ver hunter.ts) se agota rápido si cada reintento de find_contacts o cada
+// misión que vuelve a tocar la misma Company golpea la API real de nuevo
+// por el mismo dominio. `candidates` guarda el mismo shape EmailCandidate[]
+// que hunter.ts ya mapea de la respuesta real -- un "cache hit" reconstruye
+// exactamente lo que Hunter dijo la última vez, nunca inventa nada nuevo.
+model HunterDomainSearchCache {
+  id             String   @id @default(cuid())
+  tenantId       String
+  domain         String
+  queriedAt      DateTime @default(now())
+  candidates     Json // EmailCandidate[] real, tal cual lo devolvió la última consulta
+  patternsFailed String[] @default([])
+  providerStatus String
+
+  @@unique([tenantId, domain])
+  @@index([tenantId, queriedAt])
 }
 
 // ================= AUDITORÍA, EVENTOS, NOTIFICACIONES =================
@@ -2287,8 +2471,46 @@ model DomainEvent {
   processedAt DateTime?
   createdAt   DateTime  @default(now())
 
+  // F25.2 Fase 2 (ADR-0002): outbox real -- estas columnas quedaban sin
+  // uso hasta hoy (auditoría F25 Fase A: DomainEvent era un stub muerto,
+  // nunca escrito ni leído). idempotencyKey único a nivel de tabla es la
+  // garantía real de "nunca se publica el mismo evento dos veces" (no
+  // una convención de aplicación). attempt/lastErrorAt/lastErrorCode
+  // soportan replay seguro: un evento no procesado se vuelve a reclamar
+  // en el próximo poll sin intervención manual.
+  correlationId  String?
+  causationId    String?
+  actorType      String?
+  actorId        String?
+  entityType     String?
+  entityId       String?
+  idempotencyKey String?   @unique
+  attempt        Int       @default(0)
+  lastErrorAt    DateTime?
+  lastErrorCode  String?
+
+  // F25.2 (consolidación): lease real -- REVIERTE la decisión original
+  // de ADR-0002/ADR-0003 ("sin columnas de lease, un único dispatcher
+  // in-process alcanza"). Encontrado con un test de concurrencia real
+  // (no hipotético): dos transacciones separadas, cada una con
+  // `claimUnprocessedEvents` corriendo de punta a punta ANTES de que
+  // la otra empezara, reclamaban la MISMA fila -- porque `attempt++`
+  // solo no saca a la fila de `processedAt IS NULL`. Reproducido con
+  // psql puro (sin Prisma de por medio), consistentemente. Mismo
+  // patrón exacto que AgentTask (Fase 1/ADR-0004): claimedAt/claimedBy/
+  // leaseExpiresAt. Un lease vencido se vuelve a reclamar solo (la
+  // propia condición del claim ya lo cubre) -- no hace falta un sweep
+  // aparte como reclaimExpiredLeases, a diferencia de AgentTask, porque
+  // markEventProcessed/markEventFailed ya limpian el lease de inmediato
+  // en el camino feliz.
+  claimedAt      DateTime?
+  claimedBy      String?
+  leaseExpiresAt DateTime?
+
   @@index([processedAt])
   @@index([tenantId, type])
+  @@index([tenantId, correlationId])
+  @@index([processedAt, leaseExpiresAt])
 }
 
 // F10.8: extendido de forma ADITIVA -- `userId` conserva su nombre y
@@ -2320,4 +2542,61 @@ model Notification {
   @@index([tenantId, userId, readAt])
   @@index([tenantId, recipientRole, readAt])
   @@index([tenantId, entityType, entityId])
+}
+
+// F25.2 Fase 5: Human Review Center -- tabla nueva (justificación:
+// ApprovalRequest es específico de outreach/envío, nada existente
+// cubre "caso consolidado con evidencia y opciones para que un humano
+// decida", ver docs/F25_AUTONOMY_POLICY_MODEL.md §8, contrato ya
+// revisado en la sesión de arquitectura F25). FKs opcionales vía
+// entityType/entityId (mismo patrón que Notification arriba), nunca
+// una relación obligatoria a una tabla de negocio específica -- una
+// misma cola sirve para Company/Contact/ApprovalRequest/lo que sea.
+enum HumanReviewType {
+  INVALID_CLASSIFICATION
+  CONTACT_AMBIGUOUS
+  CONTENT_RISK
+  POLICY_EXCEPTION
+  HIGH_VALUE_OPPORTUNITY
+  NEGOTIATION_REQUIRED
+  UNSAFE_REPLY
+  MEETING_CONFLICT
+  LEARNING_PROPOSAL
+  SYSTEM_FAILURE
+}
+
+enum HumanReviewPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model HumanReviewRequest {
+  id       String              @id @default(cuid())
+  tenantId String
+  type     HumanReviewType
+  priority HumanReviewPriority
+  deadline DateTime?
+
+  entityType String
+  entityId   String
+
+  summary           String
+  evidence          Json // Record<string, unknown>[] -- citas/datos concretos, nunca "confía en mí"
+  requestedDecision String
+  options           Json // { label: string; consequence: string }[]
+  recommendation    String? // sugerencia del sistema, nunca vinculante
+  impact            String // qué pasa si no se decide a tiempo
+
+  correlationId String // para reconstruir el caso completo (ver AgentEventEnvelope)
+
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+  resolution   String?
+
+  @@index([tenantId, resolvedAt, priority])
+  @@index([tenantId, entityType, entityId, type])
+  @@index([tenantId, correlationId])
 }

@@ -225,8 +225,10 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
             // deben poder seleccionarse como target de una campaña real
             // -- bloqueado en el ORIGEN de la selección, no solo en
             // lectura (ver también evaluateBusinessIdentityGate para el
-            // chokepoint de Lead/Opportunity).
-            origin: { not: "DEMO_SEED" },
+            // chokepoint de Lead/Opportunity). F27: mismo criterio para
+            // INTERNAL_TEST (internal-testing/service.ts) -- nunca debe
+            // aparecer como target de campaña real.
+            origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] },
             ...(targetCategoryIds.length > 0
               ? { possibleCategories: { some: { id: { in: targetCategoryIds } } } }
               : {}),

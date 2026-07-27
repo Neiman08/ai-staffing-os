@@ -1,10 +1,12 @@
 import type { MissionRestrictions } from "@ai-staffing-os/agents";
+import { buildEventEnvelope, buildIdempotencyKey } from "@ai-staffing-os/agents";
 import { Prisma } from "@ai-staffing-os/db";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
+import { publishEventSafe } from "../../core/events/outbox";
 import * as leadsService from "../leads/service";
 import * as opportunitiesService from "../opportunities/service";
 import { decideCompanyConversion, evaluateDraftEligibility, type ConversionEvidence, type ConversionDecision, type DraftEligibility } from "../ceo-intelligence/conversion-policy";
@@ -223,6 +225,22 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
                 entityId: approval.id,
                 after: { companyId: params.company.id, opportunityId, to },
               });
+              // F25.2 (consolidación del outbox): mismo criterio que
+              // mission-executor.ts/sales-tools.impl.ts. Nunca lanza.
+              await publishEventSafe(
+                buildEventEnvelope({
+                  eventType: "outreach.draft_created.v1",
+                  tenantId: ctx.tenantId,
+                  correlationId: params.taskId,
+                  causationId: null,
+                  actorType: "AGENT",
+                  actorId: ctx.actor?.agentInstanceId ?? "system",
+                  entityType: "approval_request",
+                  entityId: approval.id,
+                  payload: { approvalRequestId: approval.id, companyId: params.company.id, channel: "EMAIL", subjectPreview: subject },
+                  idempotencyKey: buildIdempotencyKey(params.taskId, "outreach.draft_created.v1", approval.id),
+                }),
+              );
             } catch (err) {
               // F24 (Fase 2): perdió la carrera contra el índice único parcial.
               if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {

@@ -8,6 +8,29 @@ export * from "./core/AgentRuntime";
 export * from "./core/CostTracker";
 export * from "./core/ApprovalGate";
 
+// F25 Fase 1 -- fundamentos compartidos de la organización autónoma
+// (ver docs/F25_AUTONOMOUS_ORGANIZATION_MASTER_ARCHITECTURE.md). Puro
+// código nuevo, sin consumidores productivos todavía.
+export * from "./core/AgentStage";
+export * from "./core/AgentTaskExecutionStatus";
+export * from "./core/AgentCapability";
+export * from "./core/PolicyEnvelope";
+export * from "./core/AgentEventEnvelope";
+export * from "./core/AgentExecutionContext";
+export * from "./core/AgentDecisionResult";
+export * from "./core/AgentError";
+export * from "./core/AgentResult";
+export * from "./core/AgentExecutor";
+export * from "./core/idempotency";
+export * from "./core/correlation";
+export * from "./core/capability-check";
+
+// F25 Fase H -- prototipo local/dry-run del Orchestrator. Nunca toca
+// Postgres/LLM/proveedores externos, ver docstring de DryRunOrchestrator.
+export * from "./orchestrator/InMemoryTaskStore";
+export * from "./orchestrator/InMemoryEventBus";
+export * from "./orchestrator/DryRunOrchestrator";
+
 export * from "./providers/openai-provider";
 
 export * from "./tools/sales-tools";

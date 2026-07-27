@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F10.11: responsive (mismo criterio de overflow que dashboard-roles.spec.ts,
 // F6.8) + empty/error states reales de los 3 portales, en un navegador real.

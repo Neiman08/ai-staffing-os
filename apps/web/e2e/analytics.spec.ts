@@ -4,7 +4,7 @@
 // identidades de portal.
 
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 async function setDevUser(page: Page, email: string) {
   await page.route("**/api/v1/**", (route) => {

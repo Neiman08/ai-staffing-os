@@ -33,13 +33,24 @@ export type ContactChannelType =
   | "CAREERS_PAGE"
   | "LINKEDIN"
   | "PHONE"
+  // F27 (Internal Acceptance Test): canal DISTINTO a propósito de los 3
+  // tiers comerciales de arriba -- nunca se confunde con una verificación
+  // real de negocio. Solo se produce cuando un Contact trae AMBOS
+  // marcadores a la vez (ver el chequeo debajo) -- ninguno de los 2 solo
+  // alcanza, y ningún endpoint público puede escribir ninguno de los 2
+  // (ver contactInputSchema en packages/shared -- no expone `source` ni
+  // `verificationStatus`). Solo internal-testing/service.ts los escribe.
+  | "INTERNAL_TEST_EMAIL"
   | "NONE";
 
 // Tiers 1-3 son los únicos con un email real utilizable para redactar un
 // borrador -- tiers 4-7 son canales alternativos reales, pero
 // personalizeMessage (outreach-tools.impl.ts) nunca intenta redactar un
 // "email" para un formulario/careers page/LinkedIn/teléfono.
-const EMAIL_CAPABLE_CHANNELS = new Set<ContactChannelType>(["VERIFIED_PERSON_EMAIL", "VERIFIED_ORG_EMAIL", "WEBSITE_ORG_EMAIL"]);
+// INTERNAL_TEST_EMAIL también es "email-capable" -- por diseño, para que
+// la prueba de aceptación pueda redactar y enviar un email real -- pero
+// nunca aparece salvo por el marcador doble de arriba.
+const EMAIL_CAPABLE_CHANNELS = new Set<ContactChannelType>(["VERIFIED_PERSON_EMAIL", "VERIFIED_ORG_EMAIL", "WEBSITE_ORG_EMAIL", "INTERNAL_TEST_EMAIL"]);
 
 export interface ContactChannelResolution {
   channel: ContactChannelType;
@@ -62,6 +73,11 @@ export interface ContactChannelContactInput {
   // todavía -- nunca se equipara un contacto INFERRED/UNVERIFIED (scraping)
   // con uno que un humano tipeó a mano.
   verificationStatus?: string | null;
+  // F27 (Internal Acceptance Test): procedencia real del Contact (mismo
+  // campo que ya existe en el modelo, ej. "People Data Labs"/"Website
+  // Intelligence"/"Hunter.io"/null) -- se agrega acá SOLO para el chequeo
+  // de marcador doble de abajo, nunca cambia el ranking/scoring existente.
+  source?: string | null;
 }
 
 export interface ContactChannelContactPointInput {
@@ -141,6 +157,23 @@ function pickBestEmail(candidates: string[], opts: { excludeFreeProviders: boole
 }
 
 export function resolveBestContactChannel(input: ContactChannelInput): ContactChannelResolution {
+  // F27 (Internal Acceptance Test): chequeado ANTES que cualquier tier
+  // comercial, pero exige AMBOS marcadores a la vez -- source==="INTERNAL_TEST"
+  // Y verificationStatus==="INTERNAL_TEST_VERIFIED". Un Contact real jamás
+  // tiene los 2 a la vez (ningún proveedor real escribe source="INTERNAL_TEST",
+  // ver contact-enrichment.ts; ningún endpoint público puede escribir
+  // verificationStatus="INTERNAL_TEST_VERIFIED", ver contactInputSchema) --
+  // esto nunca se puede confundir con ni degradar una verificación comercial.
+  const internalTestContact = input.contacts.find((c) => c.email && c.source === "INTERNAL_TEST" && c.verificationStatus === "INTERNAL_TEST_VERIFIED");
+  if (internalTestContact) {
+    return {
+      channel: "INTERNAL_TEST_EMAIL",
+      value: internalTestContact.email,
+      reason: "Contacto de prueba interna de aceptación (INTERNAL_TEST) -- nunca una verificación comercial real, ver internal-testing/service.ts.",
+      isEmailCapable: true,
+    };
+  }
+
   const verifiedPersonEmail = pickBestEmail(
     input.contacts
       .filter((c) => c.email && (c.emailVerificationStatus === "VERIFIED" || c.verificationStatus === "CONFIRMED"))

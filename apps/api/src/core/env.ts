@@ -108,11 +108,58 @@ const envSchema = z.object({
   // pasar a true en cualquier entorno real. Ver core/production-mode.ts.
   PRODUCTION_MODE: z.coerce.boolean().default(false),
 
+  // F27 (Internal Acceptance Test): mismo criterio de "bandera segura
+  // explícita" que el resto de guardas sensibles de este archivo -- por
+  // defecto false, así que con PRODUCTION_MODE=true la prueba interna
+  // queda bloqueada salvo que un admin la habilite explícitamente acá.
+  // Con PRODUCTION_MODE=false (el default de hoy), la prueba ya está
+  // permitida sin necesitar esta bandera -- ver
+  // internal-testing/service.ts's isInternalAcceptanceTestEnvironmentSafe().
+  INTERNAL_ACCEPTANCE_TEST_ENABLED: z.coerce.boolean().default(false),
+  // Allowlist real de destinatarios de prueba, coma-separados -- nunca un
+  // wildcard, nunca vacío por default. El gate de internal-testing/
+  // service.ts rechaza cualquier destinatario fuera de esta lista, sin
+  // excepción.
+  INTERNAL_ACCEPTANCE_TEST_ALLOWED_RECIPIENTS: z.string().default("neimangroupllc@gmail.com"),
+
   // F4.8: qué Tenant sirve el sitio público (dreistaff.com) — este
   // pilot es de un solo tenant real ("titan", el mismo de siempre en
   // seed.ts), pero el valor sigue siendo configurable por env, nunca
   // hardcodeado en el código de las rutas públicas. Ver core/public-tenant.ts.
   PUBLIC_TENANT_SLUG: z.string().default("titan"),
+
+  // F25.2 (activación controlada del pipeline real) — ver
+  // core/pipeline-flags.ts para el objeto derivado y el kill switch.
+  // Todos con default seguro/gradual salvo AUTONOMOUS_WORKER_ENABLED
+  // (ya activado y probado como inerte en la sesión anterior -- sigue
+  // en true para no revertir comportamiento ya verificado, pero ahora
+  // es un toggle real en vez de estar hardcodeado en index.ts).
+  PIPELINE_KILL_SWITCH: z.coerce.boolean().default(false),
+  AUTONOMOUS_WORKER_ENABLED: z.coerce.boolean().default(true),
+  MISSION_TASK_PRODUCTION_ENABLED: z.coerce.boolean().default(false),
+  DISCOVERY_AGENT_ENABLED: z.coerce.boolean().default(false),
+  CONTACT_INTELLIGENCE_AGENT_ENABLED: z.coerce.boolean().default(false),
+  QUALITY_AGENT_ENABLED: z.coerce.boolean().default(false),
+  EVENT_HANDLERS_ENABLED: z.coerce.boolean().default(false),
+  // F26 (primer piloto de outreach real): gate reactivo adicional --
+  // contact.verified.v1 -> crea un draft_outreach real (LLM + ApprovalRequest).
+  // Mismo criterio que los 4 flags de arriba: default false, apagado por
+  // el kill switch, nunca puede saltarse el approval humano (eso no es
+  // un flag, es la arquitectura -- ver draft.executor.ts/sendApproval).
+  DRAFT_AGENT_ENABLED: z.coerce.boolean().default(false),
+  // Límite diario de envíos REALES (EmailMessage.status=SENT) por tenant,
+  // enforced en sendApproval antes de llamar a Microsoft Graph -- ver
+  // modules/email/send-limits.ts. Configurable, nunca hardcodeado a un
+  // valor fijo en el código de envío.
+  DAILY_EMAIL_SEND_LIMIT: z.coerce.number().int().min(1).default(25),
+  // F27 Fase 6: techos deliberadamente conservadores de créditos de People
+  // Data Labs -- muy por debajo del plan real (100 créditos/mes según el
+  // panel verificado en esta misión), para que este sistema nunca pueda
+  // ser la razón de que se agote el saldo del mes. Configurable porque el
+  // plan real puede cambiar sin un deploy de código -- ver pdl-budget.ts.
+  PDL_MONTHLY_CREDIT_BUDGET: z.coerce.number().int().min(0).default(40),
+  PDL_PER_MISSION_CREDIT_BUDGET: z.coerce.number().int().min(0).default(15),
+  PDL_PER_COMPANY_MAX_RESULTS: z.coerce.number().int().min(0).default(5),
 });
 
 function loadEnv() {

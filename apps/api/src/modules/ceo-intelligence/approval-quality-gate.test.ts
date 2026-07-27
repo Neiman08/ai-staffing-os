@@ -81,6 +81,27 @@ test("falla: minimal_metadata -- sin Company resoluble en absoluto", () => {
   assert.ok(r.failures.some((f) => f.check === "minimal_metadata"));
 });
 
+// Bug real encontrado en auditoría de "primera misión real": un
+// re-discovery posterior a la creación del borrador puede marcar la
+// Company como probable cliente final real -- este re-chequeo debe
+// bloquear la aprobación con el mismo criterio que evaluateDraftCreationGate.
+test("falla: client_owner_review -- isClientOwnerCandidate=true marcado DESPUÉS de crear el borrador", () => {
+  const r = evaluateApprovalQualityGate(baseInput({ isClientOwnerCandidate: true }));
+  assert.equal(r.passed, false);
+  assert.ok(r.failures.some((f) => f.check === "client_owner_review"));
+});
+
+test("falla: client_owner_review -- opportunityRecommendation=MANUAL_REVIEW", () => {
+  const r = evaluateApprovalQualityGate(baseInput({ opportunityRecommendation: "MANUAL_REVIEW" }));
+  assert.equal(r.passed, false);
+  assert.ok(r.failures.some((f) => f.check === "client_owner_review"));
+});
+
+test("pasa cuando isClientOwnerCandidate/opportunityRecommendation nunca se pasan (compatibilidad con callers existentes)", () => {
+  const r = evaluateApprovalQualityGate(baseInput());
+  assert.equal(r.passed, true);
+});
+
 test("reporta TODOS los fallos a la vez, no solo el primero", () => {
   const r = evaluateApprovalQualityGate(
     baseInput({ companyOrigin: "DEMO_SEED", to: null, body: "", subject: "" }),

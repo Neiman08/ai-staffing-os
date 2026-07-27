@@ -10,12 +10,14 @@ export const companyOriginSchema = z.enum([
   "CSV_IMPORT",
   "EXTERNAL_DISCOVERY",
   "API_PROVIDER",
+  // F27: Internal Acceptance Test -- ver CompanyOrigin en schema.prisma.
+  "INTERNAL_TEST",
 ]);
 export const companyVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED"]);
 // F4.6: mismo shape que companyVerificationStatusSchema, enum propio
 // (Contact es una entidad distinta con su propio ciclo de vida de
 // procedencia) — ver ContactVerificationStatus en el schema de Prisma.
-export const contactVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED"]);
+export const contactVerificationStatusSchema = z.enum(["UNVERIFIED", "CONFIRMED", "INFERRED", "INTERNAL_TEST_VERIFIED"]);
 // F4.7: entregabilidad del EMAIL específicamente — distinto de
 // contactVerificationStatusSchema (que describe la procedencia del
 // contacto como registro completo). Solo VERIFIED habilita outreach.

@@ -74,3 +74,36 @@ test("precedencia: duplicado activo gana sobre client-owner y sobre falta de can
   );
   assert.equal(r.blockReason, "DUPLICATE_ACTIVE");
 });
+
+// ---------- F27 (Internal Acceptance Test): defensa en profundidad -- 2 señales independientes deben coincidir ----------
+
+test("INTERNAL_TEST_EMAIL: permitido cuando companyOrigin también es INTERNAL_TEST (par de señales coincide)", () => {
+  const r = evaluateDraftCreationGate(
+    baseInput({ companyOrigin: "INTERNAL_TEST", channel: { isEmailCapable: true, channel: "INTERNAL_TEST_EMAIL", reason: "test" } }),
+  );
+  assert.equal(r.allowed, true);
+  assert.equal(r.blockReason, null);
+});
+
+test("INTERNAL_TEST_EMAIL: bloqueado si companyOrigin NO es INTERNAL_TEST -- nunca confía solo en el canal del contacto", () => {
+  const r = evaluateDraftCreationGate(
+    baseInput({ companyOrigin: "API_PROVIDER", channel: { isEmailCapable: true, channel: "INTERNAL_TEST_EMAIL", reason: "test" } }),
+  );
+  assert.equal(r.allowed, false);
+  assert.equal(r.blockReason, "INTERNAL_TEST_NOT_AUTHORIZED");
+});
+
+test("INTERNAL_TEST_EMAIL: companyOrigin=INTERNAL_TEST por sí solo, SIN el canal correspondiente, sigue el camino normal (nunca se autoriza por el origin solo)", () => {
+  const r = evaluateDraftCreationGate(
+    baseInput({ companyOrigin: "INTERNAL_TEST", channel: { isEmailCapable: false, channel: "NONE", reason: "sin canal" } }),
+  );
+  assert.equal(r.allowed, false);
+  assert.equal(r.blockReason, "NEEDS_ENRICHMENT", "un origin INTERNAL_TEST sin el channel correspondiente cae al chequeo normal de canal, nunca se autoriza gratis");
+});
+
+test("INTERNAL_TEST_EMAIL: DEMO_SEED sigue ganando incluso si el canal fuera (hipotéticamente) INTERNAL_TEST_EMAIL", () => {
+  const r = evaluateDraftCreationGate(
+    baseInput({ companyOrigin: "DEMO_SEED", channel: { isEmailCapable: true, channel: "INTERNAL_TEST_EMAIL", reason: "test" } }),
+  );
+  assert.equal(r.blockReason, "DEMO_SEED");
+});

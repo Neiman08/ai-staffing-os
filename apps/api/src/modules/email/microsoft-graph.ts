@@ -1,4 +1,5 @@
 import type { ProviderStatusValue } from "@ai-staffing-os/agents";
+import { prisma } from "@ai-staffing-os/db";
 import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "../agents/tools/provider-health";
 
 /**
@@ -182,6 +183,28 @@ export interface GraphEmailAddress {
   name?: string;
 }
 
+/**
+ * F27 Fase 5 (hallazgo real de esta misión: 5 correos reales llegaron a
+ * Graph sin ningún EmailMessage/ApprovalRequest/AuditLog, porque un
+ * script ad-hoc pudo importar `sendGraphMail` directamente y llamarlo
+ * con datos inventados -- esta función de bajo nivel no tenía forma de
+ * saber que no venía de email-service.ts). `auth` nunca se puede
+ * fabricar de la nada: exige el id/correlationId reales de un
+ * EmailMessage que YA existe en estado PENDING para este tenant --
+ * exactamente lo que `sendEmail()` (el único llamador de producción)
+ * crea justo antes de llamar acá, nunca después. Un script que quiera
+ * saltarse esto tendría que crear esa fila PENDING primero -- en cuyo
+ * caso ya dejó el mismo rastro real que este endurecimiento existe para
+ * garantizar, así que deja de ser un envío "fuera del flujo oficial".
+ */
+export interface SendAuthorization {
+  emailMessageId: string;
+  tenantId: string;
+  correlationId: string;
+  actorType: "HUMAN" | "AGENT" | "SYSTEM";
+  actorId: string;
+}
+
 export interface SendGraphMailParams {
   taskId?: string;
   mailbox: string; // ej. "sales@dreistaff.com" -- SIEMPRE /users/{mailbox}, nunca /me
@@ -193,11 +216,18 @@ export interface SendGraphMailParams {
   subject: string;
   bodyHtml?: string;
   bodyText?: string;
+  auth: SendAuthorization;
   abortSignal?: AbortSignal;
 }
 
 export type SendGraphMailResult =
-  | { kind: "sent"; providerMessageId: string; conversationId: string | null }
+  // F27: httpStatus/clientRequestId acá también en el camino feliz --
+  // evidencia real de la respuesta de Graph (nunca un token/secreto),
+  // guardada para trazabilidad y para el reconciliador. internetMessageId
+  // viene de la MISMA respuesta de creación (POST /messages) -- Graph lo
+  // asigna al crear el mensaje, antes de enviarlo, nunca hace falta un
+  // segundo request para tenerlo.
+  | { kind: "sent"; providerMessageId: string; conversationId: string | null; internetMessageId: string | null; httpStatus: number; clientRequestId: string | null }
   | { kind: "failed"; reason: string; retryable: boolean; httpStatus?: number; providerStatus: ProviderStatusValue };
 
 function graphRecipients(addresses: GraphEmailAddress[] | undefined): Array<{ emailAddress: { address: string; name?: string } }> {
@@ -210,7 +240,7 @@ async function graphFetch(
   path: string,
   init: { method: string; body?: unknown },
   abortSignal: AbortSignal | undefined,
-): Promise<{ status: number; json: unknown } | TokenFetchError> {
+): Promise<{ status: number; json: unknown; clientRequestId: string | null } | TokenFetchError> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     if (isCancellation(abortSignal)) return { error: "cancelled by user" };
 
@@ -268,7 +298,12 @@ async function graphFetch(
       }
 
       const json = res.status === 202 || res.status === 204 ? null : ((await res.json().catch(() => null)) as unknown);
-      return { status: res.status, json };
+      // F27: `request-id` (o `client-request-id`) -- encabezado de
+      // diagnóstico público de Graph, nunca un secreto -- se guarda tal
+      // cual para poder correlacionar un envío real con el soporte de
+      // Microsoft si hace falta, sin depender de logs efímeros.
+      const clientRequestId = res.headers.get("request-id") ?? res.headers.get("client-request-id");
+      return { status: res.status, json, clientRequestId };
     } catch (err) {
       if (abortSignal?.aborted) return { error: "cancelled by user" };
       const timedOut = err instanceof Error && err.name === "TimeoutError";
@@ -291,6 +326,23 @@ async function graphFetch(
  * enviarlo. Nunca marca "sent" sin la confirmación real de ambos pasos.
  */
 export async function sendGraphMail(params: SendGraphMailParams, creds: GraphCredentials): Promise<SendGraphMailResult> {
+  // F27 Fase 5: rechazo real ANTES de gastar ningún token/llamada a
+  // Graph -- ver comentario de SendAuthorization arriba. Nunca confía en
+  // que el llamador "seguramente" viene de email-service.ts; lo verifica
+  // leyendo la fila real.
+  const authorizedRow = await prisma.emailMessage.findFirst({
+    where: { id: params.auth.emailMessageId, tenantId: params.auth.tenantId, correlationId: params.auth.correlationId, status: "PENDING" },
+    select: { id: true },
+  });
+  if (!authorizedRow) {
+    return {
+      kind: "failed",
+      reason: "sendGraphMail: no existe un EmailMessage PENDING real con este emailMessageId/correlationId/tenantId -- rechazado antes de tocar Microsoft Graph (protección contra envíos fuera del flujo oficial, ver SendAuthorization)",
+      retryable: false,
+      providerStatus: "AVAILABLE",
+    };
+  }
+
   const existingHealth = getProviderHealth(PROVIDER_KEY);
   if (existingHealth && existingHealth.status !== "AVAILABLE") {
     return {
@@ -354,7 +406,7 @@ export async function sendGraphMail(params: SendGraphMailParams, creds: GraphCre
     };
   }
 
-  const created = createResult.json as { id?: string; conversationId?: string } | null;
+  const created = createResult.json as { id?: string; conversationId?: string; internetMessageId?: string } | null;
   const messageId = created?.id;
   if (!messageId) {
     return { kind: "failed", reason: "create message: respuesta sin id real", retryable: false, providerStatus: "AVAILABLE" };
@@ -374,8 +426,21 @@ export async function sendGraphMail(params: SendGraphMailParams, creds: GraphCre
     };
   }
 
-  log(params.taskId, "mail sent", { mailbox: params.mailbox, messageId, conversationId: created?.conversationId ?? null });
-  return { kind: "sent", providerMessageId: messageId, conversationId: created?.conversationId ?? null };
+  log(params.taskId, "mail sent", { mailbox: params.mailbox, messageId, conversationId: created?.conversationId ?? null, httpStatus: sendResult.status });
+  // F27: `sendResult.status` es el código HTTP real de la llamada /send
+  // (202 Accepted, el comportamiento documentado de Graph) -- se propaga
+  // tal cual, nunca se asume/hardcodea 202. "sent" acá SIGUE significando
+  // exactamente lo mismo que siempre significó (Graph aceptó la
+  // solicitud) -- el renombre a ACCEPTED_BY_PROVIDER pasa en la capa de
+  // arriba (email-service.ts), este archivo no inventa un estado nuevo.
+  return {
+    kind: "sent",
+    providerMessageId: messageId,
+    conversationId: created?.conversationId ?? null,
+    internetMessageId: created?.internetMessageId ?? null,
+    httpStatus: sendResult.status,
+    clientRequestId: sendResult.clientRequestId,
+  };
 }
 
 /**
@@ -388,6 +453,99 @@ export async function checkMicrosoftGraphHealth(creds: GraphCredentials): Promis
   const result = await getAccessToken(undefined, creds);
   if ("error" in result) return { healthy: false, reason: result.error };
   return { healthy: true, reason: null };
+}
+
+export interface GraphSentItem {
+  id: string; // ImmutableId (ver Prefer header en graphFetch) -- comparable directo contra EmailMessage.providerMessageId.
+  subject: string | null;
+  sentDateTime: string | null;
+  internetMessageId: string | null;
+  conversationId: string | null;
+  toRecipients: string[];
+  from: string | null;
+}
+
+/**
+ * F27 Fase 4 (reconciliación Graph <-> CRM): lee Sent Items real del
+ * buzón desde `sinceIso` -- única fuente de verdad de "esto realmente
+ * salió", nunca se infiere de EmailMessage. Solo lectura.
+ */
+export async function listSentItemsSince(mailbox: string, sinceIso: string, creds: GraphCredentials, top = 100): Promise<GraphSentItem[] | { error: string }> {
+  const tokenResult = await getAccessToken(undefined, creds);
+  if ("error" in tokenResult) return { error: tokenResult.error };
+
+  const path =
+    `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages` +
+    `?$filter=${encodeURIComponent(`sentDateTime ge ${sinceIso}`)}` +
+    `&$select=id,subject,sentDateTime,internetMessageId,conversationId,toRecipients,from` +
+    `&$orderby=sentDateTime desc&$top=${top}`;
+  const result = await graphFetch(undefined, tokenResult.accessToken, path, { method: "GET" }, undefined);
+  if ("error" in result) return { error: result.error };
+
+  const body = result.json as {
+    value?: Array<{
+      id?: string;
+      subject?: string;
+      sentDateTime?: string;
+      internetMessageId?: string;
+      conversationId?: string;
+      toRecipients?: Array<{ emailAddress?: { address?: string } }>;
+      from?: { emailAddress?: { address?: string } };
+    }>;
+  } | null;
+
+  return (body?.value ?? [])
+    .filter((m): m is typeof m & { id: string } => !!m.id)
+    .map((m) => ({
+      id: m.id,
+      subject: m.subject ?? null,
+      sentDateTime: m.sentDateTime ?? null,
+      internetMessageId: m.internetMessageId ?? null,
+      conversationId: m.conversationId ?? null,
+      toRecipients: (m.toRecipients ?? []).map((r) => r.emailAddress?.address ?? "").filter(Boolean),
+      from: m.from?.emailAddress?.address ?? null,
+    }));
+}
+
+export interface GraphPossibleNdr {
+  id: string;
+  subject: string;
+  receivedDateTime: string | null;
+  from: string | null;
+  bodyPreview: string | null;
+}
+
+/**
+ * F27 Fase 4: mismo heurístico de detección de NDR que investigateDelivery
+ * (asunto/remitente típico de un Non-Delivery Report de Exchange), pero
+ * generalizado a "todo lo recibido desde `sinceIso`" en vez de un único
+ * mensaje -- usa `bodyPreview` (ya truncado por Graph) en vez de pedir el
+ * cuerpo completo de cada candidato, para no multiplicar requests reales
+ * en una corrida de reconciliación con varios candidatos.
+ */
+export async function listPossibleNdrsSince(mailbox: string, sinceIso: string, creds: GraphCredentials, top = 50): Promise<GraphPossibleNdr[] | { error: string }> {
+  const tokenResult = await getAccessToken(undefined, creds);
+  if ("error" in tokenResult) return { error: tokenResult.error };
+
+  const path =
+    `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages` +
+    `?$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}` +
+    `&$select=id,subject,receivedDateTime,from,bodyPreview&$top=${top}`;
+  const result = await graphFetch(undefined, tokenResult.accessToken, path, { method: "GET" }, undefined);
+  if ("error" in result) return { error: result.error };
+
+  const body = result.json as {
+    value?: Array<{ id?: string; subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string } }; bodyPreview?: string }>;
+  } | null;
+
+  return (body?.value ?? [])
+    .filter((m): m is typeof m & { id: string } => !!m.id)
+    .filter((m) => {
+      const subj = (m.subject ?? "").toLowerCase();
+      const fromAddr = (m.from?.emailAddress?.address ?? "").toLowerCase();
+      return subj.includes("undeliverable") || subj.includes("delivery status") || subj.includes("failure") || fromAddr.includes("postmaster") || fromAddr.includes("mailer-daemon") || fromAddr.includes("microsoftexchange");
+    })
+    .map((m) => ({ id: m.id, subject: m.subject ?? "", receivedDateTime: m.receivedDateTime ?? null, from: m.from?.emailAddress?.address ?? null, bodyPreview: m.bodyPreview ?? null }));
 }
 
 export interface DeliveryInvestigationResult {

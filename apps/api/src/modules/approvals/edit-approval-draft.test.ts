@@ -51,7 +51,9 @@ after(async () => {
   }
 });
 
-function fakeGraphProvider(sent: SendGraphMailResult = { kind: "sent", providerMessageId: "fake-msg-id", conversationId: "fake-conv-id" }): MicrosoftGraphProviderPort {
+function fakeGraphProvider(
+  sent: SendGraphMailResult = { kind: "sent", providerMessageId: "fake-msg-id", conversationId: "fake-conv-id", internetMessageId: "<fake@dreistaff.com>", httpStatus: 202, clientRequestId: "fake-request-id" },
+): MicrosoftGraphProviderPort {
   return { sendGraphMail: async () => sent };
 }
 

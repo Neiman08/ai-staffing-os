@@ -35,6 +35,7 @@ import InvoiceDetail from "./pages/InvoiceDetail";
 import Pricing from "./pages/Pricing";
 import AgentsCenter from "./pages/AgentsCenter";
 import Approvals from "./pages/Approvals";
+import HumanReview from "./pages/HumanReview";
 import AIDashboard from "./pages/AIDashboard";
 import Settings from "./pages/Settings";
 import NotificationsCenter from "./pages/NotificationsCenter";
@@ -43,6 +44,7 @@ import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import CampaignCompanyDetail from "./pages/CampaignCompanyDetail";
 import Missions from "./pages/Missions";
+import PilotMissions from "./pages/PilotMissions";
 import Discovery from "./pages/Discovery";
 import ProductionReadiness from "./pages/ProductionReadiness";
 import { ClientPortalGate } from "@/components/layout/ClientPortalGate";
@@ -108,6 +110,7 @@ export const router = createBrowserRouter([
       { path: "campaigns/:id", element: <CampaignDetail /> },
       { path: "campaigns/:campaignId/companies/:companyId", element: <CampaignCompanyDetail /> },
       { path: "missions", element: <Missions /> },
+      { path: "pilot-missions", element: <PilotMissions /> },
       { path: "discovery", element: <Discovery /> },
       { path: "revenue", element: <Revenue /> },
       { path: "analytics", element: <AnalyticsExecutive /> },
@@ -133,6 +136,7 @@ export const router = createBrowserRouter([
       { path: "pricing", element: <Pricing /> },
       { path: "agents", element: <AgentsCenter /> },
       { path: "approvals", element: <Approvals /> },
+      { path: "human-review", element: <HumanReview /> },
       { path: "ai-dashboard", element: <AIDashboard /> },
       { path: "production-readiness", element: <ProductionReadiness /> },
       { path: "settings", element: <Settings /> },

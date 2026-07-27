@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
-import { decideApproval, sendApproval } from "./service";
+import { decideApproval, sendApproval, listApprovals } from "./service";
 import type { MicrosoftGraphProviderPort } from "../email/email-service";
 import type { SendGraphMailResult } from "../email/microsoft-graph";
 
@@ -52,7 +52,9 @@ after(async () => {
   }
 });
 
-function fakeGraphProvider(sent: SendGraphMailResult = { kind: "sent", providerMessageId: "fake-msg-id", conversationId: "fake-conv-id" }): MicrosoftGraphProviderPort {
+function fakeGraphProvider(
+  sent: SendGraphMailResult = { kind: "sent", providerMessageId: "fake-msg-id", conversationId: "fake-conv-id", internetMessageId: "<fake@dreistaff.com>", httpStatus: 202, clientRequestId: "fake-request-id" },
+): MicrosoftGraphProviderPort {
   return { sendGraphMail: async () => sent };
 }
 
@@ -136,7 +138,7 @@ test("sendApproval sobre un draft F14/F15 (proposedAction.to ya resuelto) envía
     const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
     assert.equal(result.status, "SENT");
-    assert.equal(result.emailSendResult?.status, "SENT");
+    assert.equal(result.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
     assert.equal(result.emailSendResult?.providerMessageId, "fake-msg-id");
     assert.ok(result.sentAt);
     assert.ok(result.sentByLabel);
@@ -144,7 +146,7 @@ test("sendApproval sobre un draft F14/F15 (proposedAction.to ya resuelto) envía
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "info@acme-electrical.example");
     assert.equal(row.fromEmail, "sales@dreistaff.com");
-    assert.equal(row.status, "SENT");
+    assert.equal(row.status, "ACCEPTED_BY_PROVIDER");
 
     const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
     assert.equal(stored.status, "SENT");
@@ -173,7 +175,7 @@ test("sendApproval de sales-tools (leadId + contactId, sin `to`) resuelve el ema
     await decideApproval(approval.id, { decision: "APPROVED" });
     const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
-    assert.equal(result.emailSendResult?.status, "SENT");
+    assert.equal(result.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "jane.doe@beta-mfg.example");
     assert.equal(row.leadId, lead.id);
@@ -202,7 +204,7 @@ test("sendApproval del loop clásico de Campaign (campaignCompanyId, sin `to`) r
     await decideApproval(approval.id, { decision: "APPROVED" });
     const result = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
 
-    assert.equal(result.emailSendResult?.status, "SENT");
+    assert.equal(result.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
     const row = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
     assert.equal(row.toEmail, "bob.smith@delta-electrical.example");
     assert.equal(row.companyId, company.id);
@@ -316,6 +318,12 @@ test("sin ningún canal real resoluble -- sendApproval falla honestamente (FAILE
 
     const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
     assert.equal(stored.status, "FAILED", "nunca se queda trabado en SENDING");
+
+    // Bug real encontrado en auditoría: este FAILED nunca dejaba rastro
+    // en el AuditLog -- a diferencia del bloqueo por límites de envío,
+    // que sí lo hacía.
+    const audit = await prisma.auditLog.findFirst({ where: { entityId: approval.id, action: "approval.send_failed_no_recipient" } });
+    assert.ok(audit, "un FAILED por falta de destinatario resoluble debe dejar un AuditLog real, igual que el bloqueo por límites");
   });
   assert.equal(await prisma.emailMessage.count({ where: { tenantId } }), 0);
 });
@@ -348,6 +356,37 @@ test("Quality Gate: decideApproval(APPROVED) rechaza un borrador sin destinatari
   });
 });
 
+test("Bug real encontrado en auditoría: decideApproval re-chequea isClientOwnerCandidate con el estado ACTUAL de la Company, no solo al crear el borrador", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("client-owner-review-after-draft");
+  const company = await prisma.company.create({ data: { tenantId, name: "Real Data Center Co", industryId, status: "LEAD", email: "info@realdatacenter.example" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    // El borrador se creó ANTES de que un re-discovery posterior marcara
+    // la Company como probable cliente final real -- ese es exactamente
+    // el escenario real que evaluateDraftCreationGate, evaluado solo al
+    // crear, no puede cubrir por sí solo.
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador creado antes del re-discovery",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@realdatacenter.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    await prisma.company.update({ where: { id: company.id }, data: { discoveryMetadata: { isClientOwnerCandidate: true } } });
+
+    await assert.rejects(
+      () => decideApproval(approval.id, { decision: "APPROVED" }),
+      (err: unknown) => err instanceof AppError && err.status === 400 && /cliente final/i.test(err.message),
+    );
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } });
+    assert.equal(stored.status, "PENDING", "nunca avanza a READY_TO_SEND hacia una Company marcada como probable cliente final real");
+  });
+});
+
 test("un fallo real del proveedor deja el ApprovalRequest en FAILED (reintentable), nunca en SENDING para siempre", async () => {
   const { tenantId, industryId, agentTaskId } = await setupTenant("provider-failure");
   const company = await prisma.company.create({ data: { tenantId, name: "Fails Co", industryId, status: "LEAD" } });
@@ -374,5 +413,116 @@ test("un fallo real del proveedor deja el ApprovalRequest en FAILED (reintentabl
     // poder volver a intentarlo (a diferencia de SENT).
     const retry = await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
     assert.equal(retry.status, "SENT");
+
+    // F27 Fase 10 ("un reintento nunca duplica un EmailMessage exitoso"):
+    // cada intento REAL (el fallido y el exitoso) deja su propia fila --
+    // eso es evidencia real de 2 intentos distintos, nunca "duplicación".
+    // Lo que SÍ nunca puede pasar es que dos filas terminen ambas en un
+    // estado real de despacho (ACCEPTED_BY_PROVIDER/SENT/etc.) para el
+    // MISMO ApprovalRequest -- solo el intento que de verdad ganó.
+    const allAttempts = await prisma.emailMessage.findMany({ where: { tenantId, approvalRequestId: approval.id }, orderBy: { createdAt: "asc" } });
+    assert.equal(allAttempts.length, 2, "un intento fallido y su reintento dejan 2 filas reales -- 2 intentos, nunca uno solo corrompido");
+    assert.equal(allAttempts[0]!.status, "FAILED");
+    assert.equal(allAttempts[1]!.status, "ACCEPTED_BY_PROVIDER");
+    assert.notEqual(allAttempts[0]!.correlationId, allAttempts[1]!.correlationId, "cada intento real tiene su propio correlationId, nunca comparten uno");
+  });
+});
+
+// F26 (primer piloto de outreach real): checkSendLimits corre DENTRO de
+// sendApproval, antes de llamar al proveedor -- probado acá end-to-end
+// (no solo la función pura en send-limits.test.ts) para confirmar que un
+// bloqueo real de verdad nunca llega a golpear a Microsoft Graph.
+test("sendApproval real: un segundo borrador al MISMO destinatario nunca llega al proveedor -- se bloquea por duplicado antes", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("dedup-blocks-send");
+  const company = await prisma.company.create({ data: { tenantId, name: "Dedup Co", industryId, status: "LEAD" } });
+  const company2 = await prisma.company.create({ data: { tenantId, name: "Dedup Co 2", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const first = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Primer borrador",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "mismo@dedup.example", subject: "s1", body: "b1" },
+        riskLevel: "MEDIUM",
+      },
+    });
+    await decideApproval(first.id, { decision: "APPROVED" });
+    const firstSend = await sendApproval(first.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+    assert.equal(firstSend.status, "SENT");
+
+    const second = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Segundo borrador, mismo destinatario",
+        proposedAction: { channel: "EMAIL", companyId: company2.id, to: "mismo@dedup.example", subject: "s2", body: "b2" },
+        riskLevel: "MEDIUM",
+      },
+    });
+    await decideApproval(second.id, { decision: "APPROVED" });
+
+    let calledProvider = false;
+    const trackedProvider: MicrosoftGraphProviderPort = {
+      sendGraphMail: async () => {
+        calledProvider = true;
+        return { kind: "sent", providerMessageId: "should-never-happen", conversationId: null, internetMessageId: null, httpStatus: 202, clientRequestId: null };
+      },
+    };
+    await assert.rejects(
+      () => sendApproval(second.id, { graphProvider: trackedProvider, ...FAKE_AZURE }),
+      (err: unknown) => err instanceof AppError && err.status === 400 && /nunca se envía dos veces/i.test(err.message),
+    );
+    assert.equal(calledProvider, false, "el proveedor real nunca debe llamarse cuando el límite bloquea antes");
+
+    const stored = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: second.id } });
+    assert.equal(stored.status, "FAILED", "reintentable, nunca queda trabado en SENDING");
+  });
+
+  assert.equal(await prisma.emailMessage.count({ where: { tenantId, status: "ACCEPTED_BY_PROVIDER" } }), 1, "el segundo intento nunca llega a crear un EmailMessage enviado");
+});
+
+// F27 Fase 9: la UI (Approvals.tsx) nunca debe mostrar un envío viejo
+// como "enviado" a secas -- listApprovals debe reflejar el estado REAL
+// más reciente de EmailMessage, incluso después de que el reconciliador
+// (reconciliation.ts, corrido por separado) lo haya movido más allá de
+// ACCEPTED_BY_PROVIDER.
+test("listApprovals: refleja el estado REAL y actual de EmailMessage (incl. después de una reconciliación), nunca un snapshot del momento del envío", async () => {
+  const { tenantId, industryId, agentTaskId } = await setupTenant("list-reflects-current-state");
+  const company = await prisma.company.create({ data: { tenantId, name: "List State Co", industryId, status: "LEAD" } });
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        tenantId,
+        agentTaskId,
+        summary: "Borrador para List State Co",
+        proposedAction: { channel: "EMAIL", companyId: company.id, to: "info@liststate.example", subject: "s", body: "b" },
+        riskLevel: "MEDIUM",
+      },
+    });
+
+    await decideApproval(approval.id, { decision: "APPROVED" });
+    await sendApproval(approval.id, { graphProvider: fakeGraphProvider(), ...FAKE_AZURE });
+
+    const beforeReconciliation = await listApprovals("SENT");
+    const beforeItem = beforeReconciliation.find((a) => a.id === approval.id);
+    assert.equal(beforeItem?.emailSendResult?.status, "ACCEPTED_BY_PROVIDER");
+
+    // Simula lo que reconciliation.ts hace de verdad tras encontrar el
+    // mensaje real en Sent Items -- nunca se llama acá al reconciliador
+    // completo, solo se replica su efecto sobre la fila para probar que
+    // listApprovals lee el estado actual, no uno cacheado.
+    const emailMessage = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, approvalRequestId: approval.id } });
+    await prisma.emailMessage.update({ where: { id: emailMessage.id }, data: { status: "SENT_CONFIRMED", sentItemsConfirmedAt: new Date() } });
+
+    const afterReconciliation = await listApprovals("SENT");
+    const afterItem = afterReconciliation.find((a) => a.id === approval.id);
+    assert.equal(afterItem?.emailSendResult?.status, "SENT_CONFIRMED");
+    assert.ok(afterItem?.emailSendResult?.sentItemsConfirmedAt);
+    // El ApprovalRequest.status en sí sigue significando lo mismo de
+    // siempre ("SENT" = la acción humana de envío se completó) -- la
+    // verdad más fina vive únicamente en emailSendResult.
+    assert.equal(afterItem?.status, "SENT");
   });
 });

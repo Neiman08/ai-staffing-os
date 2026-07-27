@@ -12,6 +12,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
 import { sendEmail } from "../email/email-service";
+import { checkSendLimits } from "../email/send-limits";
 import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
 import { evaluateApprovalQualityGate } from "../ceo-intelligence/approval-quality-gate";
 
@@ -49,7 +50,7 @@ export async function hasActiveApprovalForCompany(companyId: string): Promise<bo
  * como el duplicado. `excludeApprovalId` siempre es el id del registro
  * que se está evaluando.
  */
-async function hasOtherActiveApprovalForCompany(companyId: string, excludeApprovalId: string): Promise<boolean> {
+export async function hasOtherActiveApprovalForCompany(companyId: string, excludeApprovalId: string): Promise<boolean> {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
   const existing = await scopedDb.approvalRequest.findFirst({
@@ -84,6 +85,7 @@ function toListItem(
   userLabels: Map<string, string>,
   emailSendResult?: ApprovalEmailSendResult | null,
   recipientWarning?: RecipientWarning,
+  isInternalTest?: boolean,
 ): ApprovalRequestListItem {
   return {
     id: approval.id,
@@ -104,6 +106,8 @@ function toListItem(
     emailSendResult,
     recipientWarning: recipientWarning ?? null,
     placeholderWarning: computePlaceholderWarning(approval.proposedAction),
+    // F27 (Internal Acceptance Test): nunca confundir con un lead comercial real.
+    isInternalTest: isInternalTest ?? false,
   };
 }
 
@@ -235,6 +239,51 @@ async function computeRecipientWarnings(proposedActions: unknown[]): Promise<Rec
   });
 }
 
+/**
+ * F27 (Internal Acceptance Test, req. explícito: "la interfaz debe
+ * mostrar claramente INTERNAL TEST"): batch real sobre
+ * ApprovalRequest.companyId (columna directa, nunca parseando
+ * proposedAction) -- un solo findMany, nunca N+1.
+ */
+async function loadIsInternalTest(companyIds: (string | null)[]): Promise<Map<string, boolean>> {
+  const ids = Array.from(new Set(companyIds.filter((id): id is string => !!id)));
+  if (ids.length === 0) return new Map();
+  const companies = await scopedDb.company.findMany({ where: { id: { in: ids } }, select: { id: true, origin: true } });
+  return new Map(companies.map((c) => [c.id, c.origin === "INTERNAL_TEST"]));
+}
+
+/**
+ * F27 Fase 9: reconstruye emailSendResult para un ApprovalRequest ya
+ * enviado (SENT/FAILED con intento real) a partir del ESTADO ACTUAL de su
+ * EmailMessage real -- nunca lo que decía en el instante del /send. El
+ * reconciliador (reconciliation.ts) puede haber movido esa fila a
+ * SENT_CONFIRMED/BOUNCED/DELIVERY_UNKNOWN desde entonces; la UI (Approvals.tsx)
+ * debe reflejar SIEMPRE la verdad más reciente, no un snapshot viejo.
+ */
+async function loadEmailSendResults(approvalIds: string[]): Promise<Map<string, ApprovalEmailSendResult>> {
+  if (approvalIds.length === 0) return new Map();
+  const rows = await scopedDb.emailMessage.findMany({
+    where: { approvalRequestId: { in: approvalIds } },
+    orderBy: { createdAt: "desc" },
+  });
+  const byApproval = new Map<string, ApprovalEmailSendResult>();
+  for (const row of rows) {
+    if (!row.approvalRequestId || byApproval.has(row.approvalRequestId)) continue; // más reciente primero, nunca pisa con uno viejo
+    byApproval.set(row.approvalRequestId, {
+      status: row.status as never,
+      providerMessageId: row.providerMessageId,
+      internetMessageId: row.internetMessageId,
+      conversationId: row.conversationId,
+      correlationId: row.correlationId,
+      errorMessage: row.errorMessage,
+      acceptedAt: row.acceptedAt?.toISOString() ?? null,
+      sentItemsConfirmedAt: row.sentItemsConfirmedAt?.toISOString() ?? null,
+      ndrDetail: row.ndrDetail,
+    });
+  }
+  return byApproval;
+}
+
 export async function listApprovals(status?: string): Promise<ApprovalRequestListItem[]> {
   const approvals = await scopedDb.approvalRequest.findMany({
     where: { status: status as never },
@@ -249,8 +298,10 @@ export async function listApprovals(status?: string): Promise<ApprovalRequestLis
   }
   const userLabels = await labelUsers(Array.from(userIds));
   const recipientWarnings = await computeRecipientWarnings(approvals.map((a) => a.proposedAction));
+  const emailSendResults = await loadEmailSendResults(approvals.map((a) => a.id));
+  const isInternalTestByCompanyId = await loadIsInternalTest(approvals.map((a) => a.companyId));
 
-  return approvals.map((a, idx) => toListItem(a, userLabels, null, recipientWarnings[idx]));
+  return approvals.map((a, idx) => toListItem(a, userLabels, emailSendResults.get(a.id) ?? null, recipientWarnings[idx], a.companyId ? isInternalTestByCompanyId.get(a.companyId) : false));
 }
 
 /**
@@ -284,7 +335,14 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
     const pa = (approval.proposedAction && typeof approval.proposedAction === "object" ? approval.proposedAction : {}) as Record<string, unknown>;
     const draft = await resolveDraftEmail(approval.proposedAction);
     const companyId = draft?.companyId ?? null;
-    const company = companyId ? await scopedDb.company.findUnique({ where: { id: companyId }, select: { origin: true, commercialStatus: true } }) : null;
+    const company = companyId
+      ? await scopedDb.company.findUnique({ where: { id: companyId }, select: { origin: true, commercialStatus: true, discoveryMetadata: true } })
+      : null;
+    // Bug real encontrado en auditoría: mismo shape de extracción que
+    // outreach-tools.impl.ts/sales-tools.impl.ts usan al crear el
+    // borrador -- acá se re-evalúa con el estado ACTUAL de la Company,
+    // que puede haber cambiado desde entonces.
+    const discoveryMeta = (company?.discoveryMetadata as { isClientOwnerCandidate?: boolean; opportunityRecommendation?: { recommendation?: string } } | null) ?? null;
 
     const gate = evaluateApprovalQualityGate({
       companyOrigin: company?.origin ?? null,
@@ -293,6 +351,8 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
       subject: typeof pa.subject === "string" ? pa.subject : null,
       body: typeof pa.body === "string" ? pa.body : null,
       hasOtherActiveDuplicateApproval: companyId ? await hasOtherActiveApprovalForCompany(companyId, id) : false,
+      isClientOwnerCandidate: !!discoveryMeta?.isClientOwnerCandidate,
+      opportunityRecommendation: discoveryMeta?.opportunityRecommendation?.recommendation ?? null,
     });
 
     if (!gate.passed) {
@@ -466,7 +526,44 @@ export async function sendApproval(id: string, deps: SendApprovalDeps = {}): Pro
     // Vuelve a FAILED (nunca se queda trabada en SENDING) -- caso real:
     // proposedAction sin `to` resoluble (dato viejo/canal no-EMAIL).
     await scopedDb.approvalRequest.update({ where: { id }, data: { status: "FAILED" } });
+    // Bug real encontrado en auditoría: a diferencia del bloqueo de
+    // límites justo abajo, este FAILED nunca dejaba rastro en el
+    // AuditLog -- un operador real vería un envío fallido sin ninguna
+    // explicación forense de por qué.
+    await scopedDb.auditLog.create({
+      data: {
+        tenantId: ctx.tenantId,
+        actorType: "HUMAN",
+        actorId: ctx.userId,
+        action: "approval.send_failed_no_recipient",
+        entityType: "approvalRequest",
+        entityId: id,
+        after: { reason: "No se pudo resolver un destinatario de email real para este borrador -- revisar el canal de contacto." } as never,
+      },
+    });
     throw AppError.badRequest("No se pudo resolver un destinatario de email real para este borrador -- revisar el canal de contacto.");
+  }
+
+  // F26 (primer piloto de outreach real): límite diario + prevención de
+  // duplicados -- ANTES de gastar la llamada real a Microsoft Graph,
+  // nunca después. Mismo criterio que la guarda de `!draft` de arriba:
+  // vuelve a FAILED (reintentable, nunca queda trabada en SENDING) y
+  // audita el bloqueo real.
+  const limitCheck = await checkSendLimits(draft.to);
+  if (!limitCheck.allowed) {
+    await scopedDb.approvalRequest.update({ where: { id }, data: { status: "FAILED" } });
+    await scopedDb.auditLog.create({
+      data: {
+        tenantId: ctx.tenantId,
+        actorType: "HUMAN",
+        actorId: ctx.userId,
+        action: "approval.send_blocked_by_limit",
+        entityType: "approvalRequest",
+        entityId: id,
+        after: { reason: limitCheck.reason } as never,
+      },
+    });
+    throw AppError.badRequest(limitCheck.reason ?? "Envío bloqueado por límites de seguridad.");
   }
 
   let emailSendResult: ApprovalEmailSendResult;
@@ -488,8 +585,22 @@ export async function sendApproval(id: string, deps: SendApprovalDeps = {}): Pro
       azureClientId: deps.azureClientId,
       azureClientSecret: deps.azureClientSecret,
     });
-    emailSendResult = { status: sent.status, providerMessageId: sent.providerMessageId, errorMessage: sent.errorMessage };
-    finalStatus = sent.status === "SENT" ? "SENT" : "FAILED";
+    // F27: ApprovalRequest.status="SENT" sigue significando lo mismo de
+    // siempre ("la acción humana de envío se completó del lado del
+    // proveedor") -- lo que cambia es que ya NUNCA se confunde con
+    // "entregado confirmado". Ese detalle fino vive en EmailMessage
+    // (ACCEPTED_BY_PROVIDER -> SENT_CONFIRMED/BOUNCED/DELIVERY_UNKNOWN,
+    // ver reconciliation.ts), reflejado acá en emailSendResult.status
+    // para que la UI muestre el estado real, no uno optimista.
+    emailSendResult = {
+      status: sent.status === "ACCEPTED_BY_PROVIDER" ? "ACCEPTED_BY_PROVIDER" : sent.status,
+      providerMessageId: sent.providerMessageId,
+      internetMessageId: sent.internetMessageId,
+      conversationId: sent.conversationId,
+      correlationId: sent.correlationId,
+      errorMessage: sent.errorMessage,
+    };
+    finalStatus = sent.status === "ACCEPTED_BY_PROVIDER" ? "SENT" : "FAILED";
   } catch (err) {
     // Error de programación/uso real -- se registra igual como fallo
     // real, nunca deja el ApprovalRequest trabado en SENDING.

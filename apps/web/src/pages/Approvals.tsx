@@ -32,6 +32,26 @@ const STATUS_BADGE_VARIANT: Record<string, "warning" | "success" | "danger" | "i
   EXPIRED: "danger",
 };
 
+// F27 Fase 9 (pedido explícito: "ACCEPTED_BY_PROVIDER nunca debe
+// mostrarse como 'Enviado' a secas"): un HTTP 202 de Graph es SOLO
+// "aceptado para procesar" -- nunca "entregado", nunca siquiera
+// "confirmado enviado" todavía. Esta es la ÚNICA fuente de verdad de
+// cómo se traduce cada estado fino de EmailMessage a texto humano en
+// toda la UI -- nunca se repite este mapeo en otro lugar.
+const EMAIL_SEND_RESULT_COPY: Record<string, { label: string; variant: "warning" | "success" | "danger" | "info" }> = {
+  ACCEPTED_BY_PROVIDER: { label: "Aceptado por Microsoft — verificando entrega", variant: "warning" },
+  SENT_CONFIRMED: { label: "Confirmado en Sent Items", variant: "success" },
+  DELIVERED: { label: "Entregado", variant: "success" },
+  BOUNCED: { label: "Rebotó (NDR real recibido)", variant: "danger" },
+  DELIVERY_UNKNOWN: { label: "No se pudo confirmar la entrega", variant: "warning" },
+  FAILED: { label: "Falló el envío", variant: "danger" },
+  RETRYABLE: { label: "Falló el envío (reintentable)", variant: "danger" },
+  // Legado -- filas de antes de F27, cuando "SENT" era el único estado
+  // de éxito que escribía email-service.ts. Nunca se vuelve a escribir,
+  // pero sigue pudiendo aparecer en filas viejas.
+  SENT: { label: "Enviado (registro anterior a la verificación de entrega)", variant: "success" },
+};
+
 function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -133,8 +153,17 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
     mutationFn: () => apiFetch<ApprovalRequestListItem>(`/approvals/${approval.id}/send`, { method: "POST" }),
     onSuccess: (result) => {
       const r = result.emailSendResult;
-      if (r?.status === "SENT") {
-        toast({ title: "Email enviado", description: `Confirmado por Microsoft Graph (id ${r.providerMessageId ?? "—"}).`, variant: "success" });
+      if (r?.status === "ACCEPTED_BY_PROVIDER" || r?.status === "SENT") {
+        // F27: nunca "Email enviado" a secas -- 202 de Graph es una
+        // aceptación, no una confirmación de entrega (ver
+        // EMAIL_SEND_RESULT_COPY). La confirmación real llega después,
+        // vía el reconciliador -- esta pantalla la mostrará en el
+        // próximo refresh de la lista, nunca acá de forma optimista.
+        toast({
+          title: "Aceptado por Microsoft — verificando entrega",
+          description: `Solicitud aceptada por Graph (id ${r.providerMessageId ?? "—"}). Todavía no está confirmado en Sent Items.`,
+          variant: "success",
+        });
       } else if (r) {
         toast({
           title: r.status === "RETRYABLE" ? "Email no enviado (reintentable)" : "Email no enviado",
@@ -168,7 +197,15 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
               </Link>
             )}
           </div>
-          <Badge variant={STATUS_BADGE_VARIANT[approval.status] ?? "warning"}>{formatStatusLabel(approval.status)}</Badge>
+          <div className="flex items-center gap-1.5">
+            {/* F27 (Internal Acceptance Test): nunca debe leerse como un lead comercial real. */}
+            {approval.isInternalTest && (
+              <Badge variant="warning" className="border-dashed">
+                INTERNAL TEST
+              </Badge>
+            )}
+            <Badge variant={STATUS_BADGE_VARIANT[approval.status] ?? "warning"}>{formatStatusLabel(approval.status)}</Badge>
+          </div>
         </div>
         {!isEditing && action.to && (
           <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
@@ -300,10 +337,31 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
         )}
 
         {approval.status === "SENT" && (
-          <p className="text-xs text-muted-foreground">
-            Enviado{approval.sentByLabel ? ` por ${approval.sentByLabel}` : ""}
-            {approval.sentAt ? ` el ${new Date(approval.sentAt).toLocaleString()}` : ""}.
-          </p>
+          <div className="space-y-1.5 pt-1">
+            <p className="text-xs text-muted-foreground">
+              Envío solicitado{approval.sentByLabel ? ` por ${approval.sentByLabel}` : ""}
+              {approval.sentAt ? ` el ${new Date(approval.sentAt).toLocaleString()}` : ""}.
+            </p>
+            {/* F27 Fase 9: estado REAL más reciente de EmailMessage --
+                nunca el snapshot optimista del momento del envío. Puede
+                haber cambiado desde entonces vía el reconciliador. */}
+            {approval.emailSendResult && (
+              <div className="space-y-1">
+                <Badge variant={EMAIL_SEND_RESULT_COPY[approval.emailSendResult.status]?.variant ?? "info"}>
+                  {EMAIL_SEND_RESULT_COPY[approval.emailSendResult.status]?.label ?? approval.emailSendResult.status}
+                </Badge>
+                {approval.emailSendResult.status === "BOUNCED" && approval.emailSendResult.ndrDetail && (
+                  <p className="text-xs text-danger">{approval.emailSendResult.ndrDetail}</p>
+                )}
+                {approval.emailSendResult.status === "ACCEPTED_BY_PROVIDER" && (
+                  <p className="text-xs text-muted-foreground">
+                    Todavía sin confirmar en Sent Items del buzón real -- se actualiza automáticamente cuando el
+                    reconciliador encuentre el mensaje real (o marque un NDR/vencimiento).
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {(approval.status === "REJECTED" || approval.status === "EXPIRED" || approval.status === "APPROVED") &&

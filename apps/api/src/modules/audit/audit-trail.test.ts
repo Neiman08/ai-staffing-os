@@ -71,6 +71,15 @@ test("GET /audit-log (internal) as sales@titan.dev returns 403 (Sales has no aud
   assert.equal(res.status, 403);
 });
 
+test("GET /audit-log (internal) as worker-portal@titan.dev returns 403, even though WORKER holds auditLogs.view for its own portal endpoint", async () => {
+  // Bug real encontrado en auditoría: auditLogs.view es la misma
+  // permission key que /portal/worker/audit-log usa, así que sin
+  // requireInternalIdentity() este endpoint devolvía el AuditLog
+  // completo del tenant a una identidad de portal.
+  const res = await fetch(`${baseUrl}/api/v1/audit-log`, { headers: WORKER_HEADERS });
+  assert.equal(res.status, 403);
+});
+
 test("GET /audit-log (internal) as admin returns tenant-wide entries, never exposes before/after/ip", async () => {
   const res = await fetch(`${baseUrl}/api/v1/audit-log?limit=50`, { headers: ADMIN_HEADERS });
   assert.equal(res.status, 200);
