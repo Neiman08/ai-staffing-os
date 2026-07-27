@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F6.7: matching con IA integrado en JobOrderDetail — sin app/página
 // separada. Corre contra dev-bypass real (x-dev-user) y datos reales

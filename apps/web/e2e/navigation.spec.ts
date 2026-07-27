@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 const PAGES: Array<{ path: string; heading: string }> = [
   { path: "/companies", heading: "Companies" },

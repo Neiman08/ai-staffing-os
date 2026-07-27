@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F9.9: Worker Operations UI -- Onboarding/Checklist embebidos en el
 // mismo drawer de F8.11 (mismo par candidateId/jobOrderId que Placement

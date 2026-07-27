@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F10.11: la lista mínima de tenancy/IDOR de la spec, verificada en un
 // navegador real contra el backend/DB reales (dev-bypass, tenant-titan

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F10.11: los flujos mínimos de portal pedidos por la spec, corridos
 // contra un navegador real + backend/DB reales de dev-bypass (nunca

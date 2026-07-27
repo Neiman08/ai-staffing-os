@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // F6.8: el Dashboard ahora oculta tarjetas según el permiso real del rol
 // (ver dashboard/service.ts) — verifica en un navegador real que la UI
