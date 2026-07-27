@@ -140,3 +140,18 @@ jobs:
       # mano antes de escribir este archivo.
       - name: E2E test suite (Playwright, real dev servers)
         run: pnpm --filter @ai-staffing-os/web run test:e2e
+
+      # F27: sin esto, un fallo de E2E en CI no deja rastro -- el trace,
+      # los screenshots y el HTML report se generan en el runner y se
+      # pierden apenas termina el job. Solo se sube si el job falló, para
+      # no pagar el costo de almacenamiento en corridas verdes.
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-${{ github.run_id }}
+          path: |
+            apps/web/test-results/**
+            apps/web/playwright-report/**
+          retention-days: 7
+          if-no-files-found: ignore
