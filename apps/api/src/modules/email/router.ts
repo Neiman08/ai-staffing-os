@@ -88,14 +88,21 @@ emailRouter.get("/emails/:id/investigate-delivery", requirePermission("approvals
  * real" también corre automáticamente cada 30 min vía
  * email/scheduler.ts (ver ese archivo) -- este endpoint sigue existiendo
  * para forzar una corrida inmediata sin esperar al próximo tick.
+ *
+ * F27 Fase 11: `?dryRun=true` corre exactamente la misma lógica de
+ * matching/clasificación contra Graph real, pero sin escribir nada (ni
+ * EmailMessage, ni EmailReconciliationAlert, ni AuditLog) -- para poder
+ * mostrar antes de aplicar qué se reconciliaría/resolvería, mismo shape
+ * de respuesta que una corrida real (ver ReconciliationSummary.details).
  */
 emailRouter.post("/emails/reconcile", requirePermission("settings.manage"), async (req, res, next) => {
   try {
     if (!env.AZURE_TENANT_ID || !env.AZURE_CLIENT_ID || !env.AZURE_CLIENT_SECRET) {
       throw AppError.badRequest("Microsoft Graph no configurado");
     }
+    const dryRun = req.query.dryRun === "true";
     const mailbox = resolveSender("commercial")!.email;
-    const summary = await reconcileMailbox(mailbox, { tenantId: env.AZURE_TENANT_ID, clientId: env.AZURE_CLIENT_ID, clientSecret: env.AZURE_CLIENT_SECRET });
+    const summary = await reconcileMailbox(mailbox, { tenantId: env.AZURE_TENANT_ID, clientId: env.AZURE_CLIENT_ID, clientSecret: env.AZURE_CLIENT_SECRET }, { dryRun });
     res.json(summary);
   } catch (err) {
     next(err);

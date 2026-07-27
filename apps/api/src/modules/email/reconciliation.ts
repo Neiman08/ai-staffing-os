@@ -57,6 +57,7 @@ const REAL_GRAPH_DEPS: ReconciliationGraphDeps = { listSentItemsSince: realListS
 export interface ReconciliationSummary {
   mailbox: string;
   windowSinceIso: string;
+  dryRun: boolean;
   sentItemsScanned: number;
   ndrCandidatesScanned: number;
   confirmedThisRun: number;
@@ -65,7 +66,23 @@ export interface ReconciliationSummary {
   untrackedAlertsCreated: number;
   untrackedAlertsAlreadyOpen: number;
   markedDeliveryUnknown: number;
+  // F27 Fase 11 (migración retroactiva de mensajes legados SENT): subset
+  // de confirmedThisRun -- cuántos de los confirmados este run venían del
+  // estado legado SENT (pre-F27) en vez de ACCEPTED_BY_PROVIDER.
+  legacySentReconciled: number;
+  // Alertas OPEN que resultaron ser falsos positivos -- Graph sí tenía
+  // el mensaje, y ahora un EmailMessage real (incluido uno legado SENT)
+  // lo explica.
+  alertsResolved: number;
   errors: string[];
+  // F27 Fase 11: detalle identificable para el modo diagnóstico/dry-run
+  // (nunca solo conteos) -- también se llena en una corrida real, mismo
+  // shape en los dos modos.
+  details: {
+    reconciled: Array<{ emailMessageId: string; providerMessageId: string | null; subject: string; toEmail: string; fromStatus: string }>;
+    alertsResolved: Array<{ alertId: string; graphMessageId: string; subject: string | null }>;
+    alertsStillOpen: Array<{ alertId: string; graphMessageId: string; subject: string | null }>;
+  };
 }
 
 function matchesRecipientAndSubjectWindow(
@@ -91,18 +108,20 @@ function matchesRecipientAndSubjectWindow(
 export async function reconcileMailbox(
   mailbox: string,
   creds: GraphCredentials,
-  options?: { sinceIso?: string; graphDeps?: ReconciliationGraphDeps },
+  options?: { sinceIso?: string; graphDeps?: ReconciliationGraphDeps; dryRun?: boolean },
 ): Promise<ReconciliationSummary> {
   const ctx = getTenancyContext();
   if (!ctx) throw AppError.unauthorized();
 
   const sinceIso = options?.sinceIso ?? new Date(Date.now() - DEFAULT_LOOKBACK_MS).toISOString();
   const graphDeps = options?.graphDeps ?? REAL_GRAPH_DEPS;
+  const dryRun = options?.dryRun ?? false;
   const errors: string[] = [];
 
   const summary: ReconciliationSummary = {
     mailbox,
     windowSinceIso: sinceIso,
+    dryRun,
     sentItemsScanned: 0,
     ndrCandidatesScanned: 0,
     confirmedThisRun: 0,
@@ -111,21 +130,26 @@ export async function reconcileMailbox(
     untrackedAlertsCreated: 0,
     untrackedAlertsAlreadyOpen: 0,
     markedDeliveryUnknown: 0,
+    legacySentReconciled: 0,
+    alertsResolved: 0,
     errors,
+    details: { reconciled: [], alertsResolved: [], alertsStillOpen: [] },
   };
 
-  // Universo local: todo EmailMessage de este tenant, en este buzón,
-  // que todavía puede ganar evidencia real (ACCEPTED_BY_PROVIDER, o ya
-  // SENT_CONFIRMED/BOUNCED pero dentro de la ventana -- para poder
-  // reconocerlos como "ya confirmado" en vez de tratarlos como
-  // untracked por error).
+  // Universo local: todo EmailMessage de este tenant, en este buzón, que
+  // todavía puede ganar evidencia real (ACCEPTED_BY_PROVIDER; el legado
+  // SENT de antes de F27 -- ver comentario del enum en schema.prisma,
+  // preservado tal cual pero ahora SÍ reconciliable retroactivamente
+  // contra Graph; o ya SENT_CONFIRMED/BOUNCED/DELIVERY_UNKNOWN pero
+  // dentro de la ventana -- para poder reconocerlos como "ya
+  // confirmado" en vez de tratarlos como untracked por error).
   const trackedMessages = await scopedDb.emailMessage.findMany({
     where: {
       tenantId: ctx.tenantId,
       fromEmail: mailbox,
       provider: "microsoft_graph",
       sentAt: { gte: new Date(sinceIso) },
-      status: { in: ["ACCEPTED_BY_PROVIDER", "SENT_CONFIRMED", "BOUNCED", "DELIVERY_UNKNOWN"] },
+      status: { in: ["ACCEPTED_BY_PROVIDER", "SENT", "SENT_CONFIRMED", "BOUNCED", "DELIVERY_UNKNOWN"] },
     },
   });
 
@@ -159,6 +183,10 @@ export async function reconcileMailbox(
           summary.untrackedAlertsAlreadyOpen += 1;
           continue;
         }
+        if (dryRun) {
+          summary.untrackedAlertsCreated += 1;
+          continue;
+        }
         try {
           await scopedDb.emailReconciliationAlert.create({
             data: {
@@ -187,12 +215,38 @@ export async function reconcileMailbox(
       }
 
       matchedMessageIds.add(match.id);
+
+      // F27 Fase 11: un match real acá SIEMPRE explica el graphMessageId,
+      // sin importar en qué status ya estaba el EmailMessage -- si había
+      // una alerta OPEN para este mismo graphMessageId (el caso real:
+      // mensajes legados SENT que el reconciliador nunca pudo ver antes
+      // de incluir "SENT" arriba, y que por eso se habían registrado
+      // también como untracked), es un falso positivo y se resuelve acá,
+      // una sola vez, sin importar cuál de las ramas de abajo aplique.
+      const openAlert = await scopedDb.emailReconciliationAlert.findFirst({ where: { mailbox, graphMessageId: item.id, status: "OPEN" } });
+      if (openAlert) {
+        if (!dryRun) {
+          await scopedDb.emailReconciliationAlert.update({
+            where: { id: openAlert.id },
+            data: { status: "RESOLVED", resolvedAt: new Date(), resolvedEmailMessageId: match.id },
+          });
+          await logAuditEvent({
+            action: "email.reconciliation_alert_resolved",
+            entityType: "emailReconciliationAlert",
+            entityId: openAlert.id,
+            after: { emailMessageId: match.id, graphMessageId: item.id, reason: "el EmailMessage real (incluido un legado SENT) ya explica este mensaje de Graph" },
+          });
+        }
+        summary.alertsResolved += 1;
+        summary.details.alertsResolved.push({ alertId: openAlert.id, graphMessageId: item.id, subject: openAlert.subject });
+      }
+
       if (match.status === "SENT_CONFIRMED") {
         summary.alreadyConfirmed += 1;
-        await scopedDb.emailMessage.update({ where: { id: match.id }, data: { lastCheckedAt: new Date() } });
+        if (!dryRun) await scopedDb.emailMessage.update({ where: { id: match.id }, data: { lastCheckedAt: new Date() } });
         continue;
       }
-      if (match.status !== "ACCEPTED_BY_PROVIDER") {
+      if (match.status !== "ACCEPTED_BY_PROVIDER" && match.status !== "SENT") {
         // BOUNCED/DELIVERY_UNKNOWN ya tienen un desenlace real distinto
         // -- verlo también en Sent Items no lo contradice (un mensaje
         // puede rebotar Y quedar en Sent Items), pero esta fase nunca
@@ -200,25 +254,54 @@ export async function reconcileMailbox(
         continue;
       }
 
-      await scopedDb.emailMessage.update({
-        where: { id: match.id },
-        data: {
-          status: "SENT_CONFIRMED",
-          sentItemsConfirmedAt: new Date(),
-          lastCheckedAt: new Date(),
-          internetMessageId: match.internetMessageId ?? item.internetMessageId,
-          conversationId: match.conversationId ?? item.conversationId,
-        },
-      });
-      await logAuditEvent({
-        action: "email.sent_confirmed",
-        entityType: "emailMessage",
-        entityId: match.id,
-        after: { graphMessageId: item.id, internetMessageId: item.internetMessageId, sentDateTime: item.sentDateTime },
-      });
+      // F27 Fase 11: SENT es el estado legado (pre-F27, ver comentario
+      // del enum) -- nunca tuvo acceptedAt real, así que se completa acá
+      // con la evidencia real más cercana disponible (item.sentDateTime,
+      // el propio Graph) en vez de "ahora", que sería un timestamp
+      // inventado para un evento que ya pasó. providerMessageId se
+      // conserva tal cual -- este update nunca lo toca.
+      const isLegacySent = match.status === "SENT";
+      const resolvedAcceptedAt = match.acceptedAt ?? (item.sentDateTime ? new Date(item.sentDateTime) : new Date());
+
+      if (!dryRun) {
+        await scopedDb.emailMessage.update({
+          where: { id: match.id },
+          data: {
+            status: "SENT_CONFIRMED",
+            sentItemsConfirmedAt: new Date(),
+            lastCheckedAt: new Date(),
+            acceptedAt: resolvedAcceptedAt,
+            internetMessageId: match.internetMessageId ?? item.internetMessageId,
+            conversationId: match.conversationId ?? item.conversationId,
+          },
+        });
+        await logAuditEvent({
+          action: "email.sent_confirmed",
+          entityType: "emailMessage",
+          entityId: match.id,
+          after: { graphMessageId: item.id, internetMessageId: item.internetMessageId, sentDateTime: item.sentDateTime, migratedFromLegacySent: isLegacySent },
+        });
+      }
       summary.confirmedThisRun += 1;
+      if (isLegacySent) summary.legacySentReconciled += 1;
+      summary.details.reconciled.push({
+        emailMessageId: match.id,
+        providerMessageId: match.providerMessageId,
+        subject: match.subject,
+        toEmail: match.toEmail,
+        fromStatus: match.status,
+      });
     }
   }
+
+  // Alertas OPEN de este buzón que ningún match de este run explicó --
+  // se calcula a partir de `details.alertsResolved` (no de una relectura
+  // de la DB) para que el reporte sea idéntico en dry-run y en real.
+  const resolvedAlertIds = new Set(summary.details.alertsResolved.map((a) => a.alertId));
+  const openAlertsNow = await scopedDb.emailReconciliationAlert.findMany({ where: { tenantId: ctx.tenantId, mailbox, status: "OPEN" } });
+  summary.details.alertsStillOpen = openAlertsNow
+    .filter((a) => !resolvedAlertIds.has(a.id))
+    .map((a) => ({ alertId: a.id, graphMessageId: a.graphMessageId, subject: a.subject }));
 
   // ---------- 2) NDRs reales -> BOUNCED ----------
   const ndrCandidates = await graphDeps.listPossibleNdrsSince(mailbox, sinceIso, creds);
@@ -231,16 +314,18 @@ export async function reconcileMailbox(
     for (const ndr of ndrCandidates) {
       const bounced = matchNdrToMessage(ndr, stillPending);
       if (!bounced) continue;
-      await scopedDb.emailMessage.update({
-        where: { id: bounced.id },
-        data: { status: "BOUNCED", ndrReceivedAt: ndr.receivedDateTime ? new Date(ndr.receivedDateTime) : new Date(), ndrDetail: (ndr.bodyPreview ?? ndr.subject).slice(0, 1000), lastCheckedAt: new Date() },
-      });
-      await logAuditEvent({
-        action: "email.bounced",
-        entityType: "emailMessage",
-        entityId: bounced.id,
-        after: { ndrSubject: ndr.subject, ndrFrom: ndr.from, ndrReceivedDateTime: ndr.receivedDateTime },
-      });
+      if (!dryRun) {
+        await scopedDb.emailMessage.update({
+          where: { id: bounced.id },
+          data: { status: "BOUNCED", ndrReceivedAt: ndr.receivedDateTime ? new Date(ndr.receivedDateTime) : new Date(), ndrDetail: (ndr.bodyPreview ?? ndr.subject).slice(0, 1000), lastCheckedAt: new Date() },
+        });
+        await logAuditEvent({
+          action: "email.bounced",
+          entityType: "emailMessage",
+          entityId: bounced.id,
+          after: { ndrSubject: ndr.subject, ndrFrom: ndr.from, ndrReceivedDateTime: ndr.receivedDateTime },
+        });
+      }
       summary.bounced += 1;
     }
   }
@@ -251,13 +336,15 @@ export async function reconcileMailbox(
     where: { tenantId: ctx.tenantId, fromEmail: mailbox, provider: "microsoft_graph", status: "ACCEPTED_BY_PROVIDER", acceptedAt: { lte: timeoutCutoff } },
   });
   for (const stale of staleAccepted) {
-    await scopedDb.emailMessage.update({ where: { id: stale.id }, data: { status: "DELIVERY_UNKNOWN", lastCheckedAt: new Date() } });
-    await logAuditEvent({
-      action: "email.delivery_unknown",
-      entityType: "emailMessage",
-      entityId: stale.id,
-      after: { reason: `sin confirmación real ${DELIVERY_UNKNOWN_TIMEOUT_MS / (60 * 60 * 1000)}h después de acceptedAt`, acceptedAt: stale.acceptedAt },
-    });
+    if (!dryRun) {
+      await scopedDb.emailMessage.update({ where: { id: stale.id }, data: { status: "DELIVERY_UNKNOWN", lastCheckedAt: new Date() } });
+      await logAuditEvent({
+        action: "email.delivery_unknown",
+        entityType: "emailMessage",
+        entityId: stale.id,
+        after: { reason: `sin confirmación real ${DELIVERY_UNKNOWN_TIMEOUT_MS / (60 * 60 * 1000)}h después de acceptedAt`, acceptedAt: stale.acceptedAt },
+      });
+    }
     summary.markedDeliveryUnknown += 1;
   }
 

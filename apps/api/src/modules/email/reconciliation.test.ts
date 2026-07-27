@@ -62,6 +62,49 @@ async function createAcceptedEmailMessage(tenantId: string, overrides: Partial<P
   });
 }
 
+/**
+ * F27 Fase 11: fila real como las que dejó el código pre-F27 -- SENT,
+ * sin acceptedAt/internetMessageId nunca capturados (esos campos no
+ * existían/no se llenaban en ese momento). approvalRequestId nulo a
+ * propósito -- las pruebas de este bloque no necesitan un ApprovalRequest
+ * real para ejercitar reconcileMailbox.
+ */
+async function createLegacySentEmailMessage(tenantId: string, overrides: Partial<Parameters<typeof prisma.emailMessage.create>[0]["data"]> = {}) {
+  return prisma.emailMessage.create({
+    data: {
+      tenantId,
+      senderProfile: "COMMERCIAL",
+      fromEmail: MAILBOX,
+      fromName: "DreiStaff Sales",
+      toEmail: "legacy-prospect@example.com",
+      subject: "Legacy subject",
+      provider: "microsoft_graph",
+      status: "SENT",
+      providerMessageId: "legacy-graph-id-1",
+      internetMessageId: null,
+      acceptedAt: null,
+      sentItemsConfirmedAt: null,
+      sentAt: new Date(),
+      correlationId: `corr-legacy-${Date.now()}-${Math.random()}`,
+      ...overrides,
+    },
+  });
+}
+
+async function createOpenAlert(tenantId: string, overrides: Partial<Parameters<typeof prisma.emailReconciliationAlert.create>[0]["data"]> = {}) {
+  return prisma.emailReconciliationAlert.create({
+    data: {
+      tenantId,
+      mailbox: MAILBOX,
+      graphMessageId: "legacy-graph-id-1",
+      subject: "Legacy subject",
+      toRecipients: ["legacy-prospect@example.com"],
+      status: "OPEN",
+      ...overrides,
+    },
+  });
+}
+
 test("reconcileMailbox: un mensaje real en Sent Items que coincide por providerMessageId pasa ACCEPTED_BY_PROVIDER -> SENT_CONFIRMED", async () => {
   const tenantId = await setupTenant("confirm-by-provider-id");
   const email = await createAcceptedEmailMessage(tenantId);
@@ -277,4 +320,201 @@ test("reconcileMailbox: nunca toca un EmailMessage de OTRO tenant, ni para confi
 
   const rowB = await prisma.emailMessage.findUniqueOrThrow({ where: { id: emailB.id } });
   assert.equal(rowB.status, "ACCEPTED_BY_PROVIDER", "el EmailMessage de otro tenant nunca se modifica");
+});
+
+/**
+ * F27 Fase 11: reconciliación retroactiva de mensajes legados SENT (ver
+ * hallazgo real -- 5 ApprovalRequest reales de 2026-07-24 con
+ * EmailMessage.status="SENT", nunca reconciliados porque trackedMessages
+ * excluía ese estado del filtro).
+ */
+
+test("reconcileMailbox: un EmailMessage legado SENT que aparece en Sent Items migra a SENT_CONFIRMED, completa acceptedAt/internetMessageId/sentItemsConfirmedAt y conserva providerMessageId", async () => {
+  const tenantId = await setupTenant("legacy-sent-confirm");
+  const legacy = await createLegacySentEmailMessage(tenantId);
+
+  const sentItem: GraphSentItem = {
+    id: "legacy-graph-id-1",
+    subject: "Legacy subject",
+    sentDateTime: "2026-07-24T19:58:50.000Z",
+    internetMessageId: "<real-legacy@dreistaff.com>",
+    conversationId: "real-legacy-conv",
+    toRecipients: ["legacy-prospect@example.com"],
+    from: MAILBOX,
+  };
+
+  const summary = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listSentItemsSince: async () => [sentItem] }) }),
+  );
+
+  assert.equal(summary.confirmedThisRun, 1);
+  assert.equal(summary.legacySentReconciled, 1);
+  assert.equal(summary.details.reconciled.length, 1);
+  assert.equal(summary.details.reconciled[0]?.fromStatus, "SENT");
+
+  const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: legacy.id } });
+  assert.equal(row.status, "SENT_CONFIRMED");
+  assert.equal(row.providerMessageId, "legacy-graph-id-1", "providerMessageId se conserva, nunca se pisa");
+  assert.equal(row.internetMessageId, "<real-legacy@dreistaff.com>");
+  assert.ok(row.sentItemsConfirmedAt);
+  assert.ok(row.acceptedAt, "acceptedAt se completa retroactivamente para un legado que nunca lo tuvo");
+  assert.equal(row.acceptedAt?.toISOString(), "2026-07-24T19:58:50.000Z", "usa la evidencia real de Graph (sentDateTime), nunca 'ahora'");
+});
+
+test("reconcileMailbox: resuelve automáticamente una EmailReconciliationAlert OPEN cuyo graphMessageId coincide con un EmailMessage legado SENT recién reconciliado (falso positivo)", async () => {
+  const tenantId = await setupTenant("legacy-sent-resolves-alert");
+  await createLegacySentEmailMessage(tenantId);
+  const alert = await createOpenAlert(tenantId);
+
+  const sentItem: GraphSentItem = {
+    id: "legacy-graph-id-1",
+    subject: "Legacy subject",
+    sentDateTime: new Date().toISOString(),
+    internetMessageId: "<real-legacy@dreistaff.com>",
+    conversationId: null,
+    toRecipients: ["legacy-prospect@example.com"],
+    from: MAILBOX,
+  };
+
+  const summary = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listSentItemsSince: async () => [sentItem] }) }),
+  );
+
+  assert.equal(summary.alertsResolved, 1);
+  assert.equal(summary.details.alertsResolved[0]?.alertId, alert.id);
+  assert.equal(summary.details.alertsStillOpen.length, 0);
+
+  const row = await prisma.emailReconciliationAlert.findUniqueOrThrow({ where: { id: alert.id } });
+  assert.equal(row.status, "RESOLVED");
+  assert.ok(row.resolvedAt);
+  const emailRow = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, providerMessageId: "legacy-graph-id-1" } });
+  assert.equal(row.resolvedEmailMessageId, emailRow.id);
+});
+
+test("reconcileMailbox: un EmailMessage legado SENT que NO aparece en Sent Items real permanece SENT, sin tocar", async () => {
+  const tenantId = await setupTenant("legacy-sent-not-found");
+  const legacy = await createLegacySentEmailMessage(tenantId);
+
+  const summary = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listSentItemsSince: async () => [] }) }),
+  );
+
+  assert.equal(summary.confirmedThisRun, 0);
+  assert.equal(summary.legacySentReconciled, 0);
+
+  const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: legacy.id } });
+  assert.equal(row.status, "SENT", "sin evidencia real en Sent Items, el legado nunca se reinterpreta a ciegas");
+  assert.equal(row.acceptedAt, null);
+  assert.equal(row.sentItemsConfirmedAt, null);
+});
+
+test("reconcileMailbox: correr la reconciliación de un legado SENT dos veces es idempotente -- la segunda corrida no reconfirma, no duplica auditoría y no vuelve a resolver la alerta", async () => {
+  const tenantId = await setupTenant("legacy-sent-idempotent");
+  await createLegacySentEmailMessage(tenantId);
+  const alert = await createOpenAlert(tenantId);
+
+  const sentItem: GraphSentItem = {
+    id: "legacy-graph-id-1",
+    subject: "Legacy subject",
+    sentDateTime: "2026-07-24T19:58:50.000Z",
+    internetMessageId: "<real-legacy@dreistaff.com>",
+    conversationId: null,
+    toRecipients: ["legacy-prospect@example.com"],
+    from: MAILBOX,
+  };
+  const deps = fakeGraphDeps({ listSentItemsSince: async () => [sentItem] });
+
+  const first = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () => reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: deps }));
+  const second = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () => reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: deps }));
+
+  assert.equal(first.confirmedThisRun, 1);
+  assert.equal(first.alertsResolved, 1);
+  assert.equal(second.confirmedThisRun, 0);
+  assert.equal(second.legacySentReconciled, 0);
+  assert.equal(second.alreadyConfirmed, 1);
+  assert.equal(second.alertsResolved, 0, "la alerta ya resuelta no se vuelve a contar");
+
+  const emailRow = await prisma.emailMessage.findFirstOrThrow({ where: { tenantId, providerMessageId: "legacy-graph-id-1" } });
+  assert.equal(emailRow.status, "SENT_CONFIRMED");
+  const confirmedLogs = await prisma.auditLog.count({ where: { tenantId, entityId: emailRow.id, action: "email.sent_confirmed" } });
+  assert.equal(confirmedLogs, 1);
+  const resolvedLogs = await prisma.auditLog.count({ where: { tenantId, entityId: alert.id, action: "email.reconciliation_alert_resolved" } });
+  assert.equal(resolvedLogs, 1);
+
+  const alertRow = await prisma.emailReconciliationAlert.findUniqueOrThrow({ where: { id: alert.id } });
+  assert.equal(alertRow.status, "RESOLVED");
+});
+
+test("reconcileMailbox: una alerta real sin ningún EmailMessage correspondiente (envío externo genuino) permanece OPEN, nunca se toca", async () => {
+  const tenantId = await setupTenant("genuine-external-alert-untouched");
+  await createLegacySentEmailMessage(tenantId); // ruido: otro EmailMessage legado en el mismo tenant, no debe interferir
+  await createOpenAlert(tenantId); // alerta real del legado -- ESTA sí debe resolverse
+  const genuineAlert = await createOpenAlert(tenantId, {
+    graphMessageId: "genuinely-external-graph-id",
+    subject: "Correo de prueba enviado por fuera del CRM",
+    toRecipients: ["someone-external@example.com"],
+  });
+
+  // El único Sent Item real de esta corrida es el legado (se reconcilia),
+  // el mensaje genuinamente externo NUNCA aparece en Graph en esta
+  // ventana -- exactamente el caso real de los 6 huérfanos genuinos.
+  const sentItem: GraphSentItem = {
+    id: "legacy-graph-id-1",
+    subject: "Legacy subject",
+    sentDateTime: new Date().toISOString(),
+    internetMessageId: null,
+    conversationId: null,
+    toRecipients: ["legacy-prospect@example.com"],
+    from: MAILBOX,
+  };
+
+  const summary = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listSentItemsSince: async () => [sentItem] }) }),
+  );
+
+  assert.equal(summary.alertsResolved, 1, "solo se resuelve la del legado, nunca la genuina");
+  assert.equal(summary.details.alertsStillOpen.length, 1);
+  assert.equal(summary.details.alertsStillOpen[0]?.alertId, genuineAlert.id);
+
+  const row = await prisma.emailReconciliationAlert.findUniqueOrThrow({ where: { id: genuineAlert.id } });
+  assert.equal(row.status, "OPEN");
+  assert.equal(row.resolvedAt, null);
+});
+
+test("reconcileMailbox: dryRun no escribe nada en la base pero reporta el mismo detalle que una corrida real (reconciled/alertsResolved/alertsStillOpen)", async () => {
+  const tenantId = await setupTenant("legacy-sent-dry-run");
+  const legacy = await createLegacySentEmailMessage(tenantId);
+  const alert = await createOpenAlert(tenantId);
+  const genuineAlert = await createOpenAlert(tenantId, { graphMessageId: "genuine-dry-run-alert", subject: "Externo genuino", toRecipients: ["externo@example.com"] });
+
+  const sentItem: GraphSentItem = {
+    id: "legacy-graph-id-1",
+    subject: "Legacy subject",
+    sentDateTime: "2026-07-24T19:58:50.000Z",
+    internetMessageId: "<real-legacy@dreistaff.com>",
+    conversationId: null,
+    toRecipients: ["legacy-prospect@example.com"],
+    from: MAILBOX,
+  };
+
+  const summary = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { dryRun: true, graphDeps: fakeGraphDeps({ listSentItemsSince: async () => [sentItem] }) }),
+  );
+
+  assert.equal(summary.dryRun, true);
+  assert.equal(summary.confirmedThisRun, 1);
+  assert.equal(summary.legacySentReconciled, 1);
+  assert.equal(summary.alertsResolved, 1);
+  assert.equal(summary.details.alertsResolved[0]?.alertId, alert.id);
+  assert.equal(summary.details.alertsStillOpen.length, 1);
+  assert.equal(summary.details.alertsStillOpen[0]?.alertId, genuineAlert.id);
+
+  // Nada se escribió de verdad.
+  const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: legacy.id } });
+  assert.equal(row.status, "SENT", "dryRun nunca escribe -- el estado real no cambia");
+  assert.equal(row.sentItemsConfirmedAt, null);
+  const alertRow = await prisma.emailReconciliationAlert.findUniqueOrThrow({ where: { id: alert.id } });
+  assert.equal(alertRow.status, "OPEN", "dryRun nunca resuelve de verdad");
+  const auditCount = await prisma.auditLog.count({ where: { tenantId } });
+  assert.equal(auditCount, 0, "dryRun nunca audita nada");
 });

@@ -2412,6 +2412,15 @@ model EmailReconciliationAlert {
   evidence          Json?
   acknowledgedById  String?
   acknowledgedAt    DateTime?
+  // F27 Fase 11: distinto de acknowledgedAt/acknowledgedById a propósito
+  // -- "acknowledged" significa que un HUMANO revisó y decidió; "resolved"
+  // significa que el reconciliador encontró, de forma automática, un
+  // EmailMessage real (incluido uno con el estado legado SENT, ver
+  // trackedMessages en reconciliation.ts) que explica este graphMessageId
+  // -- nunca se confunde con una decisión humana. resolvedEmailMessageId
+  // deja el vínculo real hacia la fila que explica esta alerta.
+  resolvedAt              DateTime?
+  resolvedEmailMessageId  String?
   createdAt         DateTime                       @default(now())
 
   @@unique([tenantId, mailbox, graphMessageId])
@@ -2422,6 +2431,10 @@ enum EmailReconciliationAlertStatus {
   OPEN
   ACKNOWLEDGED
   DISMISSED
+  // F27 Fase 11: falso positivo real -- el reconciliador encontró el
+  // EmailMessage que explica este mensaje de Graph (nunca un estado
+  // manual, ver resolvedAt/resolvedEmailMessageId arriba).
+  RESOLVED
 }
 
 // F27 Fase 7: caché real de la última consulta real de Hunter.io Domain
