@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { prisma } from "@ai-staffing-os/db";
 import { createApp } from "../../app";
+import { REAL_PROVIDER_TESTS_ENABLED, REAL_PROVIDER_TEST_SKIP_REASON } from "../../test-helpers/real-provider-tests";
 
 let server: Server;
 let baseUrl: string;
@@ -157,7 +158,23 @@ test("una industria que la taxonomía reconoce pero el CRM no tiene todavía nun
 // fallback descubre empresas reales (nunca Demo), las conecta con
 // possibleCategories reales (fix del bug de selectTargetCompanies), y
 // llegan a lead/oportunidad como cualquier empresa ya existente.
-test("el fallback automático descubre empresas reales de Hospitality y las lleva a lead/oportunidad real (nunca Demo)", async () => {
+//
+// Bug real encontrado en auditoría de "primera misión real" -- este
+// test es genuinamente no determinista contra Google Places real, a
+// diferencia del anterior (que nunca depende de CUÁNTOS resultados
+// reales devuelva el proveedor, solo de que Retail no resuelva a
+// ninguna Industry real). Evidencia de dos corridas reales en CI, con
+// GOOGLE_PLACES_API_KEY real en ambas, mismo commit: una falló en
+// "companiesTargeted > 0" (0 hoteles calificaron), la otra en
+// "missionState === COMPLETED" (encontró hoteles reales, pero terminó
+// PARTIAL) -- dos causas de fallo distintas, ninguna un bug de código,
+// ambas por variabilidad real de lo que Google Places devuelve en el
+// momento exacto de la corrida. Mismo criterio que ya protege a
+// contact-intelligence.test.ts/discovery.test.ts/missions-dynamic-discovery.test.ts.
+test(
+  "el fallback automático descubre empresas reales de Hospitality y las lleva a lead/oportunidad real (nunca Demo)",
+  { skip: REAL_PROVIDER_TESTS_ENABLED ? false : REAL_PROVIDER_TEST_SKIP_REASON },
+  async () => {
   const res = await fetch(`${baseUrl}/api/v1/missions`, {
     method: "POST",
     headers: SALES_HEADERS,
