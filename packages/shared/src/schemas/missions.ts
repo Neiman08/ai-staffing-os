@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { agentTaskListItemSchema } from "./agents";
+import { agentTaskDetailSchema } from "./agents";
 import { companyOriginSchema, companyVerificationStatusSchema, contactVerificationStatusSchema } from "./crm";
 
 // ============================================================
@@ -628,7 +628,13 @@ export type DiscoveryExecutionReport = z.infer<typeof discoveryExecutionReportSc
 export const missionDetailSchema = missionListItemSchema.extend({
   unrecognizedTerms: z.array(z.string()),
   report: z.string().nullable(), // Executive Report — null mientras RUNNING/PAUSED_*
-  childTasks: z.array(agentTaskListItemSchema),
+  // F28 (misión real de Hospitality, 2026-07-28): antes agentTaskListItemSchema
+  // (sin input/output/approvalRequestId) -- el backend real
+  // (missions/service.ts::getMissionDetail) siempre devolvió el detalle
+  // completo (toAgentTaskDetail), así que el schema quedaba desalineado
+  // con la respuesta real -- el frontend no podía leer task.output de
+  // forma tipada pese a que siempre estuvo ahí.
+  childTasks: z.array(agentTaskDetailSchema),
   selectedCompanies: z.array(missionCompanySchema),
   contacts: z.array(missionContactSchema),
   contactStats: missionContactStatsSchema,

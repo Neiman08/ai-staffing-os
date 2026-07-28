@@ -27,32 +27,54 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "hoteles",
       "resort",
       "resorts",
+      "conference hotel",
+      "extended stay",
+      "extended stay hotel",
+      "hotel chain",
+      "hotel group",
+      "hotel brand",
       "lodging",
       "lodge",
       "hospitality",
       "hospitalidad",
       "motel",
       "motels",
-      "inn",
       "suites",
+      // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del
+      // PO): B&B/guest house/inn chico siguen siendo hospitality real
+      // (nunca se excluyen), pero se mueven al final -- ver companyTypes
+      // y googleSearchPhrases, mismo criterio, para que un "busca
+      // hoteles" priorice hoteles comerciales (Hotels/Resorts/Conference
+      // Hotels/Extended Stay/cadenas) antes de agotar el volumen pedido
+      // con alojamientos chicos.
+      "inn",
       "bed and breakfast",
       "bed & breakfast",
       "boutique hotel",
+      "guest house",
+      "guesthouse",
     ],
     // F7.4 Parte A: "suites"/"hospitality property" agregados -- evidencia
     // de aceptacion explicita pedida por el PO para validar un candidato
-    // real de hospitality (ver docs/F7.../PLAN.md §"Hoteles").
+    // real de hospitality (ver docs/F7.../PLAN.md §"Hoteles"). F28: mismo
+    // orden comercial-primero que synonyms/googleSearchPhrases arriba.
     companyTypes: [
       "hotel",
       "resort",
+      "conference hotel",
+      "extended stay hotel",
+      "extended stay",
+      "hotel chain",
+      "hotel group",
       "lodging property",
       "lodge",
       "motel",
-      "inn",
       "suites",
       "hospitality property",
+      "inn",
       "bed and breakfast",
       "boutique hotel",
+      "guest house",
     ],
     // F13 (auditoría PO, 2026-07-19): antes null -- "Crear una Industry
     // real nueva... es una decision de F5/F6 territory, fuera de
@@ -62,16 +84,30 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // seedIndustries() en packages/db/prisma/seed.ts la crea como
     // Industry real (isGlobal, mismo patrón que las otras 4).
     crmIndustryBucket: "Hospitality",
-    // F14: orden específico-primero, mismo criterio que electrical.
+    // F14: orden específico-primero, mismo criterio que electrical. F28
+    // (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+    // reordenado a comercial-primero -- las queries corren en este orden
+    // (mission-planner.ts/mission-executor.ts) y el cupo de la misión
+    // (stopConditions.maxCompanies) corta apenas se alcanza el volumen
+    // pedido, así que el orden real decide qué se termina aceptando.
+    // Antes "bed and breakfast" corría 4to (antes que "inn"/"motel"),
+    // compitiendo por cupo con hoteles comerciales reales -- ahora
+    // hotel/resort/conference hotel/extended stay/cadenas van primero,
+    // B&B/guest house/inn chico quedan al final (nunca eliminados --
+    // "busca hoteles y bed and breakfasts" los sigue encontrando, solo
+    // que después de agotar la oferta comercial real).
     googleSearchPhrases: [
       "hotel",
       "resort",
-      "boutique hotel",
-      "bed and breakfast",
-      "lodging property",
-      "inn",
-      "motel",
+      "conference hotel",
+      "extended stay hotel",
+      "hotel chain",
       "hospitality group",
+      "boutique hotel",
+      "lodging property",
+      "motel",
+      "inn",
+      "bed and breakfast",
     ],
     websitePhrases: ["rooms", "reservations", "check-in", "housekeeping", "hospitality"],
     // F21 (outreach de hoteles, pedido explícito del PO): "Banquet Staff",

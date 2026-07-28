@@ -81,15 +81,51 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
     .map((t) => (t.output as { campaignId: string } | null)?.campaignId)
     .filter((id): id is string => !!id);
 
-  const companiesTargeted = children
-    .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
-    .reduce((sum, t) => sum + ((t.output as { addedCount?: number } | null)?.addedCount ?? 0), 0);
+  // F28 (misión real de Hospitality, 2026-07-28): una misión que corrió
+  // por el camino dinámico (runDynamicDiscoveryMission -> executeDiscoveryPlan
+  // con convertToCommercialActions=true, ver mission-executor.ts) crea
+  // Company/Lead/Opportunity/ApprovalRequest reales DENTRO de la única
+  // AgentTask "discover_companies" (discovery-conversion.ts,
+  // convertDiscoveredCompany) -- nunca como AgentTask hijas separadas de
+  // tipo create_lead/create_opportunity/select_target_companies/
+  // personalize_message. El pipeline clásico (loop estático de
+  // mission-orchestrator.ts) sí crea esas hijas, así que las cuentas de
+  // abajo seguían siendo correctas para ese camino -- pero para el
+  // dinámico, el Executive Report reportaba "0 empresas, 0 oportunidades"
+  // pese a que existían Companies/Leads/Opportunities/Drafts reales,
+  // porque este cómputo nunca miraba esa otra fuente real. Se suma acá,
+  // vía Lead/Opportunity/Company.createdByAgentTaskId /
+  // discoveredByAgentTaskId (ambos ya reales, puestos por
+  // discovery-conversion.ts) -- nunca estimado, siempre contra la tabla
+  // real.
+  const discoverCompaniesTaskIds = children.filter((t) => t.type === "discover_companies" && t.status === "DONE").map((t) => t.id);
+  const dynamicCompaniesCreated = discoverCompaniesTaskIds.length
+    ? await scopedDb.company.count({ where: { discoveredByAgentTaskId: { in: discoverCompaniesTaskIds } } })
+    : 0;
+  const dynamicLeadsCreated = discoverCompaniesTaskIds.length
+    ? await scopedDb.lead.count({ where: { createdByAgentTaskId: { in: discoverCompaniesTaskIds } } })
+    : 0;
+  const dynamicOpportunities = discoverCompaniesTaskIds.length
+    ? await scopedDb.opportunity.findMany({ where: { createdByAgentTaskId: { in: discoverCompaniesTaskIds } }, select: { id: true, estimatedRevenue: true } })
+    : [];
 
-  const leadsCreated = children.filter((t) => t.type === "create_lead" && t.status === "DONE").length;
+  const companiesTargeted =
+    children
+      .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
+      .reduce((sum, t) => sum + ((t.output as { addedCount?: number } | null)?.addedCount ?? 0), 0) + dynamicCompaniesCreated;
+
+  const leadsCreated = children.filter((t) => t.type === "create_lead" && t.status === "DONE").length + dynamicLeadsCreated;
   const opportunityTasks = children.filter((t) => t.type === "create_opportunity" && t.status === "DONE");
   const sequencesPlanned = children.filter((t) => t.type === "plan_sequence" && t.status === "DONE").length;
 
-  const personalizeMessageTaskIds = children.filter((t) => t.type === "personalize_message").map((t) => t.id);
+  // discovery-conversion.ts (convertDiscoveredCompany) crea el
+  // ApprovalRequest del borrador con agentTaskId=discover_companies.id
+  // (nunca un personalize_message aparte) -- se incluye acá para que
+  // draftsAwaitingApproval/emailsSentCount de abajo (ya reales, ya
+  // consultan ApprovalRequest de verdad) también vean esos borradores.
+  const personalizeMessageTaskIds = children
+    .filter((t) => t.type === "personalize_message" || t.type === "discover_companies")
+    .map((t) => t.id);
   const draftsAwaitingApproval =
     personalizeMessageTaskIds.length > 0
       ? await scopedDb.approvalRequest.count({
@@ -116,7 +152,8 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
     opportunityIds.length > 0
       ? await scopedDb.opportunity.findMany({ where: { id: { in: opportunityIds } }, select: { estimatedRevenue: true } })
       : [];
-  const pipelineValueUsd = opportunities.reduce((sum, o) => sum + Number(o.estimatedRevenue ?? 0), 0);
+  const pipelineValueUsd = [...opportunities, ...dynamicOpportunities].reduce((sum, o) => sum + Number(o.estimatedRevenue ?? 0), 0);
+  const opportunitiesCreated = opportunityTasks.length + dynamicOpportunities.length;
 
   const companyIds = children
     .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
@@ -148,7 +185,7 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
     campaignCount: campaignIds.length,
     companiesTargeted,
     leadsCreated,
-    opportunitiesCreated: opportunityTasks.length,
+    opportunitiesCreated,
     pipelineValueUsd,
     sequencesPlanned,
     draftsAwaitingApproval,

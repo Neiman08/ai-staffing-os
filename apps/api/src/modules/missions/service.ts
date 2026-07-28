@@ -4,6 +4,7 @@ import { AppError } from "../../core/errors";
 import { applyMissionAction, launchMission } from "../agents/mission-orchestrator";
 import { planMissionOnly } from "../agents/mission-planning";
 import { toAgentTaskDetail } from "../agents/task-executor";
+import { summarizeDelegatedWork, type CompanyValidationRecord } from "../agents/mission-executor";
 
 // F14: ID legible humano MIS-YYYYMMDD-NNNN -- NUNCA reemplaza el id
 // interno (cuid, sigue siendo la clave real para todas las rutas/FKs),
@@ -316,7 +317,23 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     ...listItem,
     unrecognizedTerms: input.unrecognizedTerms ?? [],
     report: output.report ?? null,
-    childTasks: await Promise.all(childTasks.map((t) => toAgentTaskDetail(t))),
+    // F28 (misión real de Hospitality, 2026-07-28): "Tareas delegadas"
+    // solo mostraba 1 fila para el camino dinámico (discover_companies)
+    // -- Website Intelligence/Contact Intelligence/Email Verification/
+    // Sales sí corrieron de verdad, como llamadas directas DENTRO de esa
+    // única AgentTask (ver mission-executor.ts, summarizeDelegatedWork).
+    // Se enriquece acá el output ya persistido (unknown en el schema,
+    // aditivo -- nunca se crea ninguna AgentTask nueva ni se cambia el
+    // pipeline) para que el reporte deje de verse como "solo discovery".
+    childTasks: await Promise.all(
+      childTasks.map(async (t) => {
+        const detail = await toAgentTaskDetail(t);
+        if (t.type !== "discover_companies" || !detail.output || typeof detail.output !== "object") return detail;
+        const companyValidations = (detail.output as { companyValidations?: CompanyValidationRecord[] }).companyValidations ?? [];
+        if (companyValidations.length === 0) return detail;
+        return { ...detail, output: { ...detail.output, delegatedWorkSummary: summarizeDelegatedWork(companyValidations) } };
+      }),
+    ),
     selectedCompanies: [
       ...campaignCompanies.map((cc) => ({
         companyId: cc.companyId,

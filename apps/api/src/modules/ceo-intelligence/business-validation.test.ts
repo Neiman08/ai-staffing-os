@@ -51,6 +51,41 @@ test("hotel inválido: restaurant -> rechazado", () => {
   assert.equal(result.accepted, false);
 });
 
+// F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+// categorías comerciales nuevas (Conference Hotel/Extended Stay/cadenas)
+// deben reconocerse -- y B&B/Guest House/Inn siguen aceptándose (nunca
+// excluidos, solo despriorizados en el orden de búsqueda -- ver
+// taxonomy.test.ts).
+test("hotel comercial válido: 'Riverside Conference Hotel & Suites' -> EXACT, aceptado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Riverside Conference Hotel & Suites", taxonomyKey: "hospitality" }),
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("hotel comercial válido: 'Meridian Extended Stay Hotel Chicago' -> EXACT, aceptado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Meridian Extended Stay Hotel Chicago", taxonomyKey: "hospitality" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("cadena hotelera válida: 'Windsor Hotel Chain Group' -> EXACT, aceptado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Windsor Hotel Chain Group", taxonomyKey: "hospitality" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("bed and breakfast sigue siendo válido -- despriorizado en orden de búsqueda, nunca rechazado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Maple Street Bed and Breakfast", taxonomyKey: "hospitality" }));
+  assert.equal(result.accepted, true);
+});
+
+test("guest house sigue siendo válido -- despriorizado, nunca rechazado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Lakeside Guest House", taxonomyKey: "hospitality" }));
+  assert.equal(result.accepted, true);
+});
+
 // ---------- Manufacturing ----------
 
 test("manufacturing válido: nombre contiene 'Manufacturing' -> EXACT", () => {

@@ -244,6 +244,41 @@ export interface CompanyValidationRecord {
   conversion: ConvertDiscoveredCompanyResult | null;
 }
 
+// F28 (misión real de Hospitality, 2026-07-28): "Tareas delegadas" en
+// Mission Detail solo mostraba 1 fila ("discovery"), aunque Website
+// Intelligence/Contact Intelligence/Email Verification/Sales (evaluación
+// de conversión) sí corrieron de verdad -- todos como llamadas directas
+// DENTRO de esta única AgentTask (executeDiscoveryPlan/discovery-
+// conversion.ts), nunca como AgentTask hijas propias (a diferencia del
+// pipeline clásico estático, que sí crea una hija por paso). Esto no
+// inventa ninguna tarea nueva ni cambia el pipeline -- resume, con datos
+// 100% reales ya recolectados en companyValidations, qué trabajo
+// delegado realmente ocurrió, para que el reporte deje de verse como
+// "solo discovery participó".
+export interface DelegatedWorkSummary {
+  companiesEvaluated: number;
+  websiteIntelligenceCompanies: number;
+  contactIntelligenceContactsFound: number;
+  emailVerificationVerifiedCount: number;
+  salesConversionEvaluated: number;
+}
+
+export function summarizeDelegatedWork(companyValidations: CompanyValidationRecord[]): DelegatedWorkSummary {
+  return {
+    companiesEvaluated: companyValidations.length,
+    // Website Intelligence corrió sobre esta Company si extrajo algún
+    // email o creó algún CompanyContactPoint real (ver company-
+    // enrichment.ts) -- nunca estimado.
+    websiteIntelligenceCompanies: companyValidations.filter((c) => c.emailsExtracted > 0 || c.companyContactPointsCreated > 0).length,
+    contactIntelligenceContactsFound: companyValidations.reduce((sum, c) => sum + c.contactsFound, 0),
+    emailVerificationVerifiedCount: companyValidations.reduce((sum, c) => sum + c.emailsVerified, 0),
+    // opportunityRecommendation es la evaluación determinista real de
+    // "qué hacer con esta Company" (F7.10, ver el campo arriba) -- el
+    // equivalente real de la evaluación de Sales, corre siempre.
+    salesConversionEvaluated: companyValidations.filter((c) => c.opportunityRecommendation != null).length,
+  };
+}
+
 export type MissionExecutionState = "COMPLETED" | "PARTIAL" | "NO_RESULTS" | "BLOCKED" | "FAILED";
 
 export interface DiscoveryExecutionReport {
@@ -413,7 +448,10 @@ export function buildFinalQueries(plan: MissionPlan, primaryState: string, optio
  * loop corta antes de tocar ninguna query de acá, cero costo real
  * agregado. Nunca amplía el SECTOR pedido -- sólo la geografía.
  */
-function buildRefinementQueries(plan: MissionPlan, primaryState: string): FinalQuery[] {
+// exportado solo para test (F28: verificar que la ronda 3 -- estados
+// vecinos -- nunca corre para una misión de un solo estado, ver
+// mission-executor.test.ts)
+export function buildRefinementQueries(plan: MissionPlan, primaryState: string): FinalQuery[] {
   const result: FinalQuery[] = [];
 
   // Ronda 2: mismos términos, sin filtro de ciudad (probar todo el
@@ -428,9 +466,21 @@ function buildRefinementQueries(plan: MissionPlan, primaryState: string): FinalQ
   // (NEARBY_SUPPORTED_STATES, geo.ts) -- degradación honesta: si el
   // estado pedido no tiene ningún vecino soportado hoy (ej. Texas),
   // esta ronda no agrega nada, nunca un vecino inventado.
-  const nearby = NEARBY_SUPPORTED_STATES[primaryState] ?? [];
-  for (const nearbyState of nearby) {
-    result.push(...buildFinalQueries(plan, nearbyState, { citiesOverride: [null], refinementRound: 3 }));
+  //
+  // Bug real (misión de Hospitality, 2026-07-28): esto corría SIEMPRE
+  // que la ronda 1 no alcanzara el volumen pedido, sin importar si la
+  // instrucción restringía la misión a un solo estado -- generaba
+  // queries reales contra estados vecinos (IN/WI/IA/MO) para una
+  // instrucción que pedía explícitamente "en Illinois", nunca autorizó
+  // ninguna expansión. plan.states.length > 1 es la misma señal que ya
+  // usa geo.ts para decidir si el usuario autorizó expansión real
+  // ("estados vecinos"/"Midwest"/varios estados nombrados) -- si la
+  // misión solo tiene un estado, esta ronda ahora nunca se ejecuta.
+  if (plan.states.length > 1) {
+    const nearby = NEARBY_SUPPORTED_STATES[primaryState] ?? [];
+    for (const nearbyState of nearby) {
+      result.push(...buildFinalQueries(plan, nearbyState, { citiesOverride: [null], refinementRound: 3 }));
+    }
   }
 
   return result;

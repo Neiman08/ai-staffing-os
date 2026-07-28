@@ -6,7 +6,14 @@ import { runWithTenancyContext } from "../../core/tenancy/context";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { resetProviderHealthForTests, getProviderHealth } from "./tools/provider-health";
 import { emptyResult, type ProviderCandidate, type ProviderSearchResult } from "./tools/discovery-providers/types";
-import { executeDiscoveryPlan, buildFinalQueries, type DiscoveryProviderPort } from "./mission-executor";
+import {
+  executeDiscoveryPlan,
+  buildFinalQueries,
+  buildRefinementQueries,
+  summarizeDelegatedWork,
+  type DiscoveryProviderPort,
+  type CompanyValidationRecord,
+} from "./mission-executor";
 import { emptyWebsiteIntelligenceResult } from "./tools/website-intelligence/types";
 import type { WebsiteIntelligencePort } from "./company-enrichment";
 import type { ContactProviderPort } from "./contact-enrichment";
@@ -188,6 +195,100 @@ test("buildFinalQueries: descarta una query que es exclusivamente un termino de 
   assert.equal(queries[0]!.searchTerm, "manufacturing company");
 });
 
+// ---------- buildRefinementQueries (unidad, sin Prisma) ----------
+//
+// F28 (misión real de Hospitality, 2026-07-28): la ronda 3 (estados
+// vecinos, NEARBY_SUPPORTED_STATES) corría SIEMPRE que la ronda 1 no
+// alcanzara el volumen pedido, sin mirar si la instrucción restringía la
+// misión a un solo estado -- generaba queries reales contra IN/WI/IA/MO
+// para "en Illinois" a secas, nunca autorizado. Ahora exige
+// plan.states.length > 1 (la misma señal que ya usa geo.ts para "el
+// usuario autorizó expansión real").
+
+test("buildRefinementQueries: con plan.states=['IL'] (un solo estado, el caso normal), la ronda 3 NUNCA genera queries de estados vecinos", () => {
+  const plan = manufacturingPlan({ states: ["IL"] });
+  const queries = buildRefinementQueries(plan, "IL");
+  const round3 = queries.filter((q) => q.refinementRound === 3);
+  assert.equal(round3.length, 0, "ronda 3 no debe generar nada para una misión de un solo estado");
+  assert.ok(!round3.some((q) => q.state !== "IL"), "ninguna query de ronda 3 debería apuntar a un estado distinto de IL");
+});
+
+test("buildRefinementQueries: con plan.states con más de un estado (expansión ya autorizada -- 'estados vecinos'/'Midwest'), la ronda 3 SÍ genera queries de estados vecinos reales", () => {
+  const plan = manufacturingPlan({ states: ["IL", "IN", "WI"] });
+  const queries = buildRefinementQueries(plan, "IL");
+  const round3States = new Set(queries.filter((q) => q.refinementRound === 3).map((q) => q.state));
+  assert.ok(round3States.size > 0, "con expansión ya autorizada, la ronda 3 sigue funcionando");
+  assert.ok(!round3States.has("IL"), "la ronda 3 nunca repite el estado primario -- solo vecinos reales");
+});
+
+// ---------- summarizeDelegatedWork (unidad, sin Prisma) ----------
+//
+// F28 (misión real de Hospitality, 2026-07-28): "Tareas delegadas" en
+// Mission Detail solo mostraba 1 fila (discovery) para el camino
+// dinámico -- Website Intelligence/Contact Intelligence/Email
+// Verification/Sales sí corrieron de verdad DENTRO de esa única
+// AgentTask, solo que nunca como AgentTask hijas propias.
+
+function companyValidationFixture(overrides: Partial<CompanyValidationRecord> = {}): CompanyValidationRecord {
+  return {
+    companyId: "company-1",
+    name: "Acme Co",
+    taxonomyKey: "manufacturing",
+    businessConfidence: "EXACT",
+    detectedBusinessType: "manufacturing company",
+    detectedSector: "Manufacturing",
+    matchedEvidence: [],
+    missingEvidence: [],
+    emailsExtracted: 0,
+    emailsVerified: 0,
+    emailsRisky: 0,
+    emailsInvalid: 0,
+    companyContactPointsCreated: 0,
+    hasValidEmail: false,
+    hiringStatus: null,
+    hiringConfidence: null,
+    targetTitlesMatched: [],
+    rolePlan: null,
+    contactsFound: 0,
+    rolesWithoutContact: [],
+    readyForOrganizationalContact: false,
+    providerTypes: [],
+    isClientOwnerCandidate: false,
+    clientOwnerAssociations: [],
+    hiringConfidenceTier: "NONE",
+    hiringConfidenceConcreteEvidence: false,
+    opportunityRecommendation: { recommendation: "INVESTIGATE_MORE", score: 0.5, reasons: [], risks: [], missingEvidence: [], nextBestAction: "", requiresApproval: true, recommendationVersion: 1 },
+    conversion: null,
+    ...overrides,
+  } as CompanyValidationRecord;
+}
+
+test("summarizeDelegatedWork: cuenta trabajo real de Website Intelligence/Contact Intelligence/Email Verification/Sales -- nunca inventa una AgentTask nueva, solo resume companyValidations real", () => {
+  const validations = [
+    companyValidationFixture({ emailsExtracted: 3, emailsVerified: 2, contactsFound: 1, companyContactPointsCreated: 2 }),
+    companyValidationFixture({ emailsExtracted: 0, emailsVerified: 0, contactsFound: 0, companyContactPointsCreated: 0 }),
+    companyValidationFixture({ emailsExtracted: 1, emailsVerified: 1, contactsFound: 2, companyContactPointsCreated: 1 }),
+  ];
+  const summary = summarizeDelegatedWork(validations);
+  assert.equal(summary.companiesEvaluated, 3);
+  // 2 de 3 tuvieron señal real de Website Intelligence (email extraído o contact point creado).
+  assert.equal(summary.websiteIntelligenceCompanies, 2);
+  assert.equal(summary.contactIntelligenceContactsFound, 3); // 1 + 0 + 2
+  assert.equal(summary.emailVerificationVerifiedCount, 3); // 2 + 0 + 1
+  assert.equal(summary.salesConversionEvaluated, 3); // las 3 tienen opportunityRecommendation real
+});
+
+test("summarizeDelegatedWork: sin ninguna empresa, todo en 0 -- nunca un valor inventado", () => {
+  const summary = summarizeDelegatedWork([]);
+  assert.deepEqual(summary, {
+    companiesEvaluated: 0,
+    websiteIntelligenceCompanies: 0,
+    contactIntelligenceContactsFound: 0,
+    emailVerificationVerifiedCount: 0,
+    salesConversionEvaluated: 0,
+  });
+});
+
 // ---------- ejecución real (Prisma + providers mockeados) ----------
 
 test("query ejecutada una sola vez: 1 query planificada -> 1 queryExecution, cuenta cruda/aceptada correctas", async () => {
@@ -228,19 +329,46 @@ test("F28: Company.discoveredByAgentTaskId es el child task 'discover_companies'
   assert.notEqual(company.discoveredByAgentTaskId, rootMission.id, "NUNCA debe ser el id de la misión raíz -- esa confusión es exactamente el bug que este test previene");
 });
 
-test("F14: refinamiento geográfico -- objetivo no cubierto en ronda 1 dispara los estados vecinos soportados, y termina PARTIAL si ninguno aporta empresas nuevas", async () => {
-  const tenantId = await setupTenant("refinement-neighbors-exhausted");
-  // Mismo candidato fijo para cualquier query -- simula honestamente el
-  // caso real donde solo existe 1 empresa relevante y ampliar a estados
-  // vecinos no encuentra nada nuevo (degradación honesta, no un bug).
+// F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+// este test validaba el comportamiento VIEJO -- ronda 3 (estados
+// vecinos) disparaba siempre que la ronda 1 no alcanzara el volumen
+// pedido, aunque la misión pidiera explícitamente un solo estado. Eso
+// generaba búsquedas reales contra IN/WI/IA/MO para "en Illinois" a
+// secas, nunca autorizado. Se reemplaza por dos tests: el caso normal
+// (un solo estado, nunca expande) y el caso con expansión ya autorizada
+// (plan.states con más de un estado -- "estados vecinos"/"Midwest" ya
+// detectado por geo.ts -- ahí sí corresponde).
+
+test("F28: un solo estado en el plan (el caso normal, 'en Illinois' a secas) -- la ronda 3 NUNCA se dispara aunque la ronda 1 no cubra el objetivo", async () => {
+  const tenantId = await setupTenant("refinement-single-state-never-expands");
   const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
   const plan = manufacturingPlan({
     objective: { type: "find_companies", targetCompanyCount: 5, rawText: "5 empresas de manufactura" },
     stopConditions: { maxCompanies: 5, maxCostUsd: 3, maxDurationMinutes: 60 },
+    states: ["IL"],
   });
   const report = await run(tenantId, plan, providers);
 
-  // IL (estado del plan) tiene 4 vecinos soportados en NEARBY_SUPPORTED_
+  // Sin ronda 3: solo la ronda 1 (1 query) corre -- nunca IN/WI/IA/MO.
+  assert.equal(report.queriesExecuted, 1);
+  assert.equal(report.rawResults, 1);
+  assert.equal(report.acceptedResults, 1);
+  assert.equal(report.companiesCreated, 1);
+  assert.equal(report.duplicatesWithinMission, 0);
+  assert.equal(report.missionState, "PARTIAL"); // 1 de 5 pedidas, nunca se intentó expandir sin autorización
+});
+
+test("F28: plan con expansión ya autorizada (varios estados, ej. 'Illinois y estados vecinos') -- la ronda 3 sí corre contra los vecinos reales", async () => {
+  const tenantId = await setupTenant("refinement-multi-state-authorized");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const plan = manufacturingPlan({
+    objective: { type: "find_companies", targetCompanyCount: 5, rawText: "5 empresas de manufactura" },
+    stopConditions: { maxCompanies: 5, maxCostUsd: 3, maxDurationMinutes: 60 },
+    states: ["IL", "IN", "WI", "IA", "MO"],
+  });
+  const report = await run(tenantId, plan, providers);
+
+  // IL (estado primario) tiene 4 vecinos soportados en NEARBY_SUPPORTED_
   // STATES (IN, WI, IA, MO) -- ronda 1 (1 query) + ronda 3 (4 queries, una
   // por vecino) = 5 ejecuciones. plan.cities está vacío, así que la ronda
   // 2 (mismos términos, sin ciudad) no aporta queries nuevas.
@@ -363,11 +491,12 @@ test("dedup: candidato coincide con una Company ya existente en el CRM (mismo do
   const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
   const report = await run(tenantId, manufacturingPlan(), providers);
   assert.equal(report.companiesCreated, 0);
-  // F14: como ninguna empresa NUEVA se crea nunca (el único candidato
-  // siempre matchea el dominio ya existente), el objetivo (1) nunca se
-  // cubre y el refinamiento agota los 4 estados vecinos de IL -- el mismo
-  // duplicado se detecta 5 veces (ronda 1 + 4 vecinas), nunca solo 1.
-  assert.equal(report.duplicatesAlreadyInCrm, 5);
+  // F28 (antes F14): el plan por default es de un solo estado (IL) --
+  // aunque ninguna empresa NUEVA se cree nunca (el único candidato
+  // siempre matchea el dominio ya existente) y el objetivo (1) nunca se
+  // cubra, la ronda 3 (estados vecinos) ya no dispara sin autorización
+  // explícita -- el duplicado se detecta solo 1 vez (ronda 1), nunca 5.
+  assert.equal(report.duplicatesAlreadyInCrm, 1);
 });
 
 test("Prairie Manufacturing Co. (DEMO_SEED) nunca se re-crea como descubrimiento nuevo", async () => {
@@ -385,12 +514,11 @@ test("Prairie Manufacturing Co. (DEMO_SEED) nunca se re-crea como descubrimiento
   });
   const report = await run(tenantId, manufacturingPlan(), providers);
   assert.equal(report.companiesCreated, 0, "un candidato con el mismo nombre+ciudad+estado que un DEMO_SEED nunca debe crearse como nuevo");
-  // F14: el objetivo (1) nunca se cubre (0 creadas) así que el
-  // refinamiento agota los 4 estados vecinos de IL -- prueba además que
-  // el fix de identity (state confirmado del candidato, no el de la
-  // query) sigue detectando el mismo DEMO_SEED aunque la query de
-  // refinamiento haya buscado en un estado vecino distinto de IL.
-  assert.equal(report.duplicatesAlreadyInCrm, 5);
+  // F28 (antes F14): el plan por default es de un solo estado (IL) -- el
+  // objetivo (1) nunca se cubre (0 creadas), pero la ronda 3 (estados
+  // vecinos) ya no dispara sin autorización explícita -- el DEMO_SEED se
+  // detecta solo 1 vez (ronda 1), nunca 5.
+  assert.equal(report.duplicatesAlreadyInCrm, 1);
 });
 
 test("Discovery en F7.3 crea Company, pero nunca Lead/Opportunity/Campaign/Contact/CompanyContactPoint", async () => {
@@ -430,18 +558,14 @@ test("categoria sin bucket de Industry real (hospitality): se ejecuta la query p
   const report = await run(tenantId, hotelPlan, providers);
 
   assert.equal(report.companiesCreated, 0);
-  // F14: como ninguna empresa se crea nunca (siempre rechazada por falta
-  // de bucket), el objetivo (1) nunca se cubre y el refinamiento agota
-  // los 4 estados vecinos de IL -- 5 ejecuciones en total (honestidad de
-  // costo/conteo), pero el candidato solo se RECHAZA una vez: aunque
-  // nunca se persiste como Company, sus claves de identidad igual se
-  // registran (unique dentro de deduplicateDiscoveryCandidates) al
-  // pasar por el candidate loop en ronda 1 -- las 4 reapariciones en
-  // ronda 3 se reconocen como el mismo candidato ya visto (duplicado),
-  // nunca se re-rechaza 5 veces por la misma razón.
-  assert.equal(report.queriesExecuted, 5);
+  // F28 (antes F14): el plan por default es de un solo estado (IL) --
+  // aunque ninguna empresa se cree nunca (siempre rechazada por falta de
+  // bucket) y el objetivo (1) nunca se cubra, la ronda 3 (estados
+  // vecinos) ya no dispara sin autorización explícita -- solo la ronda 1
+  // corre (1 ejecución), el candidato se rechaza una sola vez.
+  assert.equal(report.queriesExecuted, 1);
   assert.equal(report.rejectedResults, 1);
-  assert.equal(report.duplicatesWithinMission, 4);
+  assert.equal(report.duplicatesWithinMission, 0);
   assert.ok(report.rejectedCandidates[0]!.reason.includes("bucket"));
 });
 

@@ -1258,19 +1258,24 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
               Tareas delegadas ({detail.childTasks.length})
             </p>
             <div className="space-y-1.5">
-              {detail.childTasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-center justify-between rounded-md border border-border p-2 text-xs"
-                >
-                  <span>
-                    {task.agentKey} · {formatStatusLabel(task.type)}
-                  </span>
-                  <Badge variant={task.status === "DONE" || task.status === "AWAITING_APPROVAL" ? "success" : "neutral"}>
-                    {formatStatusLabel(task.status)}
-                  </Badge>
-                </div>
-              ))}
+              {detail.childTasks.map((task) => {
+                const delegatedWorkSummary = formatDelegatedWorkSummary(task.output);
+                return (
+                  <div key={task.id} className="rounded-md border border-border p-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span>
+                        {task.agentKey} · {formatStatusLabel(task.type)}
+                      </span>
+                      <Badge variant={task.status === "DONE" || task.status === "AWAITING_APPROVAL" ? "success" : "neutral"}>
+                        {formatStatusLabel(task.status)}
+                      </Badge>
+                    </div>
+                    {delegatedWorkSummary && (
+                      <p className="mt-1 text-muted-foreground">Trabajo delegado real: {delegatedWorkSummary}</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
           </>
@@ -1292,6 +1297,32 @@ function formatDuration(ms: number): string {
   const s = totalSeconds % 60;
   const pad = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}h ${pad(m)}m` : m > 0 ? `${m}m ${pad(s)}s` : `${s}s`;
+}
+
+// F28 (misión real de Hospitality, 2026-07-28): "Tareas delegadas" solo
+// mostraba 1 fila (discovery) para el camino dinámico de descubrimiento
+// -- Website Intelligence/Contact Intelligence/Email Verification/Sales
+// sí corrieron de verdad DENTRO de esa misma AgentTask (nunca crearon
+// una propia). Esto no inventa ninguna tarea nueva -- solo formatea el
+// resumen real que ya viaja en task.output.delegatedWorkSummary (ver
+// summarizeDelegatedWork, apps/api/mission-executor.ts).
+interface DelegatedWorkSummary {
+  websiteIntelligenceCompanies: number;
+  contactIntelligenceContactsFound: number;
+  emailVerificationVerifiedCount: number;
+  salesConversionEvaluated: number;
+}
+
+function formatDelegatedWorkSummary(output: unknown): string | null {
+  if (!output || typeof output !== "object" || !("delegatedWorkSummary" in output)) return null;
+  const summary = (output as { delegatedWorkSummary?: DelegatedWorkSummary }).delegatedWorkSummary;
+  if (!summary) return null;
+  const parts: string[] = [];
+  if (summary.websiteIntelligenceCompanies > 0) parts.push(`Website Intelligence: ${summary.websiteIntelligenceCompanies} empresas`);
+  if (summary.contactIntelligenceContactsFound > 0) parts.push(`Contact Intelligence: ${summary.contactIntelligenceContactsFound} contactos`);
+  if (summary.emailVerificationVerifiedCount > 0) parts.push(`Email Verification: ${summary.emailVerificationVerifiedCount} emails verificados`);
+  if (summary.salesConversionEvaluated > 0) parts.push(`Sales: ${summary.salesConversionEvaluated} empresas evaluadas`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function MissionCard({ mission, onOpenDetail }: { mission: MissionListItem; onOpenDetail: () => void }) {
