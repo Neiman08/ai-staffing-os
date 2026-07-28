@@ -57,8 +57,8 @@ test("getTaxonomyEntry devuelve la entrada real por key, y undefined para una ke
   assert.equal(getTaxonomyEntry("no-existe"), undefined);
 });
 
-test("crmIndustryBucket, cuando no es null, es una de las 5 Industry reales del CRM (Construction/Warehouse-Logistics/Manufacturing/General Labor/Hospitality)", () => {
-  const REAL_INDUSTRIES = new Set(["Construction", "Warehouse/Logistics", "Manufacturing", "General Labor", "Hospitality"]);
+test("crmIndustryBucket, cuando no es null, es una de las 6 Industry reales del CRM (Construction/Warehouse-Logistics/Manufacturing/General Labor/Hospitality/Landscaping & Lawn Care)", () => {
+  const REAL_INDUSTRIES = new Set(["Construction", "Warehouse/Logistics", "Manufacturing", "General Labor", "Hospitality", "Landscaping & Lawn Care"]);
   for (const entry of BUSINESS_TAXONOMY) {
     if (entry.crmIndustryBucket !== null) {
       assert.ok(
@@ -73,9 +73,12 @@ test("crmIndustryBucket, cuando no es null, es una de las 5 Industry reales del 
 // ("Hospitality", packages/db/prisma/seed.ts) -- antes quedaba sin
 // bucket y cualquier candidato real de hoteles se rechazaba al
 // persistir ("Sin bucket de Industry real aprobado"), aunque el
-// descubrimiento externo (Google Places) sí los encontraba.
-test("healthcare/janitorial/commercial_cleaning/landscaping/restaurants/retail quedan sin bucket real (interpretación conservadora, no se inventa una industria)", () => {
-  const expectedNull = ["healthcare", "janitorial", "commercial_cleaning", "landscaping", "restaurants", "retail"];
+// descubrimiento externo (Google Places) sí los encontraba. F28 (misión
+// real 2026-07-27/28, decisión explícita del PO 2026-07-28): landscaping
+// tuvo exactamente el mismo problema real -- ahora también tiene bucket
+// real, se saca de esta lista.
+test("healthcare/janitorial/commercial_cleaning/restaurants/retail quedan sin bucket real (interpretación conservadora, no se inventa una industria)", () => {
+  const expectedNull = ["healthcare", "janitorial", "commercial_cleaning", "restaurants", "retail"];
   for (const key of expectedNull) {
     assert.equal(getTaxonomyEntry(key)?.crmIndustryBucket, null, `"${key}" debería tener crmIndustryBucket=null`);
   }
@@ -83,4 +86,8 @@ test("healthcare/janitorial/commercial_cleaning/landscaping/restaurants/retail q
 
 test("hospitality tiene bucket real (Hospitality) -- F13, antes null", () => {
   assert.equal(getTaxonomyEntry("hospitality")?.crmIndustryBucket, "Hospitality");
+});
+
+test("landscaping tiene bucket real (Landscaping & Lawn Care) -- F28, antes null", () => {
+  assert.equal(getTaxonomyEntry("landscaping")?.crmIndustryBucket, "Landscaping & Lawn Care");
 });

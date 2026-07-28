@@ -127,7 +127,10 @@ test("data centers: 'Busca data centers que necesiten electricistas.' (título e
 test("landscaping: 'Busca empresas de landscaping.'", () => {
   const intent = interpret("Busca empresas de landscaping.");
   assert.ok(intent.matchedTaxonomyKeys.includes("landscaping"));
-  assert.equal(intent.industries.length, 0);
+  // F28 (decisión explícita del PO, 2026-07-28): landscaping ahora tiene
+  // bucket real ("Landscaping & Lawn Care", ver taxonomy.ts/seed.ts) --
+  // antes era null y esta prueba fijaba ese comportamiento a propósito.
+  assert.deepEqual(intent.industries, ["Landscaping & Lawn Care"]);
 });
 
 // F28 (misión real 2026-07-27): sinónimos ampliados pedidos explícitamente.

@@ -511,6 +511,13 @@ const INDUSTRIES = [
   // cualquier candidato real de Google Places se rechazaba al persistir
   // ("Sin bucket de Industry real aprobado"). Ver taxonomy.ts.
   { id: "industry-hospitality", name: "Hospitality" },
+  // F28 (misión real 2026-07-27/28, landscaping en Illinois): mismo caso
+  // que Hospitality arriba (F13) -- taxonomy.ts tenía "landscaping" con
+  // crmIndustryBucket: null, así que ningún candidato real (por bien
+  // clasificado que estuviera) podía persistirse jamás ("Sin bucket de
+  // Industry real aprobado"). Decisión explícita del PO (2026-07-28):
+  // crear la Industry real. Ver taxonomy.ts.
+  { id: "industry-landscaping-lawn-care", name: "Landscaping & Lawn Care" },
 ];
 
 async function seedIndustries() {

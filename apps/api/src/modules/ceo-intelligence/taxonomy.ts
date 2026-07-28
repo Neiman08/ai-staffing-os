@@ -591,7 +591,13 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "grounds maintenance company",
       "landscape contractor",
     ],
-    crmIndustryBucket: null,
+    // F28 (misión real 2026-07-27/28, landscaping en Illinois, decisión
+    // explícita del PO 2026-07-28): antes null -- ningún candidato podía
+    // persistirse jamás ("Sin bucket de Industry real aprobado"), la
+    // misión encontraba y validaba empresas reales pero terminaba con 0
+    // Leads/Opportunities siempre. Mismo precedente que Hospitality (F13,
+    // ver seed.ts).
+    crmIndustryBucket: "Landscaping & Lawn Care",
     googleSearchPhrases: ["landscaping company", "lawn care company", "landscape maintenance company", "grounds maintenance company"],
     websitePhrases: ["landscaping services", "lawn care", "grounds maintenance", "lawn maintenance", "landscape installation", "landscape design and installation", "commercial landscaping", "residential landscaping"],
     jobTitles: ["Groundskeeper", "Landscape Laborer", "Crew Leader"],
