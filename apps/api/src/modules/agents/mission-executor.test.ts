@@ -202,6 +202,32 @@ test("query ejecutada una sola vez: 1 query planificada -> 1 queryExecution, cue
   assert.equal(report.missionState, "COMPLETED"); // 1 de 1 pedida (target por defecto del fixture)
 });
 
+// F28 (aislamiento entre misiones, hallazgo real 2026-07-27): documenta
+// EXPLÍCITAMENTE el hecho real del que depende el fix de aislamiento en
+// campaign-tools.impl.ts -- Company.discoveredByAgentTaskId apunta al
+// child AgentTask "discover_companies" que executeDiscoveryPlan crea
+// (línea ~712, ver createQueuedTask), NUNCA al id de la misión raíz
+// (daily_revenue_mission). Confundir los dos fue un error real cometido
+// al implementar el fix -- este test existe para que nunca vuelva a
+// pasar desapercibido: si alguien "simplifica" persistAcceptedCandidate
+// para usar el id de la misión raíz en vez del child task, este test lo
+// atrapa de inmediato.
+test("F28: Company.discoveredByAgentTaskId es el child task 'discover_companies', NUNCA el id de la misión raíz", async () => {
+  const tenantId = await setupTenant("discovered-by-child-task-not-root");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const report = await run(tenantId, manufacturingPlan(), providers);
+
+  const companyId = report.createdCompanyIds[0]!;
+  const company = await runWithTenancyContext({ tenantId, userId: `${TEST_PREFIX}-user`, permissions: [] }, () =>
+    prisma.company.findUniqueOrThrow({ where: { id: companyId } }),
+  );
+  const rootMission = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "daily_revenue_mission" } });
+  const discoverChildTask = await prisma.agentTask.findFirstOrThrow({ where: { tenantId, type: "discover_companies", parentTaskId: rootMission.id } });
+
+  assert.equal(company.discoveredByAgentTaskId, discoverChildTask.id, "debe ser el child task discover_companies");
+  assert.notEqual(company.discoveredByAgentTaskId, rootMission.id, "NUNCA debe ser el id de la misión raíz -- esa confusión es exactamente el bug que este test previene");
+});
+
 test("F14: refinamiento geográfico -- objetivo no cubierto en ronda 1 dispara los estados vecinos soportados, y termina PARTIAL si ninguno aporta empresas nuevas", async () => {
   const tenantId = await setupTenant("refinement-neighbors-exhausted");
   // Mismo candidato fijo para cualquier query -- simula honestamente el

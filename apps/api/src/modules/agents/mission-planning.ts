@@ -57,7 +57,8 @@ function buildRestrictionNotesLocal(restrictions: MissionRestrictions): string[]
   if (!restrictions.allowCampaignCreation) notes.push("No se creó ninguna Campaign — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOpportunityCreation) notes.push("No se crearon Opportunities — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOutreach) notes.push("No se planificó ninguna secuencia de outreach — la instrucción lo prohibió explícitamente.");
-  if (!restrictions.allowMessageSending) notes.push("No se redactó ningún mensaje/borrador — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowMessageSending) notes.push("Ningún correo se enviará automáticamente — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowDraftCreation) notes.push("No se redactó ningún mensaje/borrador — la instrucción lo prohibió explícitamente.");
   return notes;
 }
 

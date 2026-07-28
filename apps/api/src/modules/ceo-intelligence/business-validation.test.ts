@@ -9,6 +9,8 @@ function baseInput(overrides: Partial<BusinessValidationInput>): BusinessValidat
     taxonomyKey: "",
     city: null,
     state: null,
+    allowedStates: [],
+    missionSpecificTaxonomyKeys: [],
     missionExclusions: [],
     providerTypes: [],
     description: null,
@@ -339,6 +341,150 @@ test("F16 guardrail (c): agregar evidencia nueva solo puede mantener o aumentar 
   for (let i = 1; i < scoreOrder.length; i++) {
     assert.ok(scoreOrder[i]! >= scoreOrder[i - 1]!, `esperaba que la confianza nunca bajara: ${JSON.stringify(scoreOrder)}`);
   }
+});
+
+// ---------- F28: restricción geográfica estricta (hallazgo real 2026-07-27) ----------
+
+test("estado real fuera de allowedStates -> REJECTED, sin importar la evidencia de industria", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "ABC Roofing Contractor", taxonomyKey: "roofing", state: "IN", allowedStates: ["IL"] }),
+  );
+  assert.equal(result.accepted, false);
+  assert.equal(result.confidence, "REJECTED");
+  assert.ok(result.rejectionReasons[0]!.includes("IN"));
+});
+
+test("estado real dentro de allowedStates -> nunca se rechaza por geografía", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "ABC Roofing Contractor", taxonomyKey: "roofing", state: "IL", allowedStates: ["IL"] }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+test("allowedStates vacío (la misión no restringió ningún estado) -> nunca rechaza por geografía", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "ABC Roofing Contractor", taxonomyKey: "roofing", state: "IN", allowedStates: [] }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+test("state real desconocido (null, proveedor sin address_components) -> nunca rechaza por geografía (no se inventa evidencia)", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "ABC Roofing Contractor", taxonomyKey: "roofing", state: null, allowedStates: ["IL"] }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+// ---------- F28: validación de industria para roofing (hallazgo real 2026-07-27) ----------
+// "IRPINO Construction", "BEAR Construction Company", "Cruz Construction
+// Company", "State Construction Co", "Walton Contractors" -- 5 empresas
+// generales de construcción que la misión real de roofing aceptó como
+// si fueran roofing, únicamente por venir de la query genérica
+// "construction company" y pertenecer al mismo bucket Construction.
+
+test("data center encontrado vía la query genérica 'construction company' en una misión de roofing -> RECHAZADO (sin evidencia real de roofing)", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "IRPINO Construction", taxonomyKey: "construction", missionSpecificTaxonomyKeys: ["roofing"] }),
+  );
+  assert.equal(result.accepted, false);
+  assert.equal(result.confidence, "REJECTED");
+  assert.ok(result.rejectionReasons[0]!.toLowerCase().includes("roofing"));
+});
+
+test("general contractor genérico ('BEAR Construction Company') en una misión de roofing -> RECHAZADO", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "BEAR Construction Company", taxonomyKey: "construction", missionSpecificTaxonomyKeys: ["roofing"] }),
+  );
+  assert.equal(result.accepted, false);
+});
+
+test("candidato de la query genérica CON evidencia real de roofing en el nombre -> aceptado (la señal exigida SÍ está presente)", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "ABC Roofing & Construction", taxonomyKey: "construction", missionSpecificTaxonomyKeys: ["roofing"] }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+test("candidato de la query genérica CON evidencia real de roofing en providerTypes (categoría real de Google Places) -> aceptado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({
+      candidateName: "Prairie State Builders",
+      taxonomyKey: "construction",
+      missionSpecificTaxonomyKeys: ["roofing"],
+      providerTypes: ["roofing_contractor"],
+    }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+test("candidato de la query genérica CON descripción real que confirma instalación/reparación de techos -> aceptado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({
+      candidateName: "Prairie State Builders",
+      taxonomyKey: "construction",
+      missionSpecificTaxonomyKeys: ["roofing"],
+      description: "We specialize in roof repair and roof installation for commercial properties.",
+    }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+test("un candidato encontrado DIRECTAMENTE por la query específica 'roofing contractor' (taxonomyKey=roofing, no genérica) nunca se ve afectado por este chequeo cruzado, sin importar missionSpecificTaxonomyKeys", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Champion Roofing Company", taxonomyKey: "roofing", missionSpecificTaxonomyKeys: ["roofing"] }),
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT", "roofing no es isGenericFallback -- el chequeo cruzado nunca se activa para su propia entrada específica");
+});
+
+test("sin ningún trade específico en la misión (missionSpecificTaxonomyKeys vacío), la query genérica se acepta como siempre (comportamiento preexistente para misiones genéricas reales)", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "IRPINO Construction", taxonomyKey: "construction", missionSpecificTaxonomyKeys: [] }),
+  );
+  assert.equal(result.accepted, true);
+});
+
+// ---------- F28: Landscaping & Lawn Care (misión real 2026-07-27) ----------
+
+test("landscaping válido: 'ABC Lawn Care & Landscape Maintenance' -> EXACT, aceptado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "ABC Lawn Care & Landscape Maintenance", website: "https://abclawncare.com", taxonomyKey: "landscaping" }),
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("landscaping válido: descripción real de instalación/mantenimiento comercial -> STRONG, aceptado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({
+      candidateName: "Midwest Grounds Solutions",
+      description: "We provide commercial landscaping and lawn maintenance for offices and HOAs across the region.",
+      taxonomyKey: "landscaping",
+    }),
+  );
+  assert.equal(result.accepted, true);
+  assert.ok(result.confidence === "STRONG" || result.confidence === "EXACT");
+});
+
+test("landscaping inválido: garden center / vivero -> rechazado (retail/supply, no servicio)", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Green Valley Garden Center", taxonomyKey: "landscaping" }));
+  assert.equal(result.accepted, false);
+  assert.equal(result.confidence, "REJECTED");
+});
+
+test("landscaping inválido: nursery -> rechazado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Oak Hill Nursery", taxonomyKey: "landscaping" }));
+  assert.equal(result.accepted, false);
+});
+
+test("landscaping inválido: mulch supplier -> rechazado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Central Illinois Mulch Supplier", taxonomyKey: "landscaping" }));
+  assert.equal(result.accepted, false);
+});
+
+test("landscaping inválido: landscape supply store -> rechazado", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Prairie Landscape Supply Store", taxonomyKey: "landscaping" }));
+  assert.equal(result.accepted, false);
 });
 
 test("F16 guardrail (d): ninguna estrategia de búsqueda futura puede afectar la clasificación de negocio -- garantía a nivel de TIPOS, no solo de comportamiento: si alguien reintroduce un campo de texto de búsqueda en BusinessValidationInput, esta línea deja de compilar", () => {

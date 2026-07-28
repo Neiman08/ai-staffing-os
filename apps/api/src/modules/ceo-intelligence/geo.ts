@@ -108,12 +108,28 @@ export interface GeoMatch {
   states: string[];
 }
 
+// F28 (restricción geográfica estricta, pedido explícito): "en
+// Illinois" nunca debe expandirse solo por sí mismo -- la expansión
+// regional exige una frase EXPLÍCITA real, ES/EN, que la pida. Reusa
+// NEARBY_SUPPORTED_STATES (arriba, ya existía pero ningún camino real
+// lo llamaba) para "estados vecinos"/"neighboring states"; MIDWEST_STATES
+// es un conjunto fijo y trazable (los 8 estados reales de
+// SUPPORTED_STATE_CODES que son geográficamente Midwest -- TX excluido
+// a propósito, no lo es).
+const NEIGHBORING_STATES_RE = /estados\s+vecinos|neighboring\s+states?/i;
+const MIDWEST_RE = /\bmidwest\b/i;
+const MIDWEST_STATES = ["IL", "IN", "IA", "NE", "WI", "MI", "OH", "MO"];
+
 /**
  * Detecta ciudades/estados conocidos en un texto -- pura, determinista.
  * Un estado se infiere de una ciudad reconocida aunque el texto no lo
  * nombre explícitamente (ej. "Chicago" -> IL); nunca al revés (nombrar
  * un estado no inventa una ciudad). Códigos de 2 letras se reconocen
  * como palabra completa (evita que "IL" matchee dentro de otra palabra).
+ * Expansión regional SOLO con autorización explícita en el texto (ver
+ * NEIGHBORING_STATES_RE/MIDWEST_RE arriba) -- nunca automática por
+ * default (F28, pedido explícito: "en Illinois" nunca expande a
+ * Indiana/Wisconsin/Iowa/Missouri por su cuenta).
  */
 export function detectCitiesAndStates(rawInstruction: string): GeoMatch {
   const normalized = normalizeText(rawInstruction);
@@ -132,6 +148,19 @@ export function detectCitiesAndStates(rawInstruction: string): GeoMatch {
     const codeRe = new RegExp(`(?:^|[^a-z0-9])${code.toLowerCase()}(?:$|[^a-z0-9])`, "i");
     if (codeRe.test(` ${rawInstruction} `) || normalized.includes(normalizeText(fullName))) {
       states.add(code);
+    }
+  }
+
+  if (MIDWEST_RE.test(rawInstruction)) {
+    for (const code of MIDWEST_STATES) states.add(code);
+  } else if (NEIGHBORING_STATES_RE.test(rawInstruction)) {
+    // "vecinos de QUÉ" -- solo tiene sentido expandir a partir de un
+    // estado ya detectado explícitamente en el mismo texto (nunca
+    // inventa un estado base). Sin ningún estado base, la frase no
+    // aporta nada real -- degradación honesta, mismo criterio que
+    // NEARBY_SUPPORTED_STATES para un estado sin vecinos soportados.
+    for (const base of Array.from(states)) {
+      for (const nearby of NEARBY_SUPPORTED_STATES[base] ?? []) states.add(nearby);
     }
   }
 

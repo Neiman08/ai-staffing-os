@@ -216,7 +216,18 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
             city: campaign.city ?? undefined,
             estimatedSize: sizes ? { in: sizes as never } : undefined,
             commercialScore: campaign.minScore != null ? { gte: campaign.minScore } : undefined,
-            id: { notIn: excludedElsewhere.map((c) => c.companyId) },
+            // F28: Company.discoveredByAgentTaskId apunta al child task
+            // "discover_companies" (ver executeDiscoveryPlan,
+            // mission-executor.ts:717-1024 -- persistAcceptedCandidate
+            // recibe childTask.id, NUNCA el id de la misión raíz) -- así
+            // que filtrar por el id de la misión ahí NUNCA hubiera
+            // matcheado nada real. Por eso el aislamiento de abajo usa
+            // restrictToCompanyIds (ids explícitos y reales, ver
+            // DiscoveryExecutionReport.createdCompanyIds), no ese campo.
+            id: {
+              notIn: excludedElsewhere.map((c) => c.companyId),
+              in: input.restrictToCompanyIds ?? undefined,
+            },
             // F18: nunca ofrecer candidatos de Discovery sin validar como
             // target de campaña -- ver Company.commercialStatus.
             commercialStatus: "COMMERCIAL_VALIDATED",

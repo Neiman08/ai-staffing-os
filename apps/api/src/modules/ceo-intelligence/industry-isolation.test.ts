@@ -22,6 +22,8 @@ function baseInput(overrides: Partial<BusinessValidationInput>): BusinessValidat
     taxonomyKey: "",
     city: null,
     state: null,
+    allowedStates: [],
+    missionSpecificTaxonomyKeys: [],
     missionExclusions: [],
     providerTypes: [],
     description: null,

@@ -381,7 +381,11 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     key: "roofing",
     label: "Roofing Contractors",
     synonyms: ["roofing", "roofers", "roofing contractor", "techos", "techado"],
-    companyTypes: ["roofing contractor", "roofing company"],
+    // F28: "roofing" (sin sufijo) agregado -- un nombre real rara vez
+    // dice literal "... Company"/"... Contractor" (ej. "Champion
+    // Roofing, Inc.", "Blue Line Roofing & Exteriors"), y
+    // matchPhrasesInText exige la frase completa como substring.
+    companyTypes: ["roofing", "roofing contractor", "roofing company"],
     crmIndustryBucket: "Construction",
     googleSearchPhrases: ["roofing contractor", "roofing company"],
     websitePhrases: ["roofing services", "roof repair", "roof installation"],
@@ -543,19 +547,74 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
   },
   {
     key: "landscaping",
-    label: "Landscaping",
-    synonyms: ["landscaping", "landscaping company", "jardineria", "paisajismo", "lawn care"],
-    companyTypes: ["landscaping company", "lawn care company"],
+    label: "Landscaping & Lawn Care",
+    // F28 (hallazgo real, misión landscaping 2026-07-27): vocabulario
+    // ampliado a pedido explícito del PO -- "landscape maintenance",
+    // "grounds maintenance", "lawn maintenance", "outdoor services",
+    // "landscape contractor", "landscape management" deben activar la
+    // MISMA entrada real. "snow and landscape services" se agrega como
+    // FRASE COMPUESTA completa a propósito (nunca "snow removal" suelto)
+    // -- containsWord exige la frase entera como substring, así que una
+    // empresa de solo quitanieves nunca matchea acá, únicamente una que
+    // ya presta ambos servicios juntos (pedido explícito: "cuando la
+    // empresa también preste landscaping").
+    synonyms: [
+      "landscaping",
+      "landscaping company",
+      "jardineria",
+      "paisajismo",
+      "lawn care",
+      "landscape maintenance",
+      "grounds maintenance",
+      "lawn maintenance",
+      "outdoor services",
+      "landscape contractor",
+      "landscape management",
+      "snow and landscape services",
+      "mantenimiento de jardines",
+      "mantenimiento de cesped",
+    ],
+    // F28: formas SIN sufijo ("lawn care", "landscape maintenance")
+    // agregadas junto a las formas con "company"/"contractor" -- un
+    // nombre real de negocio rara vez dice literal "... Company" (ej.
+    // "ABC Lawn Care", no "ABC Lawn Care Company"), y matchPhrasesInText
+    // exige la frase completa como substring, así que sin esto un
+    // candidato real con evidencia fuerte en el nombre caía a WEAK.
+    companyTypes: [
+      "landscaping",
+      "landscaping company",
+      "lawn care",
+      "lawn care company",
+      "landscape maintenance",
+      "landscape maintenance company",
+      "grounds maintenance",
+      "grounds maintenance company",
+      "landscape contractor",
+    ],
     crmIndustryBucket: null,
-    googleSearchPhrases: ["landscaping company", "lawn care company"],
-    websitePhrases: ["landscaping services", "lawn care", "grounds maintenance"],
+    googleSearchPhrases: ["landscaping company", "lawn care company", "landscape maintenance company", "grounds maintenance company"],
+    websitePhrases: ["landscaping services", "lawn care", "grounds maintenance", "lawn maintenance", "landscape installation", "landscape design and installation", "commercial landscaping", "residential landscaping"],
     jobTitles: ["Groundskeeper", "Landscape Laborer", "Crew Leader"],
     decisionMakers: ["Owner", "President", "Operations Manager", "Branch Manager", "HR Manager"],
-    negativeKeywords: ["staffing agency", "garden retail store"],
+    // F28: excluye NEGOCIOS DE RETAIL/SUPPLY reales -- una tienda que
+    // vende mulch/plantas/insumos no es una empresa de SERVICIO de
+    // landscaping, sin importar cuánto se parezca el nombre. "Solo
+    // deben aceptarse [empresas de diseño puro] si existe evidencia
+    // pública de que también prestan servicios... de instalación o
+    // mantenimiento" (pedido explícito) -- esta parte NO es un
+    // negativeKeyword (bloquearía "design" también en sitios de
+    // full-service reales que mencionan diseño como uno de varios
+    // servicios); se maneja con evidencia POSITIVA requerida arriba
+    // (websitePhrases prioriza instalación/mantenimiento/servicio real,
+    // nunca solo "design") -- límite conocido del validador actual
+    // (keyword-based, sin evaluación semántica), documentado a
+    // propósito en vez de fingir resolverlo con una exclusión que
+    // rechazaría negocios reales.
+    negativeKeywords: ["staffing agency", "garden retail store", "garden center", "nursery", "mulch supplier", "landscape supply store", "outdoor retail"],
     relatedIndustries: ["construction"],
-    validations: ["El sitio ofrece servicios de paisajismo/jardinería reales"],
+    validations: ["El sitio ofrece servicios reales de instalación o mantenimiento de landscaping/lawn care (comercial o residencial), no solo venta de insumos o diseño"],
     isGenericFallback: false,
-    version: 1,
+    version: 2,
   },
   {
     key: "restaurants",

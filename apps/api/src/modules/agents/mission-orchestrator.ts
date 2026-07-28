@@ -69,12 +69,17 @@ function log(missionTaskId: string, event: string, data?: Record<string, unknown
 }
 
 /** Corrección estructural: un mensaje explícito por cada restricción aplicada — nunca silencioso. Usado tanto al lanzar la misión como al arrancar el pipeline. */
-function buildRestrictionNotes(restrictions: MissionRestrictions): string[] {
+export function buildRestrictionNotes(restrictions: MissionRestrictions): string[] {
   const notes: string[] = [];
   if (!restrictions.allowCampaignCreation) notes.push("No se creó ninguna Campaign — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOpportunityCreation) notes.push("No se crearon Opportunities — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOutreach) notes.push("No se planificó ninguna secuencia de outreach — la instrucción lo prohibió explícitamente.");
-  if (!restrictions.allowMessageSending) notes.push("No se redactó ningún mensaje/borrador — la instrucción lo prohibió explícitamente.");
+  // F28: allowMessageSending nunca gatea la redacción (ver
+  // allowDraftCreation) -- este mensaje ahora refleja lo que ese flag
+  // realmente controla. El envío real, de todos modos, siempre requiere
+  // el click humano de "Enviar" en Approvals, sin importar este flag.
+  if (!restrictions.allowMessageSending) notes.push("Ningún correo se enviará automáticamente — la instrucción lo prohibió explícitamente (el envío real siempre requiere aprobación humana explícita).");
+  if (!restrictions.allowDraftCreation) notes.push("No se redactó ningún borrador — la instrucción lo prohibió explícitamente.");
   return notes;
 }
 
@@ -268,7 +273,7 @@ async function runAutoExternalDiscoveryFallback(
   targetJobTitles: string[],
   decisionRoles: string[],
   categoryIds: string[],
-): Promise<void> {
+): Promise<{ createdCompanyIds: string[] }> {
   log(missionTaskId, "auto external discovery fallback started", {
     reason: "internal CRM supply insufficient for the requested volume",
     searchQueries: plan.searchQueries.length,
@@ -310,6 +315,13 @@ async function runAutoExternalDiscoveryFallback(
     stopReason: report.stopReason,
     categoriesAttached: categoryIds.length > 0 ? categoryIds.length : 0,
   });
+
+  // F28 (aislamiento entre misiones, hallazgo real 2026-07-27): se
+  // devuelve el conjunto REAL de ids creados por esta corrida -- el
+  // único ancla confiable para que el loop de selección de más abajo se
+  // limite a lo que ESTA misión descubrió, ver el comentario de diseño
+  // en campaign-tools.impl.ts sobre por qué un AgentTask id no sirve acá.
+  return { createdCompanyIds: report.createdCompanyIds };
 }
 
 /**
@@ -447,6 +459,13 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
   // que "conformarse" pase lo que pase, así que el fallback corre
   // igual, con o sin número explícito (el caso real que reportó el PO:
   // Hospitality antes de esta fase).
+  // F28 (aislamiento entre misiones, hallazgo real 2026-07-27): cuando
+  // esta misión descubre empresas nuevas, la selección de abajo debe
+  // limitarse a ESAS -- nunca al resto del CRM que matchea la misma
+  // industria/estado por coincidencia (el bug real: roofing con 25
+  // empresas nuevas terminó "seleccionando" 33, arrastrando compañías
+  // de una misión anterior de data centers, mismo bucket Construction).
+  let discoveredCompanyIdsThisMission: string[] | null = null;
   const explicitVolumeInsufficient = interpreted.desiredVolume != null;
   if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0)) {
     // Bug real encontrado en auditoría: sin excluir DEMO_SEED/INTERNAL_TEST
@@ -467,7 +486,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
         : 0;
     if (internalSupply < perCampaignVolume) {
       if ((await checkForStop()) === "stop") return;
-      await runAutoExternalDiscoveryFallback(
+      const fallbackResult = await runAutoExternalDiscoveryFallback(
         missionTaskId,
         externalPlan,
         externalIntent.restrictions,
@@ -476,6 +495,7 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
         externalIntent.decisionRoles,
         categoryIds,
       );
+      discoveredCompanyIdsThisMission = fallbackResult.createdCompanyIds;
       await syncMissionOutput(missionTaskId, "RUNNING", { appliedRestrictions: restrictions, restrictionNotes });
     }
   }
@@ -526,7 +546,16 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       const selectTask = await createAndRunTaskSync(tenantId, operatorUserId, {
         agentKey: "campaign",
         type: "select_target_companies",
-        input: { campaignId, limit: perCampaignVolume },
+        input: {
+          campaignId,
+          limit: perCampaignVolume,
+          // F28: solo se pasa cuando esta misión descubrió empresas
+          // nuevas -- si el CRM ya tenía suficiente oferta interna (sin
+          // descubrimiento nuevo), la selección amplia por industria/
+          // estado sigue siendo el comportamiento correcto ("trabajar
+          // sobre la base existente" es exactamente ese caso).
+          restrictToCompanyIds: discoveredCompanyIdsThisMission ?? undefined,
+        },
         triggeredBy: "AGENT",
         parentTaskId: missionTaskId,
       });
@@ -547,6 +576,10 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
             // para no gastar score_company/create_lead en candidatos que
             // el gate va a bloquear de todos modos.
             commercialStatus: "COMMERCIAL_VALIDATED",
+            // F28: mismo criterio de aislamiento que la rama con
+            // Campaign, arriba -- ids reales, nunca un AgentTask id (ver
+            // comentario de diseño en campaign-tools.impl.ts).
+            id: discoveredCompanyIdsThisMission ? { in: discoveredCompanyIdsThisMission } : undefined,
           },
           orderBy: [{ commercialScore: "desc" }, { createdAt: "asc" }],
           take: perCampaignVolume,
@@ -609,10 +642,18 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
       // Corrección estructural: sin Campaign no hay CampaignCompany —
       // outreach (plan_sequence/personalize_message) es estructuralmente
       // imposible sin una, independiente de allowOutreach/
-      // allowMessageSending (que además también lo bloquean si hay
+      // allowDraftCreation (que además también lo bloquean si hay
       // Campaign). No es una limitación oculta: restrictionNotes ya
       // registró explícitamente por qué no se creó la Campaign.
-      if (!campaignId || !restrictions.allowOutreach) continue;
+      //
+      // F28: se entra a este bloque si CUALQUIERA de los dos permite
+      // avanzar -- allowOutreach (secuencia/outreach amplio) O
+      // allowDraftCreation (solo redactar, aunque el envío esté
+      // prohibido). "No envíes correos automáticamente" nunca debe
+      // impedir plan_sequence/personalize_message; ver allowMessageSending
+      // más abajo, que sigue sin tener ningún efecto acá (el envío real
+      // solo ocurre por el click humano de "Enviar" en Approvals).
+      if (!campaignId || (!restrictions.allowOutreach && !restrictions.allowDraftCreation)) continue;
 
       // Pre-F11 audit: CampaignCompany was just added to STRICT_TENANT_MODELS
       // — per the F8 composite-unique-key limitation, findUnique's redirect to
@@ -637,12 +678,16 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
 
       if ((await checkForStop()) === "stop") return;
 
-      // Corrección estructural: el paso que redacta un borrador de
-      // mensaje (lo único que produce contenido pensado para alguien
-      // fuera del tenant) tiene su propio flag — se puede planificar la
-      // secuencia (arriba) sin necesariamente redactar el primer mensaje,
-      // si la instrucción prohibió el envío pero no el plan.
-      if (restrictions.allowMessageSending) {
+      // F28 (hallazgo real, misiones roofing/landscaping 2026-07-27): el
+      // paso que redacta un borrador de mensaje (lo único que produce
+      // contenido pensado para alguien fuera del tenant) tiene su propio
+      // flag REAL, allowDraftCreation -- antes era allowMessageSending,
+      // que "no enviar correos automáticamente" también apaga, así que
+      // una instrucción que pedía explícitamente "Crea... Drafts" con
+      // "No envíes correos automáticamente" terminaba sin ningún Draft.
+      // El envío real sigue exigiendo el click humano de "Enviar" en
+      // Approvals sin importar este flag -- eso nunca cambió.
+      if (restrictions.allowDraftCreation) {
         await createAndRunTaskSync(tenantId, operatorUserId, {
           agentKey: "outreach",
           type: "personalize_message",

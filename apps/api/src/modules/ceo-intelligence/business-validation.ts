@@ -90,7 +90,29 @@ export interface BusinessValidationInput {
   website: string | null;
   taxonomyKey: string;
   city: string | null;
+  // F28 (hallazgo real, misiones roofing/landscaping 2026-07-27): el
+  // estado REAL detectado del candidato (Google Places address_components,
+  // ver google-places.ts) -- antes este campo recibía el estado de la
+  // QUERY (lo que se buscó), nunca el del negocio encontrado, así que
+  // ninguna empresa fuera del estado pedido podía rechazarse nunca por
+  // esto (el campo existía pero jamás se leía acá).
   state: string | null;
+  // F28: estados a los que la misión restringió la búsqueda ("en
+  // Illinois" -> ["IL"]) -- vacío cuando la instrucción no mencionó
+  // ningún estado (sin restricción real que aplicar). Población real:
+  // MissionPlan.states (mission-planner.ts, geo.ts) -- nunca inventado
+  // acá.
+  allowedStates: string[];
+  // F28 (validación de industria para roofing, hallazgo real
+  // 2026-07-27): keys NO genéricas (isGenericFallback=false) que la
+  // misión también matcheó, además de `taxonomyKey` -- ej. una misión
+  // de "roofing" que además matcheó "construction" (isGenericFallback)
+  // por la palabra "contratistas". Cuando el candidato fue encontrado
+  // vía una entrada GENÉRICA, exige evidencia real de al menos uno de
+  // estos trades específicos -- nunca alcanza con pertenecer al mismo
+  // bucket amplio (Construction). Vacío = la misión no pidió ningún
+  // trade específico además del genérico, nada que exigir.
+  missionSpecificTaxonomyKeys: string[];
   missionExclusions: string[];
   // Categorías reales que el proveedor de discovery le asigna al
   // candidato -- Google Places `place.types` (ej. "electrician"). Puede
@@ -184,6 +206,20 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
   const normalizedName = normalizeText(input.candidateName);
   const domain = domainOf(input.website);
 
+  // F28 (restricción geográfica estricta, hallazgo real 2026-07-27):
+  // cuando la misión restringió explícitamente a uno o más estados
+  // ("en Illinois" -> allowedStates=["IL"]), un candidato con estado
+  // real detectado FUERA de esa lista se rechaza sin importar cuán
+  // buena sea el resto de su evidencia -- coincidir con la industria
+  // nunca alcanza si está en el estado equivocado. allowedStates vacío
+  // (la instrucción no restringió ningún estado) nunca rechaza por
+  // esto -- no hay nada real que aplicar.
+  if (input.allowedStates.length > 0 && input.state && !input.allowedStates.includes(input.state)) {
+    return buildEmptyResult("REJECTED", [
+      `La empresa está en "${input.state}", fuera de los estados a los que la misión restringió la búsqueda (${input.allowedStates.join(", ")}).`,
+    ]);
+  }
+
   for (const exclusion of input.missionExclusions) {
     if (exclusion.trim() && containsWord(normalizedName, normalizeText(exclusion))) {
       return buildEmptyResult("REJECTED", [
@@ -202,13 +238,38 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
     ]);
   }
 
-  const nameMatches = matchPhrasesInText(input.candidateName, entry.companyTypes);
   // Google Places (y proveedores similares) devuelven categorías como
   // slugs con guion bajo (ej. "general_contractor", "hvac_contractor")
   // -- se normalizan a espacios antes de comparar contra las frases
   // humanas de la taxonomía ("general contractor"), sin lo cual nunca
   // matchearían pese a ser evidencia real y directa.
   const providerTypesText = input.providerTypes.map((t) => t.replace(/_/g, " ")).join(" ");
+
+  // F28 (validación de industria para roofing, hallazgo real
+  // 2026-07-27): un candidato encontrado vía una entrada GENÉRICA
+  // (isGenericFallback=true, ej. "construction") cuando la misión
+  // TAMBIÉN pidió un trade específico (ej. "roofing") nunca se acepta
+  // solo por matchear el bucket amplio -- exige evidencia real de al
+  // menos uno de esos trades específicos (nombre/categoría de Google
+  // Places/descripción), la misma señal que ya usa el resto de esta
+  // función, aplicada contra las entradas específicas en vez de la
+  // genérica que encontró al candidato.
+  if (entry.isGenericFallback && input.missionSpecificTaxonomyKeys.length > 0) {
+    const specificEntries = input.missionSpecificTaxonomyKeys.map((key) => getTaxonomyEntry(key)).filter((e): e is BusinessTaxonomyEntry => e !== undefined);
+    const hasSpecificTradeEvidence = specificEntries.some(
+      (specificEntry) =>
+        matchPhrasesInText(input.candidateName, specificEntry.companyTypes).length > 0 ||
+        matchPhrasesInText(providerTypesText, specificEntry.companyTypes).length > 0 ||
+        matchPhrasesInText(input.description, specificEntry.websitePhrases).length > 0,
+    );
+    if (!hasSpecificTradeEvidence) {
+      return buildEmptyResult("REJECTED", [
+        `Encontrada vía una query genérica ("${entry.label}"), pero la misión pidió específicamente: ${specificEntries.map((e) => e.label).join(", ")} -- sin ninguna evidencia real de esos trades (nombre, categoría de Google Places, o descripción del sitio).`,
+      ]);
+    }
+  }
+
+  const nameMatches = matchPhrasesInText(input.candidateName, entry.companyTypes);
   const providerTypeMatches = matchPhrasesInText(providerTypesText, entry.companyTypes);
   const domainMatches = matchWordsInDomain(domain, singleWordItems(entry.companyTypes));
   const descriptionMatches = matchPhrasesInText(input.description, entry.websitePhrases);

@@ -12,8 +12,37 @@ const PHONE_RE = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/g;
 // fuera un dato real encontrado.
 const PLACEHOLDER_DOMAINS = ["example.com", "example.org", "yourdomain.com", "domain.com", "email.com", "sentry.io", "wixpress.com"];
 
+// F28 (calidad de emails organizacionales, hallazgo real 2026-07-27):
+// "admin@www.advancedroofing.biz" persistido tal cual -- el dominio real
+// de la empresa es "advancedroofing.biz", "www." es un prefijo de host
+// web, nunca parte del dominio de correo real (ninguna empresa espera
+// que le escriban a "@www.suempresa.com"). Se normaliza ACÁ, en el
+// único punto de entrada real de un email extraído (mailto: o texto
+// plano), antes de deduplicar/persistir -- nunca se guarda ni se
+// compara la forma sin normalizar.
+export function normalizeEmailDomain(email: string): string {
+  const at = email.lastIndexOf("@");
+  if (at === -1) return email;
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1).replace(/^www\./i, "");
+  return `${local}@${domain}`;
+}
+
+// F28: sintaxis real más allá de lo que ya exige EMAIL_RE -- rechaza
+// local-part/dominio vacíos tras normalizar, dominios con doble punto,
+// o un dominio que quedó vacío porque el email ERA literalmente
+// "algo@www." (el prefijo completo, sin nada real detrás).
+function isSyntacticallyValidEmail(email: string): boolean {
+  const at = email.lastIndexOf("@");
+  if (at <= 0 || at === email.length - 1) return false;
+  const domain = email.slice(at + 1);
+  if (!domain || domain.startsWith(".") || domain.endsWith(".") || domain.includes("..")) return false;
+  return true;
+}
+
 function isPlausibleEmail(email: string): boolean {
   const lower = email.toLowerCase();
+  if (!isSyntacticallyValidEmail(lower)) return false;
   if (PLACEHOLDER_DOMAINS.some((d) => lower.endsWith(`@${d}`))) return false;
   // extensiones de archivo que a veces matchean el patrón de email por error (ej. "logo@2x.png")
   if (/\.(png|jpe?g|gif|svg|webp|css|js)$/i.test(lower)) return false;
@@ -204,7 +233,8 @@ export function extractFromPage(html: string, pageUrl: string): PageExtraction {
   const mailtoEmails = new Set<string>();
   $('a[href^="mailto:"]').each((_, el) => {
     const href = $(el).attr("href") ?? "";
-    const email = href.replace(/^mailto:/i, "").split("?")[0]?.trim().toLowerCase();
+    const rawEmail = href.replace(/^mailto:/i, "").split("?")[0]?.trim().toLowerCase();
+    const email = rawEmail ? normalizeEmailDomain(rawEmail) : rawEmail;
     if (email && EMAIL_RE.test(email) && isPlausibleEmail(email)) {
       mailtoEmails.add(email);
       genericEmailSet.set(email, { email, sourceUrl: pageUrl });
@@ -245,7 +275,7 @@ export function extractFromPage(html: string, pageUrl: string): PageExtraction {
   const bodyText = $("body").text();
   const plainMatches = bodyText.match(EMAIL_RE) ?? [];
   for (const raw of plainMatches) {
-    const email = raw.toLowerCase();
+    const email = normalizeEmailDomain(raw.toLowerCase());
     if (!mailtoEmails.has(email) && isPlausibleEmail(email) && !genericEmailSet.has(email)) {
       genericEmailSet.set(email, { email, sourceUrl: pageUrl });
     }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterActuallyUnrecognizedTerms } from "./ceo-tools.impl";
+import { filterActuallyUnrecognizedTerms, reportClaimsContactWithoutRealSends } from "./ceo-tools.impl";
 
 /**
  * F14 (escenario 9 de la validación pedida): "Industrial", "Commercial",
@@ -101,4 +101,52 @@ test("F16 debt fix: los mismos alias cortos SÍ quedan como unrecognized sin nin
   const rawInstruction = "Busca contratistas eléctricos reales en Texas. Prioriza empresas relacionadas con Compass, Vantage, STACK, Aligned, Switch.";
   const result = filterActuallyUnrecognizedTerms(["Compass", "Vantage", "STACK", "Aligned", "Switch"], [], rawInstruction);
   assert.deepEqual(result, ["Compass", "Vantage", "STACK", "Aligned", "Switch"]);
+});
+
+// ---------- F28 (G): capacidades/objetos del producto nunca son "no reconocidos" ----------
+// Reproduce EXACTO el caso real de la misión de roofing: "Ejecuta
+// Discovery, Company Enrichment, Contact Intelligence y Email
+// Verification. Crea Leads, Opportunities y Drafts únicamente... hiring
+// signals o growth signals" quedó completo en unrecognizedTerms.
+
+test("Discovery, Company Enrichment, Contact Intelligence, Email Verification, Leads, Opportunities, Drafts nunca quedan como unrecognized", () => {
+  const terms = ["Discovery", "Company Enrichment", "Contact Intelligence", "Email Verification", "Leads", "Opportunities", "Drafts"];
+  const result = filterActuallyUnrecognizedTerms(terms, [], "Ejecuta Discovery, Company Enrichment, Contact Intelligence y Email Verification. Crea Leads, Opportunities y Drafts únicamente.");
+  assert.deepEqual(result, []);
+});
+
+test("'señales de contratación o crecimiento' (hiring signals + growth signals, compuesto) nunca queda como unrecognized -- caso real reportado", () => {
+  const result = filterActuallyUnrecognizedTerms(["señales de contratación o crecimiento"], [], "Prioriza empresas con señales de contratación o crecimiento.");
+  assert.deepEqual(result, []);
+});
+
+test("'hiring signals'/'growth signals' (inglés) nunca quedan como unrecognized", () => {
+  const result = filterActuallyUnrecognizedTerms(["hiring signals", "growth signals"], [], "Prioritize hiring signals and growth signals.");
+  assert.deepEqual(result, []);
+});
+
+test("un término genuinamente desconocido SIGUE quedando como unrecognized -- el filtro de capacidades no vuelve todo permisivo", () => {
+  const result = filterActuallyUnrecognizedTerms(["quantum widget assembly"], [], "Busca empresas de quantum widget assembly.");
+  assert.deepEqual(result, ["quantum widget assembly"]);
+});
+
+// ---------- F28 (F): invariante del Executive Report -- nunca "contactadas" sin envíos reales ----------
+
+test("reportClaimsContactWithoutRealSends: 'empresas contactadas' con emailsSentCount=0 -> true (viola el invariante, caso real reportado)", () => {
+  const report = "El objetivo fue buscar 25 empresas de roofing. De las 29 empresas contactadas, 12 no tienen ningún punto de contacto real.";
+  assert.equal(reportClaimsContactWithoutRealSends(report, 0), true);
+});
+
+test("reportClaimsContactWithoutRealSends: 'contacted' (inglés) con emailsSentCount=0 -> true", () => {
+  assert.equal(reportClaimsContactWithoutRealSends("17 companies were contacted successfully.", 0), true);
+});
+
+test("reportClaimsContactWithoutRealSends: mismo texto, pero emailsSentCount > 0 -> false (es verdad, sí se contactó)", () => {
+  const report = "El objetivo fue buscar 25 empresas de roofing. De las 29 empresas contactadas, 12 no tienen ningún punto de contacto real.";
+  assert.equal(reportClaimsContactWithoutRealSends(report, 6), false);
+});
+
+test("reportClaimsContactWithoutRealSends: reporte honesto que solo habla de borradores -> false, nunca un falso positivo", () => {
+  const report = "Se generaron 6 borradores pendientes de aprobación humana. Ningún correo fue enviado todavía.";
+  assert.equal(reportClaimsContactWithoutRealSends(report, 0), false);
 });

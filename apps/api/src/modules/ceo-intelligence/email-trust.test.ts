@@ -205,3 +205,59 @@ test("misma entrada siempre produce el mismo resultado (determinista)", () => {
   const input = { rawEmail: "hr@generalmanufacturing.net", companyWebsite: "https://generalmanufacturing.net" };
   assert.deepEqual(validateEmailTrust(input), validateEmailTrust(input));
 });
+
+// ---------- F28 (H): normalización de dominio -- www. nunca sobrevive (hallazgo real 2026-07-27) ----------
+
+test("normalizeEmail: 'admin@www.advancedroofing.biz' (caso real reportado) -> dominio sin 'www.'", () => {
+  const result = normalizeEmail("admin@www.advancedroofing.biz");
+  assert.equal(result.valid, true);
+  assert.equal(result.value, "admin@advancedroofing.biz");
+  assert.equal(result.domain, "advancedroofing.biz");
+});
+
+test("normalizeEmail: 'WWW.' en mayúsculas también se elimina (normalización ya baja a minúsculas antes)", () => {
+  const result = normalizeEmail("info@WWW.Example-Real-Company.com");
+  assert.equal(result.value, "info@example-real-company.com");
+});
+
+test("normalizeEmail: un dominio que legítimamente empieza con 'www' como parte del nombre (no como subdominio) nunca se trunca -- solo se quita el prefijo literal 'www.'", () => {
+  // "wwwidgets.com" no tiene el prefijo "www." (falta el punto) -- debe conservarse intacto.
+  const result = normalizeEmail("sales@wwwidgets.com");
+  assert.equal(result.value, "sales@wwwidgets.com");
+});
+
+test("normalizeEmail: rechaza sintácticamente inválidos reales (sin @, dominio vacío, doble arroba)", () => {
+  assert.equal(normalizeEmail("not-an-email").valid, false);
+  assert.equal(normalizeEmail("missing-domain@").valid, false);
+  assert.equal(normalizeEmail("two@@at.com").valid, false);
+});
+
+test("validateEmailTrust: email con 'www.' en el dominio SÍ matchea el sitio oficial una vez normalizado (antes hubiera quedado sin match limpio)", () => {
+  const result = validateEmailTrust({ rawEmail: "admin@www.advancedroofing.biz", companyWebsite: "https://advancedroofing.biz" });
+  assert.equal(result.normalizedEmail, "admin@advancedroofing.biz");
+  assert.equal(result.status, "VERIFIED");
+  assert.equal(result.matchedOfficialDomain, true);
+});
+
+// ---------- F28 (H): clasificación de genéricos reales (admin@, all@) ----------
+
+test("classifyContactPointType: 'admin@' se clasifica como INFO (genérico administrativo, caso real reportado)", () => {
+  assert.equal(classifyContactPointType("admin@advancedroofing.biz"), "INFO");
+});
+
+test("classifyContactPointType: 'all@' se clasifica como INFO (broadcast genérico, caso real reportado: all@state1construction.com)", () => {
+  assert.equal(classifyContactPointType("all@state1construction.com"), "INFO");
+});
+
+// ---------- F28 (H): nunca marcar VERIFIED solo por venir de una extracción -- exige coincidencia real de dominio ----------
+
+test("validateEmailTrust: un email 'extraído' sin ningún website de empresa conocido NUNCA es VERIFIED -- queda UNKNOWN, nunca se asume confianza por default", () => {
+  const result = validateEmailTrust({ rawEmail: "contact@somesite.com", companyWebsite: null });
+  assert.notEqual(result.status, "VERIFIED");
+  assert.equal(result.status, "UNKNOWN");
+});
+
+test("validateEmailTrust: un email extraído de una página con dominio CLARAMENTE distinto al de la empresa nunca es VERIFIED ni RISKY -- INVALID real, nunca 'confianza por extracción'", () => {
+  const result = validateEmailTrust({ rawEmail: "random@totally-unrelated-domain.com", companyWebsite: "https://realcompany.com" });
+  assert.equal(result.status, "INVALID");
+});

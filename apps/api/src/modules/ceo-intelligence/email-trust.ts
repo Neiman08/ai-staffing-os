@@ -79,11 +79,22 @@ export function normalizeEmail(raw: string | null | undefined): NormalizedEmail 
     // decode inválido -- se sigue con el crudo, la validación de sintaxis lo rechaza si corresponde
   }
 
-  const cleaned = decoded
+  const withoutQuotes = decoded
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "")
     .replace(/^["'<]+|["'>]+$/g, "");
+
+  // F28 (calidad de emails organizacionales, hallazgo real 2026-07-27):
+  // "admin@www.advancedroofing.biz" persistido tal cual -- "www." es un
+  // prefijo de host web, nunca parte de un dominio de correo real.
+  // Normalizado ACÁ, en la fuente canónica de validación de confianza,
+  // defensa en profundidad además del extractor (website-intelligence/
+  // extract.ts) -- cualquier email que llegue a este módulo por otra vía
+  // queda igual de limpio.
+  const atIndex = withoutQuotes.lastIndexOf("@");
+  const cleaned =
+    atIndex === -1 ? withoutQuotes : `${withoutQuotes.slice(0, atIndex)}@${withoutQuotes.slice(atIndex + 1).replace(/^www\./, "")}`;
 
   if (!EMAIL_RE.test(cleaned)) {
     return { value: null, valid: false, reason: "invalid_syntax", wasUrlEncoded: decoded !== withoutParams, domain: null };
@@ -135,7 +146,11 @@ const LOCAL_PART_TYPE_RULES: Array<{ keywords: string[]; type: CompanyContactPoi
   { keywords: ["press", "media"], type: "PRESS" },
   { keywords: ["billing", "accounting", "invoice"], type: "BILLING" },
   { keywords: ["procurement", "purchasing", "vendor"], type: "PROCUREMENT" },
-  { keywords: ["info", "contact", "hello", "general", "office"], type: "INFO" },
+  // F28 (calidad de emails organizacionales, hallazgo real 2026-07-27):
+  // "admin@"/"all@" son direcciones genéricas reales que aparecieron sin
+  // clasificar (OTHER) -- ninguna es un rol específico, ambas son
+  // bandejas generales/administrativas, mismo tipo que info@/office@.
+  { keywords: ["info", "contact", "hello", "general", "office", "admin", "all"], type: "INFO" },
 ];
 
 // Palabras clave de 3 letras o menos ("hr") solo cuentan como match si

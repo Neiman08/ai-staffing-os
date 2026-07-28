@@ -130,6 +130,33 @@ test("landscaping: 'Busca empresas de landscaping.'", () => {
   assert.equal(intent.industries.length, 0);
 });
 
+// F28 (misión real 2026-07-27): sinónimos ampliados pedidos explícitamente.
+const LANDSCAPING_SYNONYM_INSTRUCTIONS = [
+  "Busca empresas de lawn care en Illinois.",
+  "Busca empresas de landscape maintenance en Illinois.",
+  "Busca empresas de grounds maintenance en Illinois.",
+  "Busca empresas de lawn maintenance en Illinois.",
+  "Busca empresas de outdoor services en Illinois.",
+  "Busca empresas landscape contractor en Illinois.",
+  "Busca empresas de landscape management en Illinois.",
+];
+for (const instruction of LANDSCAPING_SYNONYM_INSTRUCTIONS) {
+  test(`landscaping: reconoce sinónimo real -- "${instruction}"`, () => {
+    const intent = interpret(instruction);
+    assert.ok(intent.matchedTaxonomyKeys.includes("landscaping"), `no matcheó "landscaping" para: ${instruction}`);
+  });
+}
+
+test("landscaping: 'snow and landscape services' (frase compuesta) SÍ matchea landscaping", () => {
+  const intent = interpret("Busca empresas de snow and landscape services en Illinois.");
+  assert.ok(intent.matchedTaxonomyKeys.includes("landscaping"));
+});
+
+test("landscaping: 'snow removal' solo (sin landscaping) NUNCA matchea landscaping -- pedido explícito: solo cuenta si la empresa también presta landscaping", () => {
+  const intent = interpret("Busca empresas de snow removal en Illinois.");
+  assert.ok(!intent.matchedTaxonomyKeys.includes("landscaping"), "snow removal solo no debe activar landscaping");
+});
+
 test("plantas industriales: 'Busca plantas industriales que necesiten Maintenance Technicians.' (doble plural en español + plural en inglés)", () => {
   const intent = interpret("Busca plantas industriales que necesiten Maintenance Technicians.");
   assert.ok(intent.matchedTaxonomyKeys.includes("manufacturing"));

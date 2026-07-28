@@ -48,6 +48,16 @@ export interface MissionProgress {
   pipelineValueUsd: number;
   sequencesPlanned: number;
   draftsAwaitingApproval: number;
+  // F28 (reportes limitados a la misión actual, hallazgo real
+  // 2026-07-27): conteo real de envíos -- distinto de
+  // draftsAwaitingApproval (borrador creado, PENDING) y de
+  // companiesWithContactPoint (MissionContactCoverage, contacto
+  // encontrado). Cuenta ApprovalRequest.status="SENT" cuyo agentTaskId
+  // es un personalize_message HIJO de esta misión -- la única fuente
+  // real de "se envió un correo de verdad", nunca inferida de otro
+  // número. Usado para que el Executive Report nunca pueda decir
+  // "empresas contactadas" cuando esto es 0.
+  emailsSentCount: number;
   costUsdSoFar: number;
   objectiveProgress: ObjectiveProgress;
 }
@@ -84,6 +94,16 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
     personalizeMessageTaskIds.length > 0
       ? await scopedDb.approvalRequest.count({
           where: { agentTaskId: { in: personalizeMessageTaskIds }, status: "PENDING" },
+        })
+      : 0;
+  // F28: mismo universo real (ApprovalRequest generados por los
+  // personalize_message de ESTA misión), status="SENT" -- la única
+  // fuente real de "se envió un correo de verdad" (nunca "READY_TO_SEND"
+  // ni "PENDING", esos todavía no salieron).
+  const emailsSentCount =
+    personalizeMessageTaskIds.length > 0
+      ? await scopedDb.approvalRequest.count({
+          where: { agentTaskId: { in: personalizeMessageTaskIds }, status: "SENT" },
         })
       : 0;
 
@@ -132,9 +152,32 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
     pipelineValueUsd,
     sequencesPlanned,
     draftsAwaitingApproval,
+    emailsSentCount,
     costUsdSoFar,
     objectiveProgress,
   };
+}
+
+// F28 (reportes limitados a la misión actual, hallazgo real
+// 2026-07-27): un LLM que genera texto libre no es 100% consistente con
+// sus propias instrucciones ("nunca inventes un número que no esté
+// listado" en el prompt de abajo) -- el hallazgo real fue un Executive
+// Report que decía "29 empresas contactadas" cuando emailsSentCount
+// real era 0. Defensa en profundidad determinista, mismo criterio que
+// filterActuallyUnrecognizedTerms/industryNames de este archivo: nunca
+// confiar ciegamente en el LLM, verificar contra el dato real después.
+// Vocabulario deliberadamente amplio (ES/EN) -- un falso negativo acá
+// (una frase de "contactado" que no se detecta) es mucho peor que un
+// falso positivo (fuerza el fallback determinista de más abajo, que
+// sigue siendo 100% honesto, solo menos narrativo).
+const CONTACTED_CLAIM_RE = /\bcontact(ad[ao]s?|ando)\b|\bcontacted\b|\bcorreos?\s+enviados\b|\bemails?\s+sent\b/i;
+
+export function reportClaimsContactWithoutRealSends(report: string, emailsSentCount: number): boolean {
+  return emailsSentCount === 0 && CONTACTED_CLAIM_RE.test(report);
+}
+
+function buildDeterministicReport(progress: MissionProgress, contactCoverageLine: string): string {
+  return `Objetivo: ${progress.objectiveProgress.rawText} — progreso: ${progress.objectiveProgress.current} ${progress.objectiveProgress.unit}${progress.objectiveProgress.percentComplete != null ? ` (${progress.objectiveProgress.percentComplete.toFixed(0)}%)` : ""}. Empresas: ${progress.companiesTargeted}, leads: ${progress.leadsCreated}, oportunidades: ${progress.opportunitiesCreated}, borradores pendientes de aprobación: ${progress.draftsAwaitingApproval}, correos realmente enviados: ${progress.emailsSentCount}. ${contactCoverageLine}`;
 }
 
 export interface MissionContactCoverage {
@@ -273,6 +316,39 @@ export async function computeContactCoverage(missionTaskId: string): Promise<Mis
  * esos clientes ya resueltos -- nunca se vuelve a evaluar el término
  * solo para esto.
  */
+// F28 (hallazgo real, misiones roofing/landscaping 2026-07-27): "Ejecuta
+// Discovery, Company Enrichment, Contact Intelligence y Email
+// Verification. Crea Leads, Opportunities y Drafts... hiring signals o
+// growth signals" listado COMPLETO en unrecognizedTerms -- estas son
+// capacidades/objetos reales del propio producto (lo que la instrucción
+// está invocando explícitamente), nunca un sector/industria, así que
+// nunca deberían evaluarse contra ese vocabulario. Vocabulario cerrado,
+// ES/EN -- mismo criterio que CRITICAL_INFRASTRUCTURE_CLIENTS abajo:
+// una lista real y trazable, nunca una heurística de "palabra
+// capitalizada" que podría atrapar un sector real por accidente.
+const KNOWN_CAPABILITY_TERMS = [
+  "discovery",
+  "descubrimiento",
+  "company enrichment",
+  "enriquecimiento de empresas",
+  "enriquecimiento de compañias",
+  "contact intelligence",
+  "inteligencia de contactos",
+  "email verification",
+  "verificacion de email",
+  "verificacion de correo",
+  "verificacion de emails",
+  "leads",
+  "opportunities",
+  "oportunidades",
+  "drafts",
+  "borradores",
+  "hiring signals",
+  "senales de contratacion",
+  "growth signals",
+  "senales de crecimiento",
+].map((t) => normalizeText(t));
+
 export function filterActuallyUnrecognizedTerms(
   unrecognizedTerms: string[],
   externalSearchTerms: string[],
@@ -311,6 +387,15 @@ export function filterActuallyUnrecognizedTerms(
     // tampoco "no reconocido". Comparado contra los alias YA resueltos
     // arriba con el contexto completo, nunca reevaluado aislado.
     if (recognizedClientAliasesNormalized.has(normalizedTerm)) return false;
+    // (d) F28: capacidad/objeto real del producto (Discovery, Leads,
+    // Drafts, hiring signals...) -- nunca un sector, nunca "no
+    // reconocido". Bidireccional, mismo criterio que (a): el término del
+    // LLM puede venir más largo (ej. "hiring signals o growth signals"
+    // como un solo fragmento) o más corto que la frase cerrada.
+    const isKnownCapabilityTerm = KNOWN_CAPABILITY_TERMS.some(
+      (phrase) => normalizedTerm.includes(phrase) || phrase.includes(normalizedTerm),
+    );
+    if (isKnownCapabilityTerm) return false;
     return true;
   });
 }
@@ -348,12 +433,12 @@ Responde ÚNICAMENTE con un JSON de la forma {
   "useExternalDiscovery": <true ÚNICAMENTE si la instrucción menciona EXPLÍCITAMENTE que las empresas deben buscarse FUERA del CRM o que el sistema no las tiene todavía — frases como "fuera del CRM", "que no tengamos en el CRM/sistema", "que no conozcamos todavía", "búsqueda externa", "en internet", "fuentes externas". Es false (default, el caso normal) para CUALQUIER instrucción que solo diga "busca/encuentra empresas de <industria> en <lugar>" sin esa mención explícita — eso significa buscar entre las empresas YA existentes en el CRM, el comportamiento de siempre. La palabra "nueva/nuevas" SOLA (ej. "encontrar 1 empresa nueva") NO activa esto — en el CRM significa "una empresa todavía no targeteada en esta campaña", no "una empresa fuera del CRM". Ante la duda, false.>,
   "externalSearchTerms": [<SOLO cuando useExternalDiscovery es true Y la instrucción del USUARIO menciona EXPLÍCITAMENTE sectores/trades específicos que van más allá de una sola industria genérica del CRM (ej. "empresas de manufactura" NO necesita esto, industryNames alcanza). Nunca agregues acá un sector/trade que la instrucción no nombró — en particular, nunca agregues frases de infraestructura crítica/Data Centers salvo que el usuario las haya pedido explícitamente. Ej. "contratistas eléctricos, baja tensión, fibra óptica, automatización industrial, HVAC" son 5 frases distintas: "electrical contractor", "low voltage contractor", "fiber optic contractor", "industrial automation", "HVAC contractor". Mismo criterio para cualquier otro trade nombrado explícitamente (ej. "mechanical contractor", "controls contractor", "roofing contractor", "data center electrical contractor" -- este último SOLO si el usuario mencionó "data center" o similar).
      Cada elemento es una frase de búsqueda corta EN INGLÉS lista para un buscador tipo Google Places — una frase por cada sector/trade distinto que el usuario nombró, NUNCA una sola frase que intente resumir todos, y NUNCA un sector que el usuario no mencionó. Si la instrucción es de una sola industria genérica sin sectores especializados nombrados, array vacío.],
-  "missionRestrictions": { "allowCampaignCreation": <false ÚNICAMENTE si la instrucción dice explícitamente algo como "no crear campañas"/"sin crear campañas"/"no campaigns" — default true>, "allowOpportunityCreation": <false ÚNICAMENTE si dice "no crear oportunidades"/"no opportunities" — default true>, "allowOutreach": <false ÚNICAMENTE si dice "no enviar correos/mensajes/emails", "no contactar a nadie", "no outreach" — default true>, "allowMessageSending": <mismo criterio que allowOutreach — si se prohíbe uno, el otro también, default true> }
+  "missionRestrictions": { "allowCampaignCreation": <false ÚNICAMENTE si la instrucción dice explícitamente algo como "no crear campañas"/"sin crear campañas"/"no campaigns" — default true>, "allowOpportunityCreation": <false ÚNICAMENTE si dice "no crear oportunidades"/"no opportunities" — default true>, "allowOutreach": <false ÚNICAMENTE si dice "no contactar a nadie"/"no outreach"/"no contact" — una prohibición AMPLIA de alcanzar a alguien, default true>, "allowMessageSending": <false ÚNICAMENTE si dice explícitamente "no enviar/no mandar correos/mensajes/emails" (el envío), "don't send emails", o lo mismo que allowOutreach — default true>, "allowDraftCreation": <false ÚNICAMENTE si la instrucción prohíbe explícitamente REDACTAR/PREPARAR el contenido del mensaje (ej. "no prepares mensajes", "no redactes borradores", "don't draft messages") — default true. CRÍTICO: "no enviar correos automáticamente"/"don't send emails automatically" NUNCA debe poner esto en false — enviar y redactar son acciones DISTINTAS, y una instrucción que pide explícitamente "Crea... Drafts" junto con "no envíes correos" quiere el borrador creado pero NUNCA enviado solo> }
 }
 
-Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores distintos, CADA UNO debe quedar como su propia frase en externalSearchTerms — está PROHIBIDO colapsar varios sectores en una sola industria inventada o en un solo string. Regla crítica de aislamiento: NUNCA mezcles industrias -- externalSearchTerms/industryNames deben reflejar ÚNICAMENTE lo que el usuario pidió en ESTA instrucción, nunca un sector relacionado o adyacente que no nombró (ej. una instrucción de hoteles nunca debe producir términos de Data Centers/Construction/Electrical/Manufacturing/Logistics, y viceversa). Si no podés convertir un término a una frase de búsqueda razonable Y tampoco coincide con una industria/categoría real, listalo tal cual en unrecognizedTerms — nunca lo descartes en silencio.
+Regla crítica: cuando la instrucción lista varios sectores/trades/sub-sectores distintos, CADA UNO debe quedar como su propia frase en externalSearchTerms — está PROHIBIDO colapsar varios sectores en una sola industria inventada o en un solo string. Regla crítica de aislamiento: NUNCA mezcles industrias -- externalSearchTerms/industryNames deben reflejar ÚNICAMENTE lo que el usuario pidió en ESTA instrucción, nunca un sector relacionado o adyacente que no nombró (ej. una instrucción de hoteles nunca debe producir términos de Data Centers/Construction/Electrical/Manufacturing/Logistics, y viceversa). Si no podés convertir un término a una frase de búsqueda razonable Y tampoco coincide con una industria/categoría real, listalo tal cual en unrecognizedTerms — nunca lo descartes en silencio. Excepción: nombres de capacidades/objetos reales del producto (Discovery, Company Enrichment, Contact Intelligence, Email Verification, Leads, Opportunities, Drafts, hiring signals, growth signals, o sus equivalentes en español) NUNCA van en unrecognizedTerms — no son sectores/industrias, son partes del propio sistema que la instrucción está invocando explícitamente.
 
-Regla crítica sobre missionRestrictions: estos 4 flags son SIEMPRE true salvo que la instrucción los prohíba EXPLÍCITAMENTE con una frase negativa clara — nunca los pongas en false por inferencia o por precaución tuya. Esta interpretación es solo una de dos señales que se combinan en código; una segunda verificación determinista revisa el texto literal después, así que es más importante que seas preciso (no le agregues restricciones que el texto no pidió) que "seguro" por las dudas.`;
+Regla crítica sobre missionRestrictions: estos 5 flags son SIEMPRE true salvo que la instrucción los prohíba EXPLÍCITAMENTE con una frase negativa clara — nunca los pongas en false por inferencia o por precaución tuya. allowDraftCreation es INDEPENDIENTE de allowOutreach/allowMessageSending — nunca los acoples entre sí, cada uno responde únicamente a su propia negación explícita en el texto. Esta interpretación es solo una de dos señales que se combinan en código; una segunda verificación determinista revisa el texto literal después, así que es más importante que seas preciso (no le agregues restricciones que el texto no pidió) que "seguro" por las dudas.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -450,11 +535,12 @@ Empresas targeteadas: ${progress.companiesTargeted}
 Leads creados: ${progress.leadsCreated}
 Oportunidades creadas: ${progress.opportunitiesCreated} (pipeline estimado $${progress.pipelineValueUsd.toFixed(2)})
 Secuencias planificadas: ${progress.sequencesPlanned}
-Borradores pendientes de aprobación: ${progress.draftsAwaitingApproval}
+Borradores pendientes de aprobación (creados, NUNCA enviados): ${progress.draftsAwaitingApproval}
+Correos realmente enviados (aprobación humana + envío real confirmado): ${progress.emailsSentCount}
 Costo de IA de la misión: $${progress.costUsdSoFar.toFixed(4)}
 ${contactCoverageLine}
 
-Responde ÚNICAMENTE con un JSON de la forma {"report": "<párrafo ejecutivo de 3-5 frases en español, declarando explícitamente el objetivo y su cumplimiento con los números de arriba — si companiesWithoutContactPoint > 0 o hay proveedores no disponibles, decilo explícitamente y con honestidad (nunca lo presentes como éxito total) — nunca inventes un número que no esté listado>"}.`;
+Responde ÚNICAMENTE con un JSON de la forma {"report": "<párrafo ejecutivo de 3-5 frases en español, declarando explícitamente el objetivo y su cumplimiento con los números de arriba — si companiesWithoutContactPoint > 0 o hay proveedores no disponibles, decilo explícitamente y con honestidad (nunca lo presentes como éxito total) — nunca inventes un número que no esté listado. CRÍTICO: nunca digas 'empresas contactadas' ni ninguna variante de 'contactado/enviado' salvo que 'Correos realmente enviados' arriba sea mayor a 0 -- un borrador creado (draftsAwaitingApproval) NUNCA es una empresa contactada, todavía no salió nada.>"}.`;
 
         const completion = await deps.llmProvider.complete({
           model: DEFAULT_MODEL,
@@ -466,9 +552,16 @@ Responde ÚNICAMENTE con un JSON de la forma {"report": "<párrafo ejecutivo de 
         deps.usage.record(completion);
 
         const parsed = tryParseJson(completion.content, z.object({ report: z.string().min(1) }));
+        // F28: defensa en profundidad determinista -- si el LLM devolvió
+        // texto inválido, O devolvió texto que viola el invariante real
+        // "sin envíos reales, nunca 'contactadas'", se usa el reporte
+        // 100% determinista (nunca la prosa del LLM en ninguno de los
+        // dos casos) -- ver buildDeterministicReport/
+        // reportClaimsContactWithoutRealSends arriba.
         const report =
-          parsed?.report ??
-          `Reporte no disponible (el modelo no devolvió una respuesta válida). Objetivo: ${objectiveProgress.rawText} — progreso: ${objectiveProgress.current} ${objectiveProgress.unit}. Empresas: ${progress.companiesTargeted}, leads: ${progress.leadsCreated}, oportunidades: ${progress.opportunitiesCreated}.`;
+          parsed?.report && !reportClaimsContactWithoutRealSends(parsed.report, progress.emailsSentCount)
+            ? parsed.report
+            : buildDeterministicReport(progress, contactCoverageLine);
 
         return { report, objectiveProgress };
       },

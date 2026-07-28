@@ -29,10 +29,14 @@ import { hasActiveApprovalForCompany } from "../approvals/service";
  * MissionRestrictions (mismo criterio que el pipeline clásico -- ningún
  * flag de "allowLeadCreation" existe en este sistema). Opportunity
  * requiere allowOpportunityCreation. El borrador requiere
- * allowOutreach Y allowMessageSending, ADEMÁS de la elegibilidad real
- * de canal (evaluateDraftEligibility) -- nunca se redacta ni se envía
- * nada si la instrucción lo prohibió explícitamente, sin importar cuán
- * buena sea la evidencia.
+ * allowDraftCreation (F28: antes allowOutreach Y allowMessageSending --
+ * "no enviar correos automáticamente" apagaba ambos y terminaba sin
+ * ningún Draft pese a que la instrucción pedía Drafts explícitamente),
+ * ADEMÁS de la elegibilidad real de canal (evaluateDraftEligibility) --
+ * nunca se redacta nada si la instrucción lo prohibió explícitamente,
+ * sin importar cuán buena sea la evidencia. El envío real sigue siendo
+ * un paso completamente aparte (click humano en Approvals), nunca
+ * gateado acá.
  */
 export interface ConvertDiscoveredCompanyParams {
   taskId: string;
@@ -156,7 +160,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
       });
 
       if (draftEligibility.eligible) {
-        if (!params.restrictions.allowOutreach || !params.restrictions.allowMessageSending) {
+        if (!params.restrictions.allowDraftCreation) {
           draftBlockedByRestriction = true;
         } else {
           const to = params.bestRealContact?.email ?? params.bestVerifiedOrgEmail!;

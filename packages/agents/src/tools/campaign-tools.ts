@@ -40,6 +40,24 @@ export const createCampaignTool: AgentTool<
 export const selectTargetCompaniesInputSchema = z.object({
   campaignId: z.string(),
   limit: z.number().int().positive().max(50).optional(),
+  // F28 (aislamiento entre misiones, hallazgo real 2026-07-27): cuando
+  // la misión actual acaba de descubrir empresas nuevas (external
+  // discovery fallback real, ver mission-orchestrator.ts), la selección
+  // debe limitarse EXCLUSIVAMENTE a esos ids reales (los que
+  // executeDiscoveryPlan/DiscoveryExecutionReport.createdCompanyIds ya
+  // devuelve) -- nunca al resto del CRM que matchea la misma industria/
+  // estado por casualidad (el bug real: una misión de roofing con 25
+  // empresas nuevas terminó con 33 "seleccionadas" porque tomó también
+  // empresas de una misión anterior de data centers, mismo bucket
+  // Construction). Ids explícitos, NUNCA un AgentTask id -- ver el
+  // comentario de diseño en campaign-tools.impl.ts sobre por qué
+  // Company.discoveredByAgentTaskId no sirve acá (apunta al child task
+  // "discover_companies", no a la misión raíz). Opcional: cuando la
+  // misión NO descubrió nada nuevo (ya había suficiente oferta interna
+  // -- el caso real de "trabajar sobre la base existente"), se omite y
+  // el comportamiento de selección amplia por industria/estado sigue
+  // igual que siempre.
+  restrictToCompanyIds: z.array(z.string()).optional(),
 });
 export const selectTargetCompaniesTool: AgentTool<
   z.infer<typeof selectTargetCompaniesInputSchema>,

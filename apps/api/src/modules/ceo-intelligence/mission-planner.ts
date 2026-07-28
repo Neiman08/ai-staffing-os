@@ -224,6 +224,7 @@ function buildRationale(intent: StructuredIntent, steps: MissionPlanStep[]): str
   if (!intent.restrictions.allowCampaignCreation) parts.push("No se creará ninguna Campaign.");
   if (!intent.restrictions.allowOpportunityCreation) parts.push("No se crearán Opportunities.");
   if (!intent.restrictions.allowOutreach) parts.push("No se planificará ningún outreach.");
+  if (!intent.restrictions.allowDraftCreation) parts.push("No se redactará ningún borrador.");
   return parts.join(" ");
 }
 

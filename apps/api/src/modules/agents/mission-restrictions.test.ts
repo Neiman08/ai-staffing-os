@@ -7,6 +7,7 @@ import {
   markProviderStatus,
   resetProviderHealthForTests,
 } from "./tools/provider-health";
+import { buildRestrictionNotes } from "./mission-orchestrator";
 
 /**
  * Corrección estructural (misión Iowa, 2026-07-13): la misión real pidió
@@ -105,16 +106,64 @@ test("detectMissionRestrictionsFromText: 'no crear campañas o oportunidades' bl
   assert.equal(r.allowOpportunityCreation, false);
 });
 
-test("detectMissionRestrictionsFromText: 'no preparar mensajes' bloquea allowMessageSending/allowOutreach (bug F7.2)", () => {
+// F28 (corrección real, misiones roofing/landscaping 2026-07-27): "no
+// preparar mensajes" ahora bloquea EXCLUSIVAMENTE allowDraftCreation --
+// hasta F27 también apagaba allowMessageSending/allowOutreach, que era
+// exactamente la causa de que "no enviar" y "no redactar" quedaran
+// mezclados. "No preparar mensajes" SÍ es una negación explícita de
+// redactar, así que allowDraftCreation debe apagarse -- pero no implica
+// nada sobre outreach/envío, que esta instrucción ni menciona.
+test("detectMissionRestrictionsFromText: 'no preparar mensajes' bloquea únicamente allowDraftCreation (F28, corrige F7.2)", () => {
   const r = detectMissionRestrictionsFromText("Encuentra contactos. No preparar mensajes.");
-  assert.equal(r.allowMessageSending, false);
-  assert.equal(r.allowOutreach, false);
+  assert.equal(r.allowDraftCreation, false);
+  assert.equal(r.allowMessageSending, true, "no preparar borradores no implica prohibir el envío");
+  assert.equal(r.allowOutreach, true, "no preparar borradores no implica prohibir la secuencia de outreach");
 });
 
 test("detectMissionRestrictionsFromText: 'no crear campañas ni oportunidades' no afecta outreach (aislamiento del fix)", () => {
   const r = detectMissionRestrictionsFromText("Busca hoteles en Illinois. No crear campañas ni oportunidades.");
   assert.equal(r.allowOutreach, true);
   assert.equal(r.allowMessageSending, true);
+});
+
+// ---- F28: "no enviar" nunca debe convertirse en "no redactar" --
+// frases equivalentes en español e inglés, exactamente el caso real de
+// las misiones roofing/landscaping (2026-07-27): "Crea Leads,
+// Opportunities y Drafts únicamente. No envíes correos automáticamente."
+
+const NO_AUTO_SEND_EQUIVALENT_PHRASES: Array<{ label: string; instruction: string }> = [
+  { label: "ES - no envíes correos automáticamente", instruction: "Crea Leads, Opportunities y Drafts únicamente. No envíes correos automáticamente." },
+  { label: "ES - no enviar correos", instruction: "Busca 25 empresas de roofing en Illinois. No enviar correos." },
+  { label: "ES - no mandes emails", instruction: "Busca empresas de landscaping. No mandes emails a nadie." },
+  { label: "EN - do not send emails automatically", instruction: "Create Leads, Opportunities and Drafts only. Do not send emails automatically." },
+  { label: "EN - don't send messages", instruction: "Find roofing companies in Illinois. Don't send messages." },
+  { label: "EN - no automatic sending", instruction: "Create Drafts only. No sending emails automatically." },
+];
+
+for (const { label, instruction } of NO_AUTO_SEND_EQUIVALENT_PHRASES) {
+  test(`detectMissionRestrictionsFromText: [${label}] bloquea el envío pero NUNCA la redacción de Drafts`, () => {
+    const r = detectMissionRestrictionsFromText(instruction);
+    assert.equal(r.allowMessageSending, false, `${label}: debe bloquear el envío`);
+    assert.equal(r.allowDraftCreation, true, `${label}: "no enviar" nunca debe bloquear la creación de Drafts`);
+  });
+}
+
+test("detectMissionRestrictionsFromText: modelo de capacidades independientes -- draftCreationAllowed=true, emailSendingAllowed=false, sin acoplar uno con el otro", () => {
+  const r = detectMissionRestrictionsFromText(
+    "Ejecuta Discovery, Company Enrichment, Contact Intelligence y Email Verification. Crea Leads, Opportunities y Drafts únicamente. No envíes correos automáticamente.",
+  );
+  assert.equal(r.allowDraftCreation, true, "draftCreationAllowed");
+  assert.equal(r.allowMessageSending, false, "emailSendingAllowed (negado)");
+  assert.equal(r.allowCampaignCreation, true, "la instrucción no prohibió campañas");
+  assert.equal(r.allowOpportunityCreation, true, "la instrucción no prohibió oportunidades");
+});
+
+test("detectMissionRestrictionsFromText: frases equivalentes ES/EN de 'no redactar' SÍ bloquean allowDraftCreation", () => {
+  const es = detectMissionRestrictionsFromText("Busca empresas de roofing. No redactes borradores.");
+  assert.equal(es.allowDraftCreation, false);
+
+  const en = detectMissionRestrictionsFromText("Find roofing companies. Do not draft messages.");
+  assert.equal(en.allowDraftCreation, false);
 });
 
 // ---- provider-health.ts: distingue "sin datos para esta empresa" de
@@ -140,4 +189,26 @@ test("provider-health: marcar un proveedor CREDIT_EXHAUSTED lo mantiene marcado 
   markProviderStatus("test_provider", "AVAILABLE", "");
   assert.equal(getProviderHealth("test_provider"), null, "marcar AVAILABLE limpia el estado");
   resetProviderHealthForTests();
+});
+
+// ---------- F28 (F): invariante -- nunca reportar un Draft como prohibido cuando allowDraftCreation=true ----------
+
+test("buildRestrictionNotes: allowDraftCreation=true (default) -> ninguna nota dice que no se redactó nada", () => {
+  const notes = buildRestrictionNotes(DEFAULT_MISSION_RESTRICTIONS);
+  assert.equal(notes.length, 0);
+  assert.ok(!notes.some((n) => n.toLowerCase().includes("borrador")));
+});
+
+test("buildRestrictionNotes: 'no enviar correos automáticamente' (allowMessageSending=false, allowDraftCreation=true) -> nota de envío, NUNCA nota de borrador prohibido", () => {
+  const restrictions = detectMissionRestrictionsFromText("Crea Leads, Opportunities y Drafts únicamente. No envíes correos automáticamente.");
+  assert.equal(restrictions.allowDraftCreation, true);
+  const notes = buildRestrictionNotes(restrictions);
+  assert.ok(!notes.some((n) => n.toLowerCase().includes("no se redactó")), `no debía reportar un borrador prohibido: ${JSON.stringify(notes)}`);
+});
+
+test("buildRestrictionNotes: allowDraftCreation=false (negación explícita real) -> SÍ reporta la nota de borrador prohibido", () => {
+  const restrictions = detectMissionRestrictionsFromText("Busca empresas de roofing. No redactes borradores.");
+  assert.equal(restrictions.allowDraftCreation, false);
+  const notes = buildRestrictionNotes(restrictions);
+  assert.ok(notes.some((n) => n.toLowerCase().includes("borrador")));
 });

@@ -540,14 +540,36 @@ interface Candidate extends DiscoveryCandidateLike {
  * conectado la popula todavía en esta etapa (el crawl del sitio llega
  * recién en el enrichment posterior, F7.4 Parte B).
  */
+// F28 (validación de industria para roofing, hallazgo real
+// 2026-07-27): keys NO genéricas presentes en el plan de ESTA misión --
+// se recalcula una vez por candidato (barato, plan.searchQueries es
+// chico) en vez de cachear entre llamadas, misma filosofía "puro y
+// determinista" que el resto de este módulo.
+function missionSpecificTaxonomyKeys(plan: MissionPlan, excludeKey: string): string[] {
+  const uniqueKeys = new Set(plan.searchQueries.map((q) => q.taxonomyKey));
+  return Array.from(uniqueKeys).filter((key) => key !== excludeKey && getTaxonomyEntry(key)?.isGenericFallback === false);
+}
+
 function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActivities: string[]) {
   const website = candidate.raw.fields.website?.status === "CONFIRMED" ? (candidate.raw.fields.website.value as string) : null;
+  // F28 (restricción geográfica estricta, hallazgo real 2026-07-27):
+  // ANTES este campo recibía candidate.query.state -- el estado de la
+  // QUERY (lo que se buscó), nunca el del negocio real encontrado, así
+  // que un candidato fuera de estado con buena evidencia de industria
+  // siempre pasaba. El estado real (Google Places address_components,
+  // ver extractFieldsFromGooglePlace en google-places.ts) SÍ está
+  // disponible en candidate.raw.fields.state -- se usa acá, y se
+  // compara contra plan.states (vacío = la instrucción no restringió
+  // ningún estado, ver validateBusinessCandidate).
+  const detectedState = candidate.raw.fields.state?.status === "CONFIRMED" ? (candidate.raw.fields.state.value as string) : null;
   return validateBusinessCandidate({
     candidateName: candidate.raw.name,
     website,
     taxonomyKey: candidate.query.taxonomyKey,
     city: candidate.query.city,
-    state: candidate.query.state,
+    state: detectedState,
+    allowedStates: plan.states,
+    missionSpecificTaxonomyKeys: missionSpecificTaxonomyKeys(plan, candidate.query.taxonomyKey),
     missionExclusions: plan.exclusions,
     providerTypes: candidate.raw.providerTypes ?? [],
     description: null,
@@ -1541,7 +1563,8 @@ function buildRestrictionsApplied(restrictions: MissionRestrictions): string[] {
   if (!restrictions.allowCampaignCreation) notes.push("No se creó ninguna Campaign — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOpportunityCreation) notes.push("No se crearon Opportunities — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowOutreach) notes.push("No se planificó ningún outreach — la instrucción lo prohibió explícitamente.");
-  if (!restrictions.allowMessageSending) notes.push("No se redactó ningún mensaje — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowMessageSending) notes.push("Ningún correo se enviará automáticamente — la instrucción lo prohibió explícitamente.");
+  if (!restrictions.allowDraftCreation) notes.push("No se redactó ningún mensaje — la instrucción lo prohibió explícitamente.");
   return notes;
 }
 

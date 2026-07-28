@@ -22,6 +22,15 @@ export const missionRestrictionsSchema = z.object({
   allowOpportunityCreation: z.boolean(),
   allowOutreach: z.boolean(),
   allowMessageSending: z.boolean(),
+  // F28 (hallazgo real, misiones roofing/landscaping 2026-07-27): "Crea
+  // Leads, Opportunities y Drafts únicamente. No envíes correos
+  // automáticamente." terminó sin ningún Draft, porque allowMessageSending
+  // (pensado para "no enviar") era el mismo flag que gateaba la creación
+  // del borrador en mission-orchestrator.ts -- "no enviar" nunca debe
+  // significar "no redactar". Flag independiente, default permisivo,
+  // solo se apaga con una negación EXPLÍCITA de redactar/preparar (ver
+  // NO_DRAFT_RE) -- nunca por una frase que solo prohíbe el envío.
+  allowDraftCreation: z.boolean(),
 });
 export type MissionRestrictions = z.infer<typeof missionRestrictionsSchema>;
 
@@ -30,6 +39,7 @@ export const DEFAULT_MISSION_RESTRICTIONS: MissionRestrictions = {
   allowOpportunityCreation: true,
   allowOutreach: true,
   allowMessageSending: true,
+  allowDraftCreation: true,
 };
 
 function normalize(text: string): string {
@@ -51,11 +61,30 @@ const NO_CAMPAIGN_RE = /\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|gen
 // alcance a ninguna otra expresión no confirmada.
 const NO_OPPORTUNITY_RE =
   /\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|generes|abrir|abras)\s+oportunidad(es)?\b|\bno\s+opportunit(y|ies)\b|\b(no|sin|nunca)\s+(crear|crees|creen|genera|generar|generes|abrir|abras|lanzar|lances)\s+campa(?:n|ñ)as?\s+(?:ni|o)\s+oportunidad(?:es)?\b/;
-// F7.2: agrega "preparar/prepares" al verbo de NO_OUTREACH_RE — "no
-// preparar mensajes" es una de las expresiones confirmadas y no
-// matcheaba (el verbo antes solo cubría enviar/mandar).
+// F28: "preparar/prepares" (y su negación EN "prepare/preparing") se
+// movieron a NO_DRAFT_RE, abajo -- "no enviar correos" y "no preparar
+// mensajes" son prohibiciones DISTINTAS (enviar vs. redactar), y hasta
+// F27 esta única regex las trataba como la misma cosa. Esta regex ahora
+// cubre EXCLUSIVAMENTE el verbo de envío real (enviar/mandar/send) más
+// las frases de "no contactar/no outreach" -- una prohibición amplia de
+// alcanzar a alguien, que sigue implicando "no enviar" (nunca al revés:
+// no implica "no redactar", ver allowDraftCreation).
+// F28: los verbos "enviar/mandar" solo existen en español -- el soporte
+// EN de esta regex viene de las ramas sueltas de abajo, que aceptan
+// "no"/"not"/"don't"/"do not" como negador (antes SOLO "no" literal,
+// así que "Don't send emails" nunca se detectaba pese a ser la forma
+// más natural en inglés de decir lo mismo).
 const NO_OUTREACH_RE =
-  /\b(no|sin|nunca)\s+(enviar|envies|env[ií]e|mandar|mandes|preparar|prepares)\s+(correos?|emails?|mensajes?|mails?)\b|\bno\s+contactar\s+a?\s*nadie\b|\bno\s+contact(ar)?\b|\bno\s+outreach\b|\bno\s+send(ing)?\s+(emails?|messages?)\b|\bno\s+prepar(e|ing)\s+(emails?|messages?)\b/;
+  /\b(no|sin|nunca)\s+(enviar|envies|env[ií]e|mandar|mandes)\s+(correos?|emails?|mensajes?|mails?)\b|\bno\s+contactar\s+a?\s*nadie\b|\bno\s+contact(ar)?\b|\bno\s+outreach\b|\b(?:no|not|don'?t|do\s+not)\s+send(ing)?\s+(emails?|messages?)\b/;
+
+// F28 (hallazgo real, misiones roofing/landscaping 2026-07-27): única
+// forma real de prohibir la REDACCIÓN de un borrador -- nunca disparada
+// por "no enviar/no mandar" (eso es NO_OUTREACH_RE, arriba, y solo
+// afecta allowOutreach/allowMessageSending). Mismos verbos ES/EN que
+// tenía "preparar" antes de este fix, más "redactar"/"draft" explícitos,
+// y el mismo soporte de negador EN ("not"/"don't"/"do not") que arriba.
+const NO_DRAFT_RE =
+  /\b(no|sin|nunca)\s+(preparar|prepares|redactar|redactes|generar|generes)\s+(correos?|emails?|mensajes?|mails?|borradores?|drafts?)\b|\bno\s+prepar(e|ing)\s+(emails?|messages?|drafts?)\b|\b(?:no|not|don'?t|do\s+not)\s+draft(ing)?\s+(emails?|messages?)\b|\b(?:no|not|don'?t|do\s+not)\s+writ(e|ing)\s+draft(s)?\b/;
 
 /**
  * Detector determinista — cero LLM, cero ambigüedad. Solo puede resultar
@@ -71,6 +100,7 @@ export function detectMissionRestrictionsFromText(rawInstruction: string): Missi
     allowOpportunityCreation: !NO_OPPORTUNITY_RE.test(text),
     allowOutreach: !outreachBlocked,
     allowMessageSending: !outreachBlocked,
+    allowDraftCreation: !NO_DRAFT_RE.test(text),
   };
 }
 
@@ -91,5 +121,6 @@ export function mergeMissionRestrictions(
     allowOpportunityCreation: llm.allowOpportunityCreation && deterministic.allowOpportunityCreation,
     allowOutreach: llm.allowOutreach && deterministic.allowOutreach,
     allowMessageSending: llm.allowMessageSending && deterministic.allowMessageSending,
+    allowDraftCreation: llm.allowDraftCreation && deterministic.allowDraftCreation,
   };
 }
