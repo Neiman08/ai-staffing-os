@@ -213,13 +213,33 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     .map((t) => (t.output as { campaignId?: string }).campaignId)
     .filter((id): id is string => Boolean(id));
 
-  const campaignCompanies = campaignIds.length
+  const allCampaignCompanies = campaignIds.length
     ? await scopedDb.campaignCompany.findMany({
         where: { campaignId: { in: campaignIds } },
         include: { company: { include: { industry: true } } },
         orderBy: { createdAt: "asc" },
       })
     : [];
+
+  // F28 (misión real 2026-07-27, roofing IL): cuando create_campaign
+  // REUSA una campaña ya existente (misión anterior, otra industria, u
+  // otro estado), CampaignCompany trae TODO el historial acumulado de esa
+  // campaña -- demo seed, data centers de una misión eléctrica previa,
+  // etc. -- no solo lo que ESTA misión encontró. select_target_companies
+  // ya persiste, en su propio output.companyIds, la lista real y precisa
+  // de lo que esta misión agregó (mismo restrictToCompanyIds que ya
+  // aísla la selección real, ver mission-orchestrator.ts) -- se usa acá
+  // para filtrar el reporte, igual que ya se aísla la ejecución.
+  const missionSelectedCompanyIds = new Set<string>();
+  for (const t of childTasks) {
+    if (t.type === "select_target_companies" && t.output) {
+      const ids = (t.output as { companyIds?: string[] }).companyIds ?? [];
+      for (const id of ids) missionSelectedCompanyIds.add(id);
+    }
+  }
+  const campaignCompanies = missionSelectedCompanyIds.size
+    ? allCampaignCompanies.filter((cc) => missionSelectedCompanyIds.has(cc.companyId))
+    : allCampaignCompanies;
 
   // Corrección estructural (misión Iowa, 2026-07-13): cuando la misión
   // corrió con `allowCampaignCreation=false`, no hay ninguna Campaign ni

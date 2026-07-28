@@ -10,6 +10,7 @@ import { computeMissionProgress, computeContactCoverage } from "./tools/ceo-tool
 import { abortTask } from "./cancellation";
 import { interpretBusinessIntent } from "../ceo-intelligence/intent-interpreter";
 import { buildMissionPlan } from "../ceo-intelligence/mission-planner";
+import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { executeDiscoveryPlan, type DiscoveryExecutionReport } from "./mission-executor";
 
@@ -332,7 +333,9 @@ async function runAutoExternalDiscoveryFallback(
  * empresas/contactos, nunca envía nada, nunca fija tarifas — cada tool
  * que reutiliza ya tenía esas garantías desde F2/F3.
  */
-async function runMissionPipeline(missionTaskId: string, tenantId: string, operatorUserId: string): Promise<void> {
+// exportado solo para test (F28: verificar el gate de descubrimiento sin
+// pasar por interpretDailyDirective/LLM -- ver mission-gate-trade-match.test.ts)
+export async function runMissionPipeline(missionTaskId: string, tenantId: string, operatorUserId: string): Promise<void> {
   const missionTask = await scopedDb.agentTask.findUniqueOrThrow({ where: { id: missionTaskId } });
   const interpreted = missionTask.input as unknown as MissionInput;
 
@@ -467,7 +470,19 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
   // de una misión anterior de data centers, mismo bucket Construction).
   let discoveredCompanyIdsThisMission: string[] | null = null;
   const explicitVolumeInsufficient = interpreted.desiredVolume != null;
-  if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0)) {
+  // F28 (roofing IL, misión real 2026-07-27, segundo hallazgo): "industries"
+  // arriba es el bucket AMPLIO del CRM ("Construction"), no el trade
+  // específico que pidió la instrucción ("roofing"). Antes, si ese bucket
+  // amplio ya tenía CUALQUIER empresa (de otro trade, de una misión
+  // anterior, o del seed), este gate entero se saltaba -- la misión nunca
+  // pasaba por executeDiscoveryPlan/business-validation.ts (fix E: rechazo
+  // de "construction" genérico sin evidencia real de roofing) ni por la
+  // revalidación geográfica real (fix C). Un match de taxonomía NO
+  // genérico (roofing, landscaping...) siempre debe forzar descubrimiento
+  // + validación real de ESE trade, sin importar cuántas empresas de
+  // OTROS trades ya existan en el mismo bucket amplio.
+  const hasSpecificTradeMatch = externalIntent.matchedTaxonomyKeys.some((key) => getTaxonomyEntry(key)?.isGenericFallback === false);
+  if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0 || hasSpecificTradeMatch)) {
     // Bug real encontrado en auditoría: sin excluir DEMO_SEED/INTERNAL_TEST
     // (mismo criterio que crm/service.ts y campaign-tools.impl.ts), una
     // misión real podía ver "suficiente" oferta interna por culpa de
@@ -484,7 +499,11 @@ async function runMissionPipeline(missionTaskId: string, tenantId: string, opera
             },
           })
         : 0;
-    if (internalSupply < perCampaignVolume) {
+    // hasSpecificTradeMatch ignora por completo internalSupply: contar
+    // "cuántas empresas de Construction en general" nunca responde "cuántas
+    // de ROOFING" -- la única forma de saberlo es corriendo el
+    // descubrimiento+validación real de ese trade.
+    if (hasSpecificTradeMatch || internalSupply < perCampaignVolume) {
       if ((await checkForStop()) === "stop") return;
       const fallbackResult = await runAutoExternalDiscoveryFallback(
         missionTaskId,
