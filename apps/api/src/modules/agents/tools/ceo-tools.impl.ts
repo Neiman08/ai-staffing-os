@@ -99,9 +99,21 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
   // discovery-conversion.ts) -- nunca estimado, siempre contra la tabla
   // real.
   const discoverCompaniesTaskIds = children.filter((t) => t.type === "discover_companies" && t.status === "DONE").map((t) => t.id);
-  const dynamicCompaniesCreated = discoverCompaniesTaskIds.length
-    ? await scopedDb.company.count({ where: { discoveredByAgentTaskId: { in: discoverCompaniesTaskIds } } })
-    : 0;
+  // F28 (misión real de Hospitality, 2026-07-29, doble conteo real
+  // encontrado en producción): cuando el descubrimiento externo real
+  // corre (fallback o dinámico) Y DESPUÉS el loop clásico estático
+  // selecciona esas MISMAS Company vía select_target_companies -- el
+  // camino híbrido, hoy el más común desde que F28 hizo que
+  // hasSpecificTradeMatch dispare discovery real para cualquier trade
+  // específico -- una Company terminaba contada dos veces: una por
+  // select_target_companies.addedCount, otra por
+  // discoveredByAgentTaskId. Se corrige tomando la UNIÓN de ids reales
+  // de ambas fuentes (nunca la suma de conteos) -- una misma Company
+  // nunca puede contar más de una vez, sin importar cuántos de los dos
+  // caminos la tocaron.
+  const dynamicCompanyIds = discoverCompaniesTaskIds.length
+    ? (await scopedDb.company.findMany({ where: { discoveredByAgentTaskId: { in: discoverCompaniesTaskIds } }, select: { id: true } })).map((c) => c.id)
+    : [];
   const dynamicLeadsCreated = discoverCompaniesTaskIds.length
     ? await scopedDb.lead.count({ where: { createdByAgentTaskId: { in: discoverCompaniesTaskIds } } })
     : 0;
@@ -109,10 +121,11 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
     ? await scopedDb.opportunity.findMany({ where: { createdByAgentTaskId: { in: discoverCompaniesTaskIds } }, select: { id: true, estimatedRevenue: true } })
     : [];
 
-  const companiesTargeted =
-    children
-      .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
-      .reduce((sum, t) => sum + ((t.output as { addedCount?: number } | null)?.addedCount ?? 0), 0) + dynamicCompaniesCreated;
+  const selectTargetCompanyIds = children
+    .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
+    .flatMap((t) => (t.output as { companyIds?: string[] } | null)?.companyIds ?? []);
+
+  const companiesTargeted = new Set([...selectTargetCompanyIds, ...dynamicCompanyIds]).size;
 
   const leadsCreated = children.filter((t) => t.type === "create_lead" && t.status === "DONE").length + dynamicLeadsCreated;
   const opportunityTasks = children.filter((t) => t.type === "create_opportunity" && t.status === "DONE");
