@@ -208,3 +208,68 @@ Tres misiones reales de Hospitality en Illinois, todas con `requireHiringSignal:
 Los 8 problemas originales (A–H) de roofing/landscaping, los 2 encontrados en su propia validación en producción, y los 10 encontrados en el seguimiento real de Hospitality (H1–H10, incluyendo uno descubierto durante la propia validación en producción del fix anterior) quedaron todos diagnosticados con evidencia de código y de misiones reales, corregidos con cambios acotados, cubiertos con tests de regresión nuevos (varios confirmados fallando sin el fix y pasando con él), validados en CI contra una base limpia, desplegados en Render con el commit exacto verificado, y confirmados con misiones reales en producción — sin enviar ni aprobar automáticamente ningún correo en ningún momento.
 
 **F28 y su addendum de Hospitality quedan cerrados.** Ninguna mejora futura identificada (§9, §16) es bloqueante — quedan documentadas como deuda técnica o posibles funcionalidades nuevas para una fase futura, no como pendientes de esta.
+
+---
+
+# Addendum 2 — `companiesTargeted=0` en misiones sin descubrimiento nuevo y exclusión de tipo de negocio no aplicada al CRM existente (2026-07-29)
+
+## 18. Problema 1: `MIS-20260729-0003` terminó sin empresas, contactos, Leads ni Drafts
+
+**Síntoma real**: una misión de Hospitality/IL con 141 resultados crudos de descubrimiento terminó con `companiesTargeted: 0`, `leadsCreated: 0`, `contactsFound: 0` — pese a que el CRM ya tenía empresas de Hospitality reales y validadas de misiones anteriores el mismo día.
+
+**Causa raíz**: `discoveredCompanyIdsThisMission` (el array de ids que esta misión descubrió como genuinamente nuevos) podía quedar en `[]` — no `null` — cuando el descubrimiento SÍ corrió pero todo lo que encontró ya era duplicado de una misión anterior del mismo trade+estado, mismo día (139/141 resultados en el caso real). `[] ?? undefined` en JavaScript sigue siendo `[]` (nullish coalescing solo sustituye `null`/`undefined`, nunca un array vacío), y `[] ? x : y` también toma la rama `x` (un array vacío es truthy) — así que `restrictToCompanyIds` terminaba restringiendo `select_target_companies` a CERO empresas en vez de caer al comportamiento amplio ("trabajar sobre la base existente") que el propio comentario del código ya describía como el comportamiento correcto para ese caso.
+
+**Riesgo del fix ingenuo**: cambiar `[]`/`null` a comportamiento amplio sin más habría reintroducido el bug de aislamiento original de F28 (varios trades comparten la misma Industry del CRM — ej. roofing/electrical en "Construction" — así que una selección amplia sin acotar arrastraría empresas de otros trades).
+
+**Fix**: `mission-orchestrator.ts` usa `?.length` en vez de `??`/chequeos de verdad para decidir cuándo aplicar `restrictToCompanyIds` (corrige `[]` y `null` de la misma forma). Como red de seguridad para el fallback, se agregó `Company.tradeKey` (nuevo parámetro `restrictToTradeKeys` en `selectTargetCompanies`) — acota la selección amplia a los `taxonomyKey` específicos y no genéricos que la misión matcheó, nunca al bucket amplio de `Industry` completo.
+
+## 19. Problema 2 (encontrado validando el fix del Problema 1): "Cornerstone Inn" generó Lead+Opportunity pese a exclusión explícita
+
+**Síntoma real**: validando el fix de tradeKey con `MIS-20260729-0005` (misma instrucción, "Excluye moteles, inns, bed & breakfast y guest houses"), "Cornerstone Inn" — un Inn/B&B ya en el CRM desde una misión anterior, sin esta exclusión — fue seleccionada por el fallback de `restrictToTradeKeys` y avanzó hasta generar un Lead y una Opportunity reales.
+
+**Causa raíz**: la exclusión de tipo de negocio ("hoteles comerciales" → excluir motel/inn/bed and breakfast/guest house, F28 Addendum §13) solo se aplicaba al validar candidatos NUEVOS de descubrimiento (`business-validation.ts`). Nunca se aplicaba al reutilizar empresas YA existentes en el CRM — ni en la selección amplia por industria/estado, ni en el nuevo fallback por `tradeKey` del Problema 1.
+
+**Fix**: `matchesMissionExclusion` (función pura, extraída de `business-validation.ts`, basada en el mismo matching por límite de palabra que ya usaba discovery — nunca una lista fija de nombres de empresa) se aplica ahora en dos capas:
+1. **Selección** — `selectTargetCompanies` (con y sin Campaign, `campaign-tools.impl.ts`/`mission-orchestrator.ts`) filtra por nombre antes de contar `companiesTargeted`, en ambos caminos (descubrimiento nuevo y fallback por tradeKey).
+2. **Defensa en profundidad** — el loop por-compañía en `mission-orchestrator.ts` repite el mismo chequeo antes de `score_company`/`create_lead`, para que ninguna Company excluida avance aunque llegara por otra vía.
+
+La restricción de la misión prevalece siempre sobre el historial del CRM, sin importar de dónde salga la Company.
+
+## 20. Commits
+
+| Commit | Descripción | CI |
+|---|---|---|
+| [`eedc54b`](https://github.com/Neiman08/ai-staffing-os/commit/eedc54bcc44ed92353cb5df06cbca710a44ff009) | Problema 1: `[]` vs `null` en `discoveredCompanyIdsThisMission`, fallback seguro por `Company.tradeKey` | ✅ [30421458775](https://github.com/Neiman08/ai-staffing-os/actions/runs/30421458775) |
+| [`319aa8c`](https://github.com/Neiman08/ai-staffing-os/commit/319aa8c8c2d87e473a39a8200824aa66e8c9898e) | Problema 2: exclusión de tipo de negocio aplicada también a empresas ya existentes en el CRM (selección + loop por-compañía) | ✅ [30458515343](https://github.com/Neiman08/ai-staffing-os/actions/runs/30458515343) |
+
+Ambos commits corrieron contra base de datos limpia (Postgres efímero de GitHub Actions). Suite completa de `apps/api` en la última corrida (`319aa8c`): 1977/1985 tests, 6 skips esperados, mismas 2 fallas preexistentes y no relacionadas de siempre (staleness de DB local + test no determinista de scheduler con OpenAI real) — ninguna regresión nueva. Cada commit se verificó desplegado en Render con `gitCommit` (`/api/v1/health/ready`) comparado byte a byte contra el SHA pusheado antes de correr cualquier misión real.
+
+## 21. Evidencia de validación en producción
+
+| Misión | Escenario | `acceptedResults`/`createdCompanyIds` | `companiesTargeted` | Resultado |
+|---|---|---|---|---|
+| `MIS-20260729-0003` | Expone el Problema 1 | — | **0** ⚠️ | Bug confirmado: 141 resultados crudos, 0 empresas seleccionadas |
+| `MIS-20260729-0004` (post-fix Problema 1) | Descubrimiento encontró 1 empresa genuinamente nueva | 1 aceptada | 1 | Camino normal por `restrictToCompanyIds`, no ejercita el fallback por tradeKey — Contact Intelligence corrió completo (PDL invocado, falló 402 real; Hunter.io invocado, 5 contactos nombrados encontrados) |
+| `MIS-20260729-0005` (mismo día, sin descubrimiento nuevo) | Reproduce el escenario exacto del Problema 1: `acceptedResults: 0`, `createdCompanyIds: []`, 140/141 duplicados | 0 aceptadas | **25** ✅ | Fallback por tradeKey confirmado funcionando — pero expone el Problema 2: "Cornerstone Inn" seleccionada y generó Lead+Opportunity pese a la exclusión |
+| `MIS-20260729-0006` (post-fix Problema 2) | Descubrimiento encontró 3 empresas genuinamente nuevas | 3 aceptadas | 3 | Las 3 son hoteles reales (Eastland Suites, Parke Regency, Hotel Jackson) — ningún Inn/B&B |
+| `MIS-20260729-0007` (mismo día, sin descubrimiento nuevo) | Reproduce otra vez el escenario exacto: `acceptedResults: 0`, `createdCompanyIds: []`, 159/160 duplicados | 0 aceptadas | **5** ✅ | Fallback por tradeKey + exclusión confirmados juntos: `select_target_companies` devolvió 5 ids, **"Cornerstone Inn" (`cmrx0p2dv0064v0wvc2ifm2bk`) confirmado ausente** de esa lista — comparación directa de ids, no inferencia |
+
+## 22. Limitación conocida: exclusión por nombre no detecta todo B&B/Inn/Motel/Guest House
+
+Durante la validación de `MIS-20260729-0007`, una de las 5 empresas seleccionadas fue **"Vrooman Mansion"** — verificado en su sitio real (`vroomanmansion.com`), se describe literalmente como **"Bed and Breakfast & Events Venue"**. No fue excluida porque su nombre no contiene ninguno de los términos de exclusión ("inn", "bed and breakfast", "motel", "guest house").
+
+**Naturaleza de la limitación**: `matchesMissionExclusion` compara el NOMBRE de la Company contra la lista de términos excluidos (límite de palabra real, nunca substring crudo). No existe en el sistema un campo de clasificación de tipo de negocio persistido en `Company` para verificar en su lugar cuando el nombre no es descriptivo — solo lo hay como resultado transitorio (`detectedBusinessType`) durante el descubrimiento de candidatos nuevos, nunca guardado para reutilizarse después. Este es el mismo mecanismo (y la misma limitación) que ya tenía la exclusión original de "hoteles comerciales" en descubrimiento (F28 Addendum §13) — no es una regresión introducida por el Problema 2 ni por su fix.
+
+**Alcance real**: cualquier Inn/Motel/Bed & Breakfast/Guest House cuyo nombre comercial no incluya uno de esos términos literales (ej. "Vrooman Mansion", nombres de casas históricas, "Lodge" fuera del listado, etc.) puede seguir siendo seleccionado y avanzar en el pipeline comercial pese a una exclusión explícita de la misión. Verificado también que no todo nombre ambiguo es un falso negativo real: "Landers House" (misma misión) se describe a sí mismo como "vacation rental" — no es un B&B/inn/motel/guest house, así que su inclusión es correcta.
+
+**Decisión del PO (2026-07-29)**: queda documentada como limitación conocida, no como bug de esta corrección. No se implementa una solución adicional en este momento (ej. verificar contra descripción/sitio ya guardado en vez de solo el nombre) — pendiente de evaluación en una fase futura si el impacto real lo justifica.
+
+## 23. Dato histórico pendiente de saneamiento (no bloqueante)
+
+"Cornerstone Inn" conserva el Lead (`cms5lcx8z0043agbqa887msoc`) y la Opportunity (`cms5lcxh60049agbq2n6i8hr2`) que generó `MIS-20260729-0005`, ANTES del fix del Problema 2. El fix impide que se repita, pero no revierte lo ya creado. **Decisión del PO**: no limpiar todavía — se evaluará como una tarea de saneamiento de datos históricos separada, en una fase futura.
+
+## 24. Conclusión final (Addendum 2)
+
+Ambos problemas (companiesTargeted=0 sin descubrimiento nuevo, y exclusión de tipo de negocio no aplicada a empresas ya existentes en el CRM) quedaron diagnosticados con evidencia real de misiones en producción, corregidos con cambios acotados, cubiertos con tests de regresión (confirmados fallando sin el fix y pasando con él, incluyendo un test que reproduce exactamente el escenario real de "Cornerstone Inn"), validados en CI contra base limpia, desplegados en Render con el commit exacto verificado, y confirmados con 5 misiones reales en producción (`MIS-20260729-0003` a `0007`) — sin enviar ni aprobar automáticamente ningún correo en ningún momento.
+
+**Esta corrección queda cerrada.** La limitación de exclusión por nombre (§22) y el dato histórico sin sanear (§23) quedan documentados como deuda conocida, explícitamente no bloqueantes por decisión del PO — no se invierte más tiempo optimizando este fix.
