@@ -210,7 +210,22 @@ async function executeTaskById(taskId: string, agentInstanceId: string, agentKey
     if (!toolName) throw new Error(`Unknown AgentTask type: ${task.type}`);
 
     const output = await runtime.run(context, { toolName, toolInput: task.input });
-    const needsApproval = requiresApproval(toolName);
+    // F29 (hallazgo real, MIS-20260729-0008, 2026-07-29): requiresApproval
+    // por sí solo solo dice "esta tool PUEDE terminar en un ApprovalRequest"
+    // -- ni personalizeMessage ni draftOutreach lo garantizan siempre (gate
+    // de draft-creation-gate.ts bloqueado, sin canal de email real -- solo
+    // careers page/teléfono/LinkedIn --, condición de carrera contra el
+    // índice único son ramas legítimas que nunca crean uno). Antes, cualquiera
+    // de esas ramas dejaba el AgentTask en AWAITING_APPROVAL para siempre --
+    // sin ApprovalRequest real, nada en la pantalla de Approvals podía
+    // resolverlo nunca (el único código que saca un AgentTask de ese estado
+    // es decidir sobre un ApprovalRequest real, ver approvals/service.ts:382).
+    // Se confirma con el mismo criterio ya usado en getAgentTaskDetail
+    // (service.ts) y en runChildTask (buildToolRegistry, arriba): consultar
+    // ApprovalRequest por agentTaskId de verdad, nunca inferirlo del nombre
+    // de la tool ni de su output.
+    const needsApproval =
+      requiresApproval(toolName) && (await scopedDb.approvalRequest.findFirst({ where: { agentTaskId: taskId }, select: { id: true } })) != null;
 
     await scopedDb.agentTask.update({
       where: { id: taskId },

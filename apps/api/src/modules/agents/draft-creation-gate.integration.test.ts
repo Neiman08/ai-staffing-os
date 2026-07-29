@@ -107,12 +107,15 @@ test("draftOutreach: DEMO_SEED -- nunca crea un ApprovalRequest, Company.outreac
   const settled = await waitForSettled(task.id);
 
   assert.notEqual(settled.status, "FAILED", "bloqueado por el gate es un resultado válido, nunca un error");
-  // requiresApproval() es una tabla estática por tool (packages/agents) --
-  // draft_outreach SIEMPRE marca AWAITING_APPROVAL sin importar si el gate
-  // terminó creando o no un ApprovalRequest real (comportamiento
-  // preexistente, no introducido acá). Lo que realmente importa se
-  // verifica abajo: cero ApprovalRequest creados.
-  assert.equal(settled.status, "AWAITING_APPROVAL");
+  // F29 (hallazgo real, MIS-20260729-0008, 2026-07-29): antes, requiresApproval()
+  // (tabla estática por NOMBRE de tool, packages/agents) marcaba draft_outreach
+  // SIEMPRE AWAITING_APPROVAL sin importar si el gate terminó creando o no un
+  // ApprovalRequest real -- eso dejaba el AgentTask huérfano para siempre (sin
+  // ApprovalRequest, nada podía resolverlo, y la pantalla de Approvals quedaba
+  // vacía pese al status). Ahora task-executor.ts confirma con una consulta
+  // real a ApprovalRequest antes de marcar AWAITING_APPROVAL -- bloqueado por
+  // el gate, sin ApprovalRequest real, el task debe terminar DONE.
+  assert.equal(settled.status, "DONE");
   const approvalCount = await prisma.approvalRequest.count({ where: { agentTaskId: task.id } });
   assert.equal(approvalCount, 0);
 
@@ -128,7 +131,7 @@ test("draftOutreach: sin canal de contacto real -- nunca crea un ApprovalRequest
   const task = await invokeSalesTask({ type: "draft_outreach", input: { leadId: lead.id, channel: "EMAIL" } });
   const settled = await waitForSettled(task.id);
 
-  assert.equal(settled.status, "AWAITING_APPROVAL");
+  assert.equal(settled.status, "DONE", "sin ApprovalRequest real, nunca queda AWAITING_APPROVAL -- ver F29 arriba");
   assert.equal(await prisma.approvalRequest.count({ where: { agentTaskId: task.id } }), 0);
 
   const companyAfter = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
@@ -144,7 +147,7 @@ test("draftOutreach: isClientOwnerCandidate=true -- nunca crea outreach automát
   const task = await invokeSalesTask({ type: "draft_outreach", input: { leadId: lead.id, channel: "EMAIL" } });
   const settled = await waitForSettled(task.id);
 
-  assert.equal(settled.status, "AWAITING_APPROVAL");
+  assert.equal(settled.status, "DONE", "sin ApprovalRequest real, nunca queda AWAITING_APPROVAL -- ver F29 arriba");
   assert.equal(await prisma.approvalRequest.count({ where: { agentTaskId: task.id } }), 0);
 
   const companyAfter = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
@@ -159,7 +162,7 @@ test("draftOutreach: opportunityRecommendation=MANUAL_REVIEW -- mismo bloqueo qu
   const task = await invokeSalesTask({ type: "draft_outreach", input: { leadId: lead.id, channel: "EMAIL" } });
   const settled = await waitForSettled(task.id);
 
-  assert.equal(settled.status, "AWAITING_APPROVAL");
+  assert.equal(settled.status, "DONE", "sin ApprovalRequest real, nunca queda AWAITING_APPROVAL -- ver F29 arriba");
   assert.equal(await prisma.approvalRequest.count({ where: { agentTaskId: task.id } }), 0);
   const companyAfter = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
   assert.equal(companyAfter.outreachBlockedReason, "CLIENT_OWNER_REVIEW");
@@ -194,7 +197,10 @@ test("draftOutreach: ya existe un ApprovalRequest activo para la Company -- nunc
   const task = await invokeSalesTask({ type: "draft_outreach", input: { leadId: lead.id, channel: "EMAIL" } });
   const settled = await waitForSettled(task.id);
 
-  assert.equal(settled.status, "AWAITING_APPROVAL");
+  // Esta tarea NUEVA no creó ningún ApprovalRequest propio (bloqueada por
+  // DUPLICATE_ACTIVE) -- ver F29 arriba: nunca queda AWAITING_APPROVAL sin
+  // uno real asociado a SU PROPIO agentTaskId.
+  assert.equal(settled.status, "DONE");
   // El único ApprovalRequest para esta Company sigue siendo el original.
   const approvalsForCompany = await prisma.approvalRequest.findMany({ where: { companyId: company.id } });
   assert.equal(approvalsForCompany.length, 1);
