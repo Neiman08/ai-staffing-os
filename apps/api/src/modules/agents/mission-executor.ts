@@ -1426,6 +1426,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
               hasConfirmedPhone: !!company.phone,
               hasConfirmedWebsite: !!company.website,
               hasRealPersonContact: !!bestRealContact,
+              requireHiringSignal: params.restrictions.requireHiringSignal,
             },
             bestVerifiedOrgEmail,
             bestRealContact,

@@ -484,6 +484,28 @@ export async function enrichCompanyWithDecisionContacts(params: ContactEnrichmen
         costUsd += result.costUsd;
         patternsFailed.push(...result.patternsFailed);
 
+        // F28 (misión real de Hospitality, 2026-07-28): hasta acá, un 402
+        // real de PDL (créditos agotados del lado de PDL, no detectado
+        // por los chequeos locales de presupuesto de arriba) solo
+        // quedaba en `providerStatus`/`patternsFailed` -- nunca llegaba a
+        // `providersOmitted`, así que el reporte de la misión mostraba
+        // "providersOmitted: []" pese a que PDL falló de verdad en cada
+        // intento. El pipeline ya se degradaba bien (seguía con Website
+        // Intelligence/Hunter.io), pero el reporte no lo decía. Mismo
+        // vocabulario que los otros 3 casos de providersOmitted arriba.
+        if (result.providerStatus !== "AVAILABLE") {
+          const statusLabel: Record<ProviderStatusValue, string> = {
+            AVAILABLE: "disponible",
+            CREDIT_EXHAUSTED: "créditos agotados (HTTP 402)",
+            UNAUTHORIZED: "no autorizado (HTTP 401/403)",
+            UNAVAILABLE: "no disponible (HTTP 429/5xx)",
+            NOT_CONFIGURED: "sin configurar",
+          };
+          providersOmitted.push(
+            `People Data Labs omitido: intento real falló -- ${statusLabel[result.providerStatus]} -- se continúa con las demás fuentes.`,
+          );
+        }
+
         if (result.cancelled) {
           cancelled = true;
         } else {

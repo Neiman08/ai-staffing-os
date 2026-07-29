@@ -59,6 +59,8 @@ function buildRestrictionNotesLocal(restrictions: MissionRestrictions): string[]
   if (!restrictions.allowOutreach) notes.push("No se planificó ninguna secuencia de outreach — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowMessageSending) notes.push("Ningún correo se enviará automáticamente — la instrucción lo prohibió explícitamente.");
   if (!restrictions.allowDraftCreation) notes.push("No se redactó ningún mensaje/borrador — la instrucción lo prohibió explícitamente.");
+  if (restrictions.requireHiringSignal)
+    notes.push("Solo avanzarán al pipeline comercial empresas con señal de contratación confirmada, probable o posible — la instrucción lo exigió explícitamente.");
   return notes;
 }
 

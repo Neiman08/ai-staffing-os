@@ -11,6 +11,7 @@ import { abortTask } from "./cancellation";
 import { interpretBusinessIntent } from "../ceo-intelligence/intent-interpreter";
 import { buildMissionPlan } from "../ceo-intelligence/mission-planner";
 import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
+import { hasPositiveHiringSignal, type HiringStatus } from "../ceo-intelligence/conversion-policy";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { executeDiscoveryPlan, type DiscoveryExecutionReport } from "./mission-executor";
 
@@ -81,6 +82,10 @@ export function buildRestrictionNotes(restrictions: MissionRestrictions): string
   // el click humano de "Enviar" en Approvals, sin importar este flag.
   if (!restrictions.allowMessageSending) notes.push("Ningún correo se enviará automáticamente — la instrucción lo prohibió explícitamente (el envío real siempre requiere aprobación humana explícita).");
   if (!restrictions.allowDraftCreation) notes.push("No se redactó ningún borrador — la instrucción lo prohibió explícitamente.");
+  if (restrictions.requireHiringSignal)
+    notes.push(
+      "Solo se crearon Leads/Opportunities para empresas con señal de contratación confirmada, probable o posible — la instrucción lo exigió explícitamente; las demás quedaron registradas como Company sin avanzar en el pipeline comercial.",
+    );
   return notes;
 }
 
@@ -379,8 +384,29 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   const externalIntent = interpretBusinessIntent(interpreted.rawInstruction);
   const externalPlan = buildMissionPlan(externalIntent);
 
-  const industries = interpreted.industryNames?.length
-    ? await scopedDb.industry.findMany({ where: { name: { in: interpreted.industryNames } } })
+  // F28 (misión real de Hospitality, 2026-07-28): interpretDailyDirective
+  // (LLM) devolvió industryNames=[] para 3 misiones reales seguidas con
+  // instrucciones largas/con viñetas -- pese a que el intérprete
+  // determinista (arriba, sin LLM) sí matcheó "hospitality" y armó
+  // externalPlan.searchQueries con crmIndustryBucket="Hospitality" en
+  // cada una. Con industryNames vacío, industryTargets (abajo) quedaba
+  // [] y el loop entero de create_campaign/select_target_companies/
+  // create_lead/create_opportunity nunca corría -- ninguna misión
+  // afectada llegó a crear un solo Lead u Opportunity, pese a que el
+  // descubrimiento sí encontró y validó empresas reales. Se usa acá el
+  // crmIndustryBucket ya calculado por el parser determinista como
+  // respaldo SOLO cuando el LLM no dio ninguna industria -- nunca
+  // reemplaza al LLM cuando este sí responde algo.
+  const deterministicIndustryNames = Array.from(
+    new Set(externalPlan.searchQueries.map((q) => q.crmIndustryBucket).filter((b): b is string => !!b)),
+  );
+  const resolvedIndustryNames = interpreted.industryNames?.length ? interpreted.industryNames : deterministicIndustryNames;
+  if (!interpreted.industryNames?.length && deterministicIndustryNames.length > 0) {
+    log(missionTaskId, "industryNames LLM vacío -- usando crmIndustryBucket determinista como respaldo", { deterministicIndustryNames });
+  }
+
+  const industries = resolvedIndustryNames.length
+    ? await scopedDb.industry.findMany({ where: { name: { in: resolvedIndustryNames } } })
     : [];
   const categories = interpreted.categoryNames?.length
     ? await scopedDb.jobCategory.findMany({ where: { name: { in: interpreted.categoryNames } } })
@@ -613,6 +639,24 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
 
       const company = await scopedDb.company.findUnique({ where: { id: companyId } });
       if (!company) continue;
+
+      // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del
+      // PO): cuando la misión exigió explícitamente "que estén
+      // contratando" (restrictions.requireHiringSignal), una Company sin
+      // señal de contratación real (NO_SIGNAL/UNKNOWN/nunca evaluada)
+      // nunca avanza al pipeline comercial -- se salta score_company y
+      // create_lead/create_opportunity por completo, pero la Company ya
+      // persistida por discovery se conserva tal cual. Mismo vocabulario
+      // que decideCompanyConversion (conversion-policy.ts), que aplica
+      // este mismo criterio en el camino dinámico.
+      if (restrictions.requireHiringSignal) {
+        const discoveryMeta = company.discoveryMetadata as { hiringSignal?: { hiringStatus?: HiringStatus } } | null;
+        const hiringStatus = discoveryMeta?.hiringSignal?.hiringStatus ?? null;
+        if (!hasPositiveHiringSignal(hiringStatus)) {
+          log(missionTaskId, "company skipped -- requireHiringSignal sin evidencia positiva", { companyId, hiringStatus });
+          continue;
+        }
+      }
 
       if (company.commercialScore == null) {
         await createAndRunTaskSync(tenantId, operatorUserId, {

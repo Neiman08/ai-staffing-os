@@ -393,13 +393,20 @@ test("F15: PDL sin resultados (402/vacío) -> Website Intelligence encuentra la 
   assert.ok(report.sourcesUsed.includes("Website Intelligence"));
   const contactRow = await prisma.contact.findUniqueOrThrow({ where: { id: report.contactsCreated[0]!.contactId } });
   assert.equal(contactRow.source, "Website Intelligence");
-  // F16 debt fix: PDL fue REALMENTE intentado y respondió 402 -- eso es
-  // un fallo real, va a patternsFailed, JAMÁS a providersOmitted (el
-  // único rol planificado ya quedó cubierto por Website Intelligence
-  // antes de siquiera llegar al chequeo de Hunter, así que tampoco hay
-  // ninguna omisión real de Hunter que reportar acá).
+  // F28 (misión real de Hospitality, 2026-07-28): antes, un 402 real de
+  // PDL solo iba a patternsFailed, nunca a providersOmitted -- el
+  // Executive Report (que solo lee providersOmitted, nunca
+  // patternsFailed) mostraba "providersOmitted: []" en 3 misiones reales
+  // pese a que PDL falló con 402 en cada intento. La distinción original
+  // ("un fallo real es de ESTA empresa, no una omisión") no aplica a
+  // 402/401/403 -- son señales de cuenta/servicio completo, nunca de una
+  // empresa puntual (a diferencia de "sin candidatos para esta empresa",
+  // que sigue siendo AVAILABLE con candidates:[]). Ahora va a AMBOS: se
+  // preserva patternsFailed (detalle técnico) y se agrega a
+  // providersOmitted (lo único que el reporte ejecutivo real le muestra
+  // al humano).
   assert.ok(report.patternsFailed.includes("HTTP 402: no credits"));
-  assert.deepEqual(report.providersOmitted, []);
+  assert.ok(report.providersOmitted.some((p) => p.includes("People Data Labs") && p.includes("créditos agotados")));
 });
 
 test("F15: PDL y Website sin resultados -> Hunter.io encuentra la persona real, Contact creado con source correcto", async () => {

@@ -31,6 +31,15 @@ export const missionRestrictionsSchema = z.object({
   // solo se apaga con una negación EXPLÍCITA de redactar/preparar (ver
   // NO_DRAFT_RE) -- nunca por una frase que solo prohíbe el envío.
   allowDraftCreation: z.boolean(),
+  // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+  // true SOLO cuando la instrucción exige explícitamente evidencia de
+  // contratación ("que estén contratando"/"actively hiring") -- default
+  // false. A diferencia de los flags allowX de arriba (permisivos por
+  // default, una negación explícita los restringe), este es restrictivo
+  // por default y se ACTIVA con una señal positiva explícita -- se
+  // combina por OR, no por AND (ver mergeMissionRestrictions): si
+  // CUALQUIERA de las dos fuentes detecta el pedido, se aplica.
+  requireHiringSignal: z.boolean(),
 });
 export type MissionRestrictions = z.infer<typeof missionRestrictionsSchema>;
 
@@ -40,6 +49,7 @@ export const DEFAULT_MISSION_RESTRICTIONS: MissionRestrictions = {
   allowOutreach: true,
   allowMessageSending: true,
   allowDraftCreation: true,
+  requireHiringSignal: false,
 };
 
 function normalize(text: string): string {
@@ -86,6 +96,14 @@ const NO_OUTREACH_RE =
 const NO_DRAFT_RE =
   /\b(no|sin|nunca)\s+(preparar|prepares|redactar|redactes|generar|generes)\s+(correos?|emails?|mensajes?|mails?|borradores?|drafts?)\b|\bno\s+prepar(e|ing)\s+(emails?|messages?|drafts?)\b|\b(?:no|not|don'?t|do\s+not)\s+draft(ing)?\s+(emails?|messages?)\b|\b(?:no|not|don'?t|do\s+not)\s+writ(e|ing)\s+draft(s)?\b/;
 
+// F28 (misión real de Hospitality, 2026-07-28): frase positiva EXPLÍCITA
+// de que la contratación/hiring es un criterio real de la misión --
+// nunca disparado por la sola presencia de la palabra "hiring" (ej.
+// "hiring signals" es un término reconocido del producto, no un pedido
+// de filtrar por él, ver KNOWN_CAPABILITY_TERMS en ceo-tools.impl.ts).
+const REQUIRE_HIRING_SIGNAL_RE =
+  /\bque\s+est[eé]n?\s+contratando\b|\bactivamente\s+contratando\b|\bque\s+est[eé]n?\s+reclutando\b|\bactively\s+hiring\b|\bthat\s+are\s+hiring\b|\bcurrently\s+hiring\b|\bwho\s+are\s+hiring\b/;
+
 /**
  * Detector determinista — cero LLM, cero ambigüedad. Solo puede resultar
  * en flags MÁS restrictivos que el default (nunca reactiva algo que el
@@ -101,6 +119,7 @@ export function detectMissionRestrictionsFromText(rawInstruction: string): Missi
     allowOutreach: !outreachBlocked,
     allowMessageSending: !outreachBlocked,
     allowDraftCreation: !NO_DRAFT_RE.test(text),
+    requireHiringSignal: REQUIRE_HIRING_SIGNAL_RE.test(text),
   };
 }
 
@@ -122,5 +141,8 @@ export function mergeMissionRestrictions(
     allowOutreach: llm.allowOutreach && deterministic.allowOutreach,
     allowMessageSending: llm.allowMessageSending && deterministic.allowMessageSending,
     allowDraftCreation: llm.allowDraftCreation && deterministic.allowDraftCreation,
+    // OR, no AND -- ver el comentario del campo en el schema: esto es un
+    // requisito que se ACTIVA, nunca un permiso que se restringe.
+    requireHiringSignal: llm.requireHiringSignal || deterministic.requireHiringSignal,
   };
 }

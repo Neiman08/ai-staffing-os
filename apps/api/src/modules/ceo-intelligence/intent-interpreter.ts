@@ -121,13 +121,27 @@ function buildPlannedSteps(intent: {
  * secundarios. Nunca ejecuta ninguna busqueda/proveedor/escritura.
  */
 export function interpretBusinessIntent(rawInstruction: string): StructuredIntent {
-  const { exclusions, positiveText } = extractExclusions(rawInstruction);
+  const { exclusions: explicitExclusions, positiveText } = extractExclusions(rawInstruction);
   const normalizedPositive = normalizeText(positiveText);
 
   const matchedEntries = BUSINESS_TAXONOMY.filter((entry) =>
     entry.synonyms.some((syn) => containsWord(normalizedPositive, normalizeText(syn))),
   );
   const matchedTaxonomyKeys = matchedEntries.map((e) => e.key);
+
+  // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del
+  // PO): "hoteles comerciales" debe EXCLUIR motel/inn/bed and breakfast/
+  // guest house de las queries por completo -- no solo despriorizarlos
+  // (taxonomy.ts ya los deja al final del orden). Caso especial,
+  // deliberadamente acotado a hospitality -- NUNCA una regla genérica de
+  // "comercial" para otros trades, ni una exclusión permanente de la
+  // taxonomía (una misión sin esta frase sigue buscando motel/inn/B&B
+  // normalmente).
+  const COMMERCIAL_HOTELS_ONLY_RE = /\bhoteles?\s+comerciales?\b|\bcommercial\s+hotels?\b/i;
+  const exclusions =
+    matchedTaxonomyKeys.includes("hospitality") && COMMERCIAL_HOTELS_ONLY_RE.test(rawInstruction)
+      ? Array.from(new Set([...explicitExclusions, "motel", "inn", "bed and breakfast", "bed & breakfast", "guest house", "guesthouse"]))
+      : explicitExclusions;
 
   const companyTypes = Array.from(new Set(matchedEntries.flatMap((e) => e.companyTypes)));
   const industries = Array.from(

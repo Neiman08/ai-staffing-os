@@ -54,10 +54,21 @@ export interface ConversionEvidence {
   hasConfirmedWebsite: boolean;
   /** Contacto de persona real (PDL) con ranking HIGH_CONFIDENCE o MEDIUM_CONFIDENCE. */
   hasRealPersonContact: boolean;
+  // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+  // true cuando la instrucción exigió explícitamente "que estén
+  // contratando" (MissionRestrictions.requireHiringSignal). Antes,
+  // hiringStatus era siempre metadata informativa -- ninguna combinación
+  // de evidencia bloqueaba la conversión SOLO por falta de señal de
+  // contratación salvo el caso ya cubierto (NO_SIGNAL_LEAD_ONLY, que
+  // igual crea un Lead de investigación). Cuando este flag es true, NO
+  // SIGNAL/UNKNOWN pasan a bloquear la conversión por completo -- la
+  // Company sigue existiendo, pero nunca avanza a Lead/Opportunity.
+  requireHiringSignal: boolean;
 }
 
 export const conversionRules = [
   "BLOCKED_OR_DUBIOUS_IDENTITY",
+  "HIRING_SIGNAL_REQUIRED_BUT_MISSING",
   "NO_MINIMUM_EVIDENCE",
   "EXACT_CONFIRMED_OR_LIKELY_HIRING",
   "EXACT_POSSIBLE_HIRING_WITH_EVIDENCE",
@@ -83,6 +94,19 @@ function hasAnyChannel(e: ConversionEvidence): boolean {
 
 const HIRING_POSITIVE_OR_BETTER = new Set<HiringStatus>(["CONFIRMED_HIRING", "LIKELY_HIRING", "POSSIBLE_HIRING"]);
 
+/**
+ * F28 (misión real de Hospitality, 2026-07-28): única función que decide
+ * qué cuenta como "evidencia real de contratación" para
+ * requireHiringSignal -- reusada tal cual por el pipeline clásico
+ * estático (mission-orchestrator.ts, que lee el mismo
+ * Company.discoveryMetadata.hiringSignal.hiringStatus) para que ambos
+ * caminos apliquen exactamente el mismo criterio, nunca uno duplicado
+ * por separado.
+ */
+export function hasPositiveHiringSignal(hiringStatus: HiringStatus): boolean {
+  return hiringStatus != null && HIRING_POSITIVE_OR_BETTER.has(hiringStatus);
+}
+
 export function decideCompanyConversion(evidence: ConversionEvidence): ConversionDecision {
   const channel = hasAnyChannel(evidence);
 
@@ -96,6 +120,24 @@ export function decideCompanyConversion(evidence: ConversionEvidence): Conversio
       rule: "BLOCKED_OR_DUBIOUS_IDENTITY",
       reason: `Identidad de negocio dudosa o bloqueada (validación ${evidence.businessConfidence}${evidence.hiringStatus === "BLOCKED" ? ", señal de contratación BLOCKED" : ""}) -- nunca se crea Lead ni Opportunity.`,
       hasAnyChannel: channel,
+    };
+  }
+
+  // 1.5. Señal de contratación EXIGIDA explícitamente por la misión, pero
+  // ausente -- se evalúa antes que cualquier otra regla de evidencia
+  // porque, cuando este flag está activo, es un criterio de selección
+  // tan fundamental como la identidad de negocio (regla 1): la Company
+  // puede ser un hotel perfecto, con canal real y todo, pero si la
+  // misión pidió explícitamente "que estén contratando" y no hay señal
+  // real de eso, nunca corresponde avanzarla al pipeline comercial.
+  if (evidence.requireHiringSignal && !hasPositiveHiringSignal(evidence.hiringStatus)) {
+    return {
+      createLead: false,
+      createOpportunity: false,
+      opportunityReviewRequired: false,
+      rule: "HIRING_SIGNAL_REQUIRED_BUT_MISSING",
+      reason: `La misión exigió explícitamente empresas que estén contratando -- señal de contratación real: ${evidence.hiringStatus ?? "no evaluada"} -- nunca se crea Lead ni Opportunity sin evidencia positiva (Confirmed/Probable/Possible). La Company queda registrada.`,
+      hasAnyChannel: hasAnyChannel(evidence),
     };
   }
 

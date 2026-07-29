@@ -196,11 +196,20 @@ export function createApp() {
       // no está en uso).
       const emailProvider = await getEmailProviderHealth();
 
+      // F28 (pedido explícito del PO, 2026-07-29): confirmar que el
+      // commit realmente desplegado en Render coincide con el que se
+      // acaba de pushear, sin depender de un token de la API de Render
+      // (no disponible en este entorno). RENDER_GIT_COMMIT es una env
+      // var real que Render inyecta automáticamente en cada deploy --
+      // nunca configurada a mano, nunca un secreto (el mismo SHA ya es
+      // público en GitHub).
+      const gitCommit = process.env.RENDER_GIT_COMMIT ?? null;
+
       if (!migrationsApplied || !authConfigured) {
-        res.status(503).json({ status: "not_ready", db: true, migrationsApplied, authConfigured, emailProvider });
+        res.status(503).json({ status: "not_ready", db: true, migrationsApplied, authConfigured, emailProvider, gitCommit });
         return;
       }
-      res.json({ status: "ok", db: true, migrationsApplied, authConfigured, emailProvider });
+      res.json({ status: "ok", db: true, migrationsApplied, authConfigured, emailProvider, gitCommit });
     } catch {
       res.status(503).json({ status: "not_ready", db: false });
     }

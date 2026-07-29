@@ -34,6 +34,45 @@ test("hoteles: 'Busca hoteles que necesiten housekeeping.'", () => {
   assert.equal(intent.objective.type, "find_companies");
 });
 
+// F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+// "hoteles comerciales" excluye motel/inn/bed and breakfast/guest house
+// de las queries por completo -- caso especial, acotado a hospitality.
+test("hoteles comerciales: 'Busca hoteles comerciales en Illinois.' excluye motel/inn/bed and breakfast de las queries", () => {
+  const intent = interpret("Busca hoteles comerciales en Illinois.");
+  for (const term of ["motel", "inn", "bed and breakfast"]) {
+    assert.ok(intent.exclusions.includes(term), `"${term}" debería estar en exclusions`);
+  }
+  assert.ok(intent.matchedTaxonomyKeys.includes("hospitality"));
+});
+
+test("commercial hotels (inglés): 'Find commercial hotels in Illinois.' también excluye", () => {
+  const intent = interpret("Find commercial hotels in Illinois.");
+  for (const term of ["motel", "inn", "bed and breakfast"]) {
+    assert.ok(intent.exclusions.includes(term));
+  }
+});
+
+test("'Busca hoteles en Illinois.' (sin 'comerciales') NUNCA excluye motel/inn/bed and breakfast -- caso normal, sin cambios", () => {
+  const intent = interpret("Busca hoteles en Illinois.");
+  for (const term of ["motel", "inn", "bed and breakfast"]) {
+    assert.ok(!intent.exclusions.includes(term), `"${term}" no debería excluirse sin "hoteles comerciales" explícito`);
+  }
+});
+
+test("una instrucción de OTRO trade (manufactura, sin ninguna mención de hoteles) nunca excluye motel/inn/bed and breakfast -- el gate está acotado a hospitality, no es una regla genérica", () => {
+  const intent = interpret("Busca empresas de manufactura en Illinois.");
+  assert.ok(!intent.matchedTaxonomyKeys.includes("hospitality"));
+  for (const term of ["motel", "inn", "bed and breakfast"]) {
+    assert.ok(!intent.exclusions.includes(term));
+  }
+});
+
+test("'hoteles comerciales' respeta exclusiones explícitas adicionales de la instrucción (excluye: X) -- se combinan, nunca se pisan", () => {
+  const intent = interpret("Busca hoteles comerciales en Illinois. Excluye: resort.");
+  assert.ok(intent.exclusions.includes("resort"));
+  assert.ok(intent.exclusions.includes("motel"));
+});
+
 test("hoteles: 'Busca hoteles con vacantes de Room Attendant.' (título literal en singular, texto también singular)", () => {
   const intent = interpret("Busca hoteles con vacantes de Room Attendant.");
   assert.ok(intent.companyTypes.includes("hotel"));

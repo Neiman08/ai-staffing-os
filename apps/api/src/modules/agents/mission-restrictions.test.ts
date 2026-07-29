@@ -212,3 +212,46 @@ test("buildRestrictionNotes: allowDraftCreation=false (negación explícita real
   const notes = buildRestrictionNotes(restrictions);
   assert.ok(notes.some((n) => n.toLowerCase().includes("borrador")));
 });
+
+// F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+// requireHiringSignal es restrictivo por default (false) y se ACTIVA con
+// una frase positiva explícita -- polaridad opuesta a los flags allowX
+// de arriba, así que se combina por OR (mergeMissionRestrictions), no
+// por AND.
+
+test("detectMissionRestrictionsFromText: sin ninguna mención de contratación, requireHiringSignal queda false (default)", () => {
+  const r = detectMissionRestrictionsFromText("Busca hoteles en Illinois.");
+  assert.equal(r.requireHiringSignal, false);
+});
+
+test("detectMissionRestrictionsFromText: 'que estén contratando' activa requireHiringSignal", () => {
+  const r = detectMissionRestrictionsFromText("Busca hoteles en Illinois que estén contratando.");
+  assert.equal(r.requireHiringSignal, true);
+});
+
+test("detectMissionRestrictionsFromText: 'actively hiring' (inglés) también activa requireHiringSignal", () => {
+  const r = detectMissionRestrictionsFromText("Find hotels in Illinois that are actively hiring.");
+  assert.equal(r.requireHiringSignal, true);
+});
+
+test("detectMissionRestrictionsFromText: 'hiring signals' (término del producto, no un pedido) NUNCA activa requireHiringSignal por sí solo", () => {
+  const r = detectMissionRestrictionsFromText("Detecta señales de contratación (hiring signals) reales para cada empresa.");
+  assert.equal(r.requireHiringSignal, false);
+});
+
+test("mergeMissionRestrictions: requireHiringSignal se combina por OR -- si CUALQUIERA de las dos fuentes lo detecta, se aplica", () => {
+  // El LLM lo detecta, el texto determinista no (frase ambigua que el
+  // regex no cubre) -- igual debe quedar true.
+  const merged = mergeMissionRestrictions({ requireHiringSignal: true }, "Busca hoteles en Illinois.");
+  assert.equal(merged.requireHiringSignal, true);
+});
+
+test("mergeMissionRestrictions: si ninguna de las dos fuentes lo pide, requireHiringSignal queda false", () => {
+  const merged = mergeMissionRestrictions({ requireHiringSignal: false }, "Busca hoteles en Illinois.");
+  assert.equal(merged.requireHiringSignal, false);
+});
+
+test("mergeMissionRestrictions: el detector determinista solo, sin nada del LLM, también activa requireHiringSignal", () => {
+  const merged = mergeMissionRestrictions(null, "Busca hoteles en Illinois que estén contratando.");
+  assert.equal(merged.requireHiringSignal, true);
+});

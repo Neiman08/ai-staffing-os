@@ -5,6 +5,7 @@ import {
   evaluateDraftEligibility,
   deriveCommercialStatus,
   evaluateBusinessIdentityGate,
+  hasPositiveHiringSignal,
   type ConversionEvidence,
   type BusinessConfidence,
 } from "./conversion-policy";
@@ -19,6 +20,7 @@ function evidence(overrides: Partial<ConversionEvidence> = {}): ConversionEviden
     hasConfirmedPhone: false,
     hasConfirmedWebsite: false,
     hasRealPersonContact: false,
+    requireHiringSignal: false,
     ...overrides,
   };
 }
@@ -109,6 +111,52 @@ test("hiringStatus UNKNOWN (Website Intelligence no pudo evaluar) se trata igual
   assert.equal(d.rule, "NO_SIGNAL_LEAD_ONLY");
 });
 
+// F28 (misión real de Hospitality, 2026-07-28, pedido explícito del PO):
+// requireHiringSignal=true convierte NO_SIGNAL/UNKNOWN de "Lead de
+// investigación" (comportamiento default de arriba) a "sin Lead ni
+// Opportunity" -- la Company sigue existiendo, pero nunca avanza.
+test("requireHiringSignal=true + NO_SIGNAL -> nunca Lead ni Opportunity, aunque business confidence sea EXACT y haya canal real", () => {
+  const d = decideCompanyConversion(evidence({ hiringStatus: "NO_SIGNAL", requireHiringSignal: true }));
+  assert.equal(d.createLead, false);
+  assert.equal(d.createOpportunity, false);
+  assert.equal(d.rule, "HIRING_SIGNAL_REQUIRED_BUT_MISSING");
+});
+
+test("requireHiringSignal=true + UNKNOWN -> nunca Lead ni Opportunity", () => {
+  const d = decideCompanyConversion(evidence({ hiringStatus: "UNKNOWN", requireHiringSignal: true }));
+  assert.equal(d.createLead, false);
+  assert.equal(d.createOpportunity, false);
+  assert.equal(d.rule, "HIRING_SIGNAL_REQUIRED_BUT_MISSING");
+});
+
+test("requireHiringSignal=true + hiringStatus null (nunca evaluado) -> nunca Lead ni Opportunity", () => {
+  const d = decideCompanyConversion(evidence({ hiringStatus: null, requireHiringSignal: true }));
+  assert.equal(d.createLead, false);
+  assert.equal(d.createOpportunity, false);
+  assert.equal(d.rule, "HIRING_SIGNAL_REQUIRED_BUT_MISSING");
+});
+
+test("requireHiringSignal=true + CONFIRMED_HIRING -> sigue creando Lead + Opportunity normalmente, la exigencia está satisfecha", () => {
+  const d = decideCompanyConversion(evidence({ hiringStatus: "CONFIRMED_HIRING", requireHiringSignal: true }));
+  assert.equal(d.createLead, true);
+  assert.equal(d.createOpportunity, true);
+  assert.equal(d.rule, "EXACT_CONFIRMED_OR_LIKELY_HIRING");
+});
+
+test("requireHiringSignal=true + POSSIBLE_HIRING (evidencia concreta) -> sigue avanzando, Possible cuenta como señal positiva", () => {
+  const d = decideCompanyConversion(evidence({ hiringStatus: "POSSIBLE_HIRING", hiringEvidenceConcrete: true, requireHiringSignal: true }));
+  assert.equal(d.createLead, true);
+  assert.equal(d.createOpportunity, true);
+  assert.equal(d.rule, "EXACT_POSSIBLE_HIRING_WITH_EVIDENCE");
+});
+
+test("requireHiringSignal=false (default) + NO_SIGNAL -> sigue el comportamiento de siempre (Lead de investigación, nunca Opportunity)", () => {
+  const d = decideCompanyConversion(evidence({ hiringStatus: "NO_SIGNAL", requireHiringSignal: false }));
+  assert.equal(d.createLead, true);
+  assert.equal(d.createOpportunity, false);
+  assert.equal(d.rule, "NO_SIGNAL_LEAD_ONLY");
+});
+
 test("businessConfidence WEAK nunca crea Lead ni Opportunity, aunque haya señal de contratación confirmada y canal", () => {
   const d = decideCompanyConversion(evidence({ businessConfidence: "WEAK" }));
   assert.equal(d.createLead, false);
@@ -154,6 +202,24 @@ test("cada decisión trae una razón legible no vacía", () => {
     const d = decideCompanyConversion(evidence({ businessConfidence: conf }));
     assert.ok(d.reason.length > 0, `sin razón para ${conf}`);
   }
+});
+
+// F28 (misión real de Hospitality, 2026-07-28): hasPositiveHiringSignal
+// es la misma función que usa mission-orchestrator.ts (pipeline
+// clásico) para aplicar requireHiringSignal -- probada acá directamente
+// para que ambos caminos (dinámico vía decideCompanyConversion, y
+// clásico vía este export) queden cubiertos con el mismo criterio.
+test("hasPositiveHiringSignal: CONFIRMED_HIRING/LIKELY_HIRING/POSSIBLE_HIRING son positivos", () => {
+  assert.equal(hasPositiveHiringSignal("CONFIRMED_HIRING"), true);
+  assert.equal(hasPositiveHiringSignal("LIKELY_HIRING"), true);
+  assert.equal(hasPositiveHiringSignal("POSSIBLE_HIRING"), true);
+});
+
+test("hasPositiveHiringSignal: NO_SIGNAL/UNKNOWN/BLOCKED/null nunca son positivos", () => {
+  assert.equal(hasPositiveHiringSignal("NO_SIGNAL"), false);
+  assert.equal(hasPositiveHiringSignal("UNKNOWN"), false);
+  assert.equal(hasPositiveHiringSignal("BLOCKED"), false);
+  assert.equal(hasPositiveHiringSignal(null), false);
 });
 
 // ---------- evaluateDraftEligibility ----------
