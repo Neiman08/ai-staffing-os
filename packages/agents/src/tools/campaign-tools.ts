@@ -58,6 +58,18 @@ export const selectTargetCompaniesInputSchema = z.object({
   // el comportamiento de selección amplia por industria/estado sigue
   // igual que siempre.
   restrictToCompanyIds: z.array(z.string()).optional(),
+  // F28 (misión real de Hospitality, 2026-07-29): cuando
+  // restrictToCompanyIds queda vacío porque el descubrimiento de ESTA
+  // misión no encontró NADA nuevo (todo duplicado de una misión anterior
+  // del mismo trade+estado, mismo día) -- nunca porque el trade no tenga
+  // industria real -- la selección amplia por industria/estado NO
+  // alcanza sola: varios trades comparten el mismo bucket de Industry
+  // (ej. roofing/electrical/data centers, todos "Construction"), así que
+  // sin este filtro adicional se reintroduciría el bug de aislamiento
+  // original (D). Se acota por Company.tradeKey (poblado con evidencia
+  // real, ver F19 Fase 1) a los taxonomyKey NO genéricos que esta misión
+  // matcheó -- nunca al bucket amplio completo.
+  restrictToTradeKeys: z.array(z.string()).optional(),
 });
 export const selectTargetCompaniesTool: AgentTool<
   z.infer<typeof selectTargetCompaniesInputSchema>,

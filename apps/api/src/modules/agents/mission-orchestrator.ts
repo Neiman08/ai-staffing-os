@@ -507,7 +507,13 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   // genérico (roofing, landscaping...) siempre debe forzar descubrimiento
   // + validación real de ESE trade, sin importar cuántas empresas de
   // OTROS trades ya existan en el mismo bucket amplio.
-  const hasSpecificTradeMatch = externalIntent.matchedTaxonomyKeys.some((key) => getTaxonomyEntry(key)?.isGenericFallback === false);
+  // F28 (misión real de Hospitality, 2026-07-29): reusado más abajo para
+  // acotar la selección amplia por Company.tradeKey cuando
+  // discoveredCompanyIdsThisMission queda vacío (ver el fix de esa
+  // variable, unas líneas abajo) -- nunca el bucket amplio de Industry
+  // completo, que puede compartirse entre varios trades distintos.
+  const specificMatchedTaxonomyKeys = externalIntent.matchedTaxonomyKeys.filter((key) => getTaxonomyEntry(key)?.isGenericFallback === false);
+  const hasSpecificTradeMatch = specificMatchedTaxonomyKeys.length > 0;
   if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0 || hasSpecificTradeMatch)) {
     // Bug real encontrado en auditoría: sin excluir DEMO_SEED/INTERNAL_TEST
     // (mismo criterio que crm/service.ts y campaign-tools.impl.ts), una
@@ -599,7 +605,22 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
           // descubrimiento nuevo), la selección amplia por industria/
           // estado sigue siendo el comportamiento correcto ("trabajar
           // sobre la base existente" es exactamente ese caso).
-          restrictToCompanyIds: discoveredCompanyIdsThisMission ?? undefined,
+          //
+          // Bug real (Hospitality, 2026-07-29): discoveredCompanyIdsThisMission
+          // puede quedar en `[]` (array vacío, NO null) cuando el
+          // fallback SÍ corrió pero todo lo que encontró ya existía en
+          // el CRM (duplicado de una misión anterior del mismo trade+
+          // estado, mismo día) -- `[] ?? undefined` sigue siendo `[]`,
+          // así que restrictToCompanyIds terminaba restringiendo a CERO
+          // empresas en vez de caer al comportamiento amplio que el
+          // comentario de arriba describe. `?.length` corrige ambos
+          // casos (null y array vacío) de la misma forma.
+          restrictToCompanyIds: discoveredCompanyIdsThisMission?.length ? discoveredCompanyIdsThisMission : undefined,
+          // F28: acota la selección amplia (cuando restrictToCompanyIds
+          // no aplica) por trade específico -- nunca al bucket amplio de
+          // Industry completo, que puede compartirse entre varios trades
+          // distintos (ver el comentario de campaign-tools.impl.ts).
+          restrictToTradeKeys: specificMatchedTaxonomyKeys.length > 0 ? specificMatchedTaxonomyKeys : undefined,
         },
         triggeredBy: "AGENT",
         parentTaskId: missionTaskId,
@@ -623,8 +644,18 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
             commercialStatus: "COMMERCIAL_VALIDATED",
             // F28: mismo criterio de aislamiento que la rama con
             // Campaign, arriba -- ids reales, nunca un AgentTask id (ver
-            // comentario de diseño en campaign-tools.impl.ts).
-            id: discoveredCompanyIdsThisMission ? { in: discoveredCompanyIdsThisMission } : undefined,
+            // comentario de diseño en campaign-tools.impl.ts). Mismo fix
+            // de `[]` vs `null` que la rama de arriba (bug real,
+            // Hospitality 2026-07-29): un array vacío truthy nunca debe
+            // restringir a cero empresas.
+            id: discoveredCompanyIdsThisMission?.length ? { in: discoveredCompanyIdsThisMission } : undefined,
+            // F28: mismo fallback seguro por trade específico que la
+            // rama con Campaign, arriba -- nunca el bucket amplio de
+            // Industry completo.
+            tradeKey:
+              !discoveredCompanyIdsThisMission?.length && specificMatchedTaxonomyKeys.length > 0
+                ? { in: specificMatchedTaxonomyKeys }
+                : undefined,
           },
           orderBy: [{ commercialScore: "desc" }, { createdAt: "asc" }],
           take: perCampaignVolume,

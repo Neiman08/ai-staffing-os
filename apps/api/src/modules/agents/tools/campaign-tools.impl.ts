@@ -228,6 +228,18 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
               notIn: excludedElsewhere.map((c) => c.companyId),
               in: input.restrictToCompanyIds ?? undefined,
             },
+            // F28 (misión real de Hospitality, 2026-07-29): fallback
+            // seguro para cuando restrictToCompanyIds vino vacío (esta
+            // misión no descubrió NADA nuevo -- todo duplicado de una
+            // misión anterior del mismo trade+estado, mismo día) --
+            // acota por Company.tradeKey a los taxonomyKey específicos
+            // que ESTA misión pidió, nunca al bucket amplio de Industry
+            // completo (varios trades distintos pueden compartir la
+            // misma Industry, ej. roofing/electrical en "Construction" --
+            // sin este filtro se reintroduciría el bug de aislamiento
+            // original). Solo se aplica cuando NO hay restrictToCompanyIds
+            // reales -- si los hay, ya son suficientemente específicos.
+            tradeKey: !input.restrictToCompanyIds?.length && input.restrictToTradeKeys?.length ? { in: input.restrictToTradeKeys } : undefined,
             // F18: nunca ofrecer candidatos de Discovery sin validar como
             // target de campaña -- ver Company.commercialStatus.
             commercialStatus: "COMMERCIAL_VALIDATED",
