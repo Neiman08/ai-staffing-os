@@ -210,3 +210,70 @@ test("select_target_companies: restrictToCompanyIds (cuando SÍ hay descubrimien
 
   assert.deepEqual(result.companyIds, [roofingCompanies[0]!.id], "restrictToCompanyIds ya es más específico que restrictToTradeKeys -- debe ganar, nunca ampliarse");
 });
+
+/**
+ * F28 (hallazgo real, misión de Hospitality, 2026-07-29, MIS-20260729-0005):
+ * el fallback por tradeKey (arriba) resolvió el bug de companiesTargeted=0,
+ * pero expuso uno nuevo -- "Cornerstone Inn", ya en el CRM desde una
+ * misión anterior sin la exclusión de "hoteles comerciales", fue
+ * seleccionada por este mismo fallback y llegó a generar Lead+Opportunity
+ * reales pese a que la misión excluía explícitamente moteles/inns/bed &
+ * breakfast/guest houses. La restricción de la misión debe prevalecer
+ * sobre el historial del CRM -- `excludeNameTerms` (genérico, por tipo de
+ * negocio vía matchesMissionExclusion, nunca una lista fija de nombres)
+ * se aplica en el mismo punto que restrictToTradeKeys.
+ */
+async function setupExclusionScenario() {
+  const tenant = await prisma.tenant.create({
+    data: { name: `${TEST_PREFIX}-exclusion-${Date.now()}`, slug: `${TEST_PREFIX.toLowerCase()}-exclusion-${Date.now()}` },
+  });
+  createdTenantIds.push(tenant.id);
+
+  const hospitality = await prisma.industry.findFirstOrThrow({ where: { name: "Hospitality", isGlobal: true } });
+  const innCompany = await prisma.company.create({
+    data: { tenantId: tenant.id, name: "Cornerstone Inn", industryId: hospitality.id, state: "IL", origin: "API_PROVIDER", tradeKey: "hospitality" },
+  });
+  const bnbCompany = await prisma.company.create({
+    data: { tenantId: tenant.id, name: "The Conner House Bed & Breakfast", industryId: hospitality.id, state: "IL", origin: "API_PROVIDER", tradeKey: "hospitality" },
+  });
+  const hotelCompany = await prisma.company.create({
+    data: { tenantId: tenant.id, name: "The Ivy Hotel", industryId: hospitality.id, state: "IL", origin: "API_PROVIDER", tradeKey: "hospitality" },
+  });
+  const campaign = await prisma.campaign.create({
+    data: { tenantId: tenant.id, name: "Hospitality IL — misión de prueba", industryId: hospitality.id, state: "IL" },
+  });
+
+  return { tenantId: tenant.id, innCompany, bnbCompany, hotelCompany, campaign };
+}
+
+test("select_target_companies con restrictToTradeKeys + excludeNameTerms: nunca selecciona un Inn/B&B ya existente en el CRM, aunque matchee el tradeKey pedido", async () => {
+  const { tenantId, innCompany, bnbCompany, hotelCompany, campaign } = await setupExclusionScenario();
+
+  const result = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const tools = createCampaignTools(fakeDeps);
+    const selectTool = tools.find((t) => t.name === "selectTargetCompanies")!;
+    return selectTool.execute({
+      campaignId: campaign.id,
+      limit: 50,
+      restrictToTradeKeys: ["hospitality"],
+      excludeNameTerms: ["motel", "inn", "bed and breakfast", "bed & breakfast", "guest house", "guesthouse"],
+    }) as Promise<{ companyIds: string[] }>;
+  });
+
+  assert.ok(!result.companyIds.includes(innCompany.id), "'Cornerstone Inn' no debía aparecer pese a matchear tradeKey=hospitality -- la exclusión de la misión prevalece sobre el historial del CRM");
+  assert.ok(!result.companyIds.includes(bnbCompany.id), "'The Conner House Bed & Breakfast' no debía aparecer -- mismo criterio genérico de exclusión");
+  assert.ok(result.companyIds.includes(hotelCompany.id), "'The Ivy Hotel' sí debía aparecer -- no matchea ningún término de exclusión, la misión sigue necesitando hoteles reales");
+});
+
+test("select_target_companies con restrictToTradeKeys SIN excludeNameTerms: una misión sin esa restricción sigue pudiendo seleccionar Inns/B&B (no se rompe el caso de uso existente)", async () => {
+  const { tenantId, innCompany, bnbCompany, hotelCompany, campaign } = await setupExclusionScenario();
+
+  const result = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const tools = createCampaignTools(fakeDeps);
+    const selectTool = tools.find((t) => t.name === "selectTargetCompanies")!;
+    return selectTool.execute({ campaignId: campaign.id, limit: 50, restrictToTradeKeys: ["hospitality"] }) as Promise<{ companyIds: string[] }>;
+  });
+
+  assert.equal(result.companyIds.length, 3, "sin excludeNameTerms, el comportamiento preexistente sigue igual -- las 3 empresas de hospitality, incluidos Inn/B&B");
+  for (const id of [innCompany.id, bnbCompany.id, hotelCompany.id]) assert.ok(result.companyIds.includes(id));
+});

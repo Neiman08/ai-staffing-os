@@ -12,6 +12,7 @@ import { interpretBusinessIntent } from "../ceo-intelligence/intent-interpreter"
 import { buildMissionPlan } from "../ceo-intelligence/mission-planner";
 import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import { hasPositiveHiringSignal, type HiringStatus } from "../ceo-intelligence/conversion-policy";
+import { matchesMissionExclusion } from "../ceo-intelligence/business-validation";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { executeDiscoveryPlan, type DiscoveryExecutionReport } from "./mission-executor";
 
@@ -621,6 +622,15 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
           // Industry completo, que puede compartirse entre varios trades
           // distintos (ver el comentario de campaign-tools.impl.ts).
           restrictToTradeKeys: specificMatchedTaxonomyKeys.length > 0 ? specificMatchedTaxonomyKeys : undefined,
+          // F28 (hallazgo real, misión de Hospitality, 2026-07-29): la
+          // exclusión explícita de la misión ("excluye inns, bed &
+          // breakfast...") debe prevalecer también sobre empresas YA
+          // existentes en el CRM, no solo sobre descubrimiento nuevo
+          // (que ya la aplica en business-validation.ts) -- bug real:
+          // "Cornerstone Inn" fue seleccionada por el fallback de
+          // restrictToTradeKeys y llegó a generar Lead+Opportunity pese
+          // a esta exclusión.
+          excludeNameTerms: externalPlan.exclusions.length > 0 ? externalPlan.exclusions : undefined,
         },
         triggeredBy: "AGENT",
         parentTaskId: missionTaskId,
@@ -659,9 +669,16 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
           },
           orderBy: [{ commercialScore: "desc" }, { createdAt: "asc" }],
           take: perCampaignVolume,
-          select: { id: true },
+          select: { id: true, name: true },
         })
-      ).map((c) => c.id);
+      )
+        // F28 (hallazgo real, misión de Hospitality, 2026-07-29): mismo
+        // criterio que la rama con Campaign, arriba -- la exclusión
+        // explícita de la misión prevalece también sobre empresas YA
+        // existentes en el CRM seleccionadas acá directo (sin pasar por
+        // selectTargetCompaniesTool).
+        .filter((c) => externalPlan.exclusions.length === 0 || !matchesMissionExclusion(c.name, externalPlan.exclusions))
+        .map((c) => c.id);
       log(missionTaskId, "companies selected without campaign", { count: companyIds.length });
     }
 
@@ -670,6 +687,23 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
 
       const company = await scopedDb.company.findUnique({ where: { id: companyId } });
       if (!company) continue;
+
+      // F28 (hallazgo real, misión de Hospitality, 2026-07-29): segunda
+      // barrera, defensa en profundidad -- aunque la selección de arriba
+      // (con o sin Campaign) ya filtra por exclusión explícita, este
+      // check repite el mismo criterio acá para garantizar que NINGUNA
+      // Company excluida por nombre pueda avanzar a score_company/
+      // create_lead/create_opportunity/plan_sequence/personalize_message,
+      // sin importar de qué rama de selección haya venido. La
+      // restricción de la misión debe prevalecer sobre el historial del
+      // CRM en todo el pipeline, no solo en el punto de selección.
+      if (externalPlan.exclusions.length > 0) {
+        const exclusionMatch = matchesMissionExclusion(company.name, externalPlan.exclusions);
+        if (exclusionMatch) {
+          log(missionTaskId, "company skipped -- nombre coincide con exclusión explícita de la misión", { companyId, exclusionMatch });
+          continue;
+        }
+      }
 
       // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del
       // PO): cuando la misión exigió explícitamente "que estén

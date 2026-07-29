@@ -17,6 +17,7 @@ import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { AppError } from "../../../core/errors";
 import type { UsageAccumulator } from "../usage";
+import { matchesMissionExclusion } from "../../ceo-intelligence/business-validation";
 
 const COMPANY_SIZE_ORDER = ["MICRO", "SMALL", "MEDIUM", "LARGE", "ENTERPRISE"] as const;
 
@@ -260,15 +261,26 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
           take: input.limit ?? 50,
         });
 
+        // F28 (hallazgo real, misión de Hospitality, 2026-07-29): las
+        // exclusiones explícitas de la misión ("excluye inns, bed &
+        // breakfast...") deben aplicarse también acá -- `candidates`
+        // puede incluir empresas YA existentes en el CRM desde antes de
+        // que esta misión (o esta exclusión) existiera. La restricción
+        // de la misión actual prevalece siempre sobre el historial del
+        // CRM, sin importar qué tan atrás se haya creado la Company.
+        const nameFiltered = input.excludeNameTerms?.length
+          ? candidates.filter((c) => !matchesMissionExclusion(c.name, input.excludeNameTerms!))
+          : candidates;
+
         const alreadyInCampaign = new Set(
           (
             await scopedDb.campaignCompany.findMany({
-              where: { campaignId: input.campaignId, companyId: { in: candidates.map((c) => c.id) } },
+              where: { campaignId: input.campaignId, companyId: { in: nameFiltered.map((c) => c.id) } },
               select: { companyId: true },
             })
           ).map((c) => c.companyId),
         );
-        const newCompanies = candidates.filter((c) => !alreadyInCampaign.has(c.id));
+        const newCompanies = nameFiltered.filter((c) => !alreadyInCampaign.has(c.id));
 
         if (newCompanies.length > 0) {
           await scopedDb.campaignCompany.createMany({

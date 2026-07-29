@@ -164,6 +164,33 @@ function matchWordsInDomain(domain: string | null, words: string[]): string[] {
   return words.filter((word) => normalizedDomain.includes(normalizeText(word)));
 }
 
+/**
+ * F28 (hallazgo real, misión de Hospitality, 2026-07-29): devuelve el
+ * término de exclusión de la misión que matchea `candidateName`, o null
+ * si ninguno matchea -- mismo límite de palabra que el resto de este
+ * módulo (nunca substring crudo: "inn" no debe matchear "Winning
+ * Solutions"). Extraída como función pura reutilizable porque esta
+ * exclusión debe aplicarse en DOS momentos distintos, no solo al
+ * descubrir candidatos nuevos (este módulo): también al seleccionar
+ * empresas YA existentes en el CRM (select_target_companies y su
+ * fallback por tradeKey, ver campaign-tools.impl.ts/mission-orchestrator.ts)
+ * -- bug real encontrado en producción: "Cornerstone Inn" (CRM desde una
+ * misión anterior sin esta exclusión) fue seleccionada por el fallback
+ * de tradeKey y llegó a generar Lead+Opportunity pese a que la misión
+ * excluía explícitamente "inn". La restricción de la misión debe
+ * prevalecer sobre el historial del CRM, sin importar de dónde salga la
+ * Company.
+ */
+export function matchesMissionExclusion(candidateName: string, missionExclusions: string[]): string | null {
+  const normalizedName = normalizeText(candidateName);
+  for (const exclusion of missionExclusions) {
+    if (exclusion.trim() && containsWord(normalizedName, normalizeText(exclusion))) {
+      return exclusion;
+    }
+  }
+  return null;
+}
+
 function buildEmptyResult(
   confidence: BusinessValidationConfidenceLevel,
   rejectionReasons: string[],
@@ -203,7 +230,6 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
     return buildEmptyResult("REJECTED", [`Taxonomy key desconocida: "${input.taxonomyKey}".`]);
   }
 
-  const normalizedName = normalizeText(input.candidateName);
   const domain = domainOf(input.website);
 
   // F28 (restricción geográfica estricta, hallazgo real 2026-07-27):
@@ -220,12 +246,11 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
     ]);
   }
 
-  for (const exclusion of input.missionExclusions) {
-    if (exclusion.trim() && containsWord(normalizedName, normalizeText(exclusion))) {
-      return buildEmptyResult("REJECTED", [
-        `El nombre coincide con un término excluido explícitamente por la misión: "${exclusion}".`,
-      ]);
-    }
+  const matchedExclusion = matchesMissionExclusion(input.candidateName, input.missionExclusions);
+  if (matchedExclusion) {
+    return buildEmptyResult("REJECTED", [
+      `El nombre coincide con un término excluido explícitamente por la misión: "${matchedExclusion}".`,
+    ]);
   }
 
   const negativeNameMatches = matchPhrasesInText(input.candidateName, entry.negativeKeywords);

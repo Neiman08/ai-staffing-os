@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateBusinessCandidate, type BusinessValidationInput } from "./business-validation";
+import { validateBusinessCandidate, matchesMissionExclusion, type BusinessValidationInput } from "./business-validation";
 
 function baseInput(overrides: Partial<BusinessValidationInput>): BusinessValidationInput {
   return {
@@ -279,6 +279,26 @@ test("rejection reasons: coincide con una exclusión explícita de la misión", 
   );
   assert.equal(result.accepted, false);
   assert.ok(result.rejectionReasons[0]!.includes("excluido explícitamente"));
+});
+
+// ---------- matchesMissionExclusion (F28, extraída para reutilizarse
+// también fuera de discovery -- ver select_target_companies/fallback por
+// tradeKey, campaign-tools.impl.ts/mission-orchestrator.ts) ----------
+
+test("matchesMissionExclusion: 'Cornerstone Inn' matchea el término genérico 'inn' (no una lista fija de nombres)", () => {
+  assert.equal(matchesMissionExclusion("Cornerstone Inn", ["motel", "inn", "guest house"]), "inn");
+});
+
+test("matchesMissionExclusion: nunca hace substring crudo -- 'Winning Solutions' no matchea 'inn'", () => {
+  assert.equal(matchesMissionExclusion("Winning Solutions", ["inn"]), null);
+});
+
+test("matchesMissionExclusion: 'The Ivy Hotel' no matchea ninguna exclusión de inn/motel/guest house", () => {
+  assert.equal(matchesMissionExclusion("The Ivy Hotel", ["motel", "inn", "bed and breakfast", "guest house"]), null);
+});
+
+test("matchesMissionExclusion: sin exclusiones, nunca matchea nada", () => {
+  assert.equal(matchesMissionExclusion("Cornerstone Inn", []), null);
 });
 
 // ---------- Determinismo y estructura del contrato ----------

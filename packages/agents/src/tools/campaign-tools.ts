@@ -70,6 +70,19 @@ export const selectTargetCompaniesInputSchema = z.object({
   // real, ver F19 Fase 1) a los taxonomyKey NO genéricos que esta misión
   // matcheó -- nunca al bucket amplio completo.
   restrictToTradeKeys: z.array(z.string()).optional(),
+  // F28 (hallazgo real, misión de Hospitality, 2026-07-29): cuando la
+  // misión excluye explícitamente un tipo de negocio (ej. "excluye
+  // motels, inns, bed & breakfast y guest houses"), esa exclusión debe
+  // prevalecer también sobre empresas YA existentes en el CRM -- no solo
+  // sobre candidatos nuevos de Discovery (que ya la aplican en
+  // business-validation.ts, ver matchesMissionExclusion). Bug real:
+  // "Cornerstone Inn", ya en el CRM desde una misión anterior sin esta
+  // exclusión, fue seleccionada por el fallback de restrictToTradeKeys y
+  // llegó a generar Lead+Opportunity pese a la exclusión explícita de
+  // esta misión. Mismos términos que StructuredIntent.exclusions
+  // (intent-interpreter.ts) -- nunca una lista fija de nombres de
+  // empresa, siempre genérica por tipo de negocio.
+  excludeNameTerms: z.array(z.string()).optional(),
 });
 export const selectTargetCompaniesTool: AgentTool<
   z.infer<typeof selectTargetCompaniesInputSchema>,
