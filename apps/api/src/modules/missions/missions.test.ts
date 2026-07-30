@@ -310,7 +310,13 @@ test("una instrucción que prohíbe campañas/oportunidades/outreach nunca las c
   // seed puede ya tener score y lead (nada que hacer), y eso es un
   // resultado válido, no un timeout. Se espera a que la misión misma
   // termine, no a una cantidad de hijos que no se puede garantizar.
-  const finalState = await waitForMissionSettled(body.id, 45_000);
+  // F30: si esa Company no tiene ningún punto de contacto, el loop
+  // por-compañía ahora intenta find_contacts/find_email de verdad (ver
+  // mission-orchestrator.ts) -- un crawl real de Website Intelligence
+  // contra un sitio real (varias páginas, con reintentos) puede tardar
+  // más que los 45s originales, que nunca contemplaron este trabajo
+  // nuevo y legítimo. 120s da margen real sin ocultar un cuelgue genuino.
+  const finalState = await waitForMissionSettled(body.id, 120_000);
   assert.ok(
     ["COMPLETED", "PARTIAL"].includes(finalState),
     `la misión debe cerrar normalmente (COMPLETED/PARTIAL), no ${finalState}`,

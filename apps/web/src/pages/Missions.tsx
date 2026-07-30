@@ -1160,8 +1160,24 @@ function MissionDetailDrawer({ missionId, onClose }: { missionId: string | null;
                 encontrados / roles sin contacto; agregado de misión:
                 candidatos evaluados / contactos creados / empresas con
                 contacto) -- este bloque de abajo es exclusivo del flujo
-                CLÁSICO (mission-orchestrator sin ejecutor dinámico). */}
-            {discoveryReport ? (
+                CLÁSICO (mission-orchestrator sin ejecutor dinámico).
+                F30 (hallazgo real, MIS-20260730-0001, auditoría de
+                degradación elegante): antes esto se ocultaba con
+                `discoveryReport` (discoveryExecution ?? discoveryFallback)
+                -- pero discoveryFallback (el camino híbrido/estático, el
+                más común en producción real hoy) NUNCA tiene datos reales
+                en su "Validación" cuando la misión cayó al fallback amplio
+                de empresas ya existentes (companyValidations vacío, esas
+                empresas nunca pasaron por ESTE discover_companies). Un
+                lector quedaba sin ver ningún dato real: "Validación"
+                vacía, y este bloque reemplazado por un puntero a esa
+                sección vacía -- pese a que companiesConsidered/
+                companiesWithContactPoint (contactCoverage, computado
+                aparte con datos reales de DB) sí reflejaban la verdad (ej.
+                5/25 con contacto real). Se acota a discoveryExecution
+                específicamente -- el único camino que sí tiene datos
+                reales y completos en su propia sección "Validación". */}
+            {detail.discoveryExecution ? (
               <p className="rounded-md border border-border p-2 text-xs text-muted-foreground">
                 Ver contactos personales encontrados en la sección "Validación" arriba.
               </p>

@@ -49,7 +49,10 @@ test("runMissionPipeline: con requireHiringSignal=true, solo la Company con señ
   const hospitality = await prisma.industry.findFirstOrThrow({ where: { name: "Hospitality", isGlobal: true } });
   const ceoDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "ceo" } });
   const ceoInstance = await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: ceoDefinition.id, isActive: true } });
-  for (const key of ["campaign", "sales", "outreach"]) {
+  // F30: contact_intelligence agregado -- runMissionPipeline ahora puede
+  // disparar find_contacts/find_email para una Company reutilizada sin
+  // contacto (ver mission-orchestrator.ts), necesita su propio AgentInstance.
+  for (const key of ["campaign", "sales", "outreach", "contact_intelligence"]) {
     const definition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key } });
     await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: definition.id, isActive: true } });
   }

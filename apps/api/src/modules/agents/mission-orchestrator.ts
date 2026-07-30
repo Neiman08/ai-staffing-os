@@ -715,7 +715,7 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
     for (const companyId of companyIds) {
       if ((await checkForStop()) === "stop") return;
 
-      const company = await scopedDb.company.findUnique({ where: { id: companyId } });
+      let company = await scopedDb.company.findUnique({ where: { id: companyId } });
       if (!company) continue;
 
       // F28 (hallazgo real, misión de Hospitality, 2026-07-29): segunda
@@ -750,6 +750,53 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
         if (!hasPositiveHiringSignal(hiringStatus)) {
           log(missionTaskId, "company skipped -- requireHiringSignal sin evidencia positiva", { companyId, hiringStatus });
           continue;
+        }
+      }
+
+      // F30 (hallazgo real, auditoría de degradación elegante,
+      // MIS-20260730-0001, 2026-07-30): una Company reutilizada del CRM
+      // (nunca descubierta por ESTA misión) que llega hasta acá sin
+      // ningún punto de contacto real (ni email organizacional, ni
+      // Contact) nunca recibía ningún intento de enriquecimiento -- el
+      // loop iba directo a score_company/create_lead usando lo que sea
+      // que esa Company ya tuviera guardado, sin importar cuán viejo o
+      // incompleto. Hunter/PDL/Website Intelligence son proveedores
+      // completamente independientes del presupuesto de Google Places
+      // (discovery de EMPRESAS) -- bloquear una NUNCA debería bloquear
+      // la otra. find_contacts/find_email (Contact Intelligence Agent,
+      // F4.6/F4.7) ya respetan el mismo guard de presupuesto compartido
+      // (getDataProviderBudgetStatus) internamente -- si PDL/Hunter están
+      // sin crédito, se omiten solos sin costo real; Website Intelligence
+      // (gratis, sin API key) igual corre. Acotado a Companies NO
+      // descubiertas por esta misión -- una recién descubierta ya pasó
+      // por su propio enriquecimiento dentro de executeDiscoveryPlan
+      // (mission-executor.ts), repetirlo acá sería un segundo intento
+      // redundante contra el mismo sitio.
+      if (!discoveredCompanyIdsThisMission?.includes(companyId)) {
+        const existingContactCount = await scopedDb.contact.count({ where: { companyId } });
+        if (!company.email && existingContactCount === 0) {
+          log(missionTaskId, "company sin punto de contacto -- intentando Contact Intelligence sobre empresa reutilizada", { companyId });
+          await createAndRunTaskSync(tenantId, operatorUserId, {
+            agentKey: "contact_intelligence",
+            type: "find_contacts",
+            input: { companyId },
+            triggeredBy: "AGENT",
+            parentTaskId: missionTaskId,
+          });
+          await createAndRunTaskSync(tenantId, operatorUserId, {
+            agentKey: "contact_intelligence",
+            type: "find_email",
+            input: { companyId },
+            triggeredBy: "AGENT",
+            parentTaskId: missionTaskId,
+          });
+          await syncMissionOutput(missionTaskId, "RUNNING");
+          // Company.email puede haberse completado recién arriba (Website
+          // Intelligence/Hunter) -- se relee para que score_company/
+          // create_lead de abajo vean el dato real y actualizado, nunca
+          // la copia stale de antes del enriquecimiento.
+          const refreshed = await scopedDb.company.findUnique({ where: { id: companyId } });
+          if (refreshed) company = refreshed;
         }
       }
 
