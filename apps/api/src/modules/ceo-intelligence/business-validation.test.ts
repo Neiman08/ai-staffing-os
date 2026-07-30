@@ -127,6 +127,54 @@ test("food manufacturing válido: 'Food Processing' en nombre -> EXACT", () => {
   assert.equal(result.confidence, "EXACT");
 });
 
+// F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): candidatos reales
+// de food manufacturing con nombres que no usan la frase completa "food
+// manufacturer"/"food processing" -- quedaban en WEAK (nunca
+// COMMERCIAL_VALIDATED, ver deriveCommercialStatus) pese a ser negocios
+// de food manufacturing reales y correctamente encontrados por su propia
+// query específica. "food"/"processing" sueltos agregados a companyTypes
+// (mismo criterio que "manufacturing" standalone).
+test("food manufacturing válido (caso real MIS-20260729-0009): 'Ajinomoto Foods North America, Inc.' -> EXACT vía 'food' suelto", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Ajinomoto Foods North America, Inc.", taxonomyKey: "food_manufacturing" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("food manufacturing válido (caso real MIS-20260729-0009): 'Central Illinois Poultry Processing, LLC' -> EXACT vía 'processing' suelto", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Central Illinois Poultry Processing, LLC", taxonomyKey: "food_manufacturing" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+// ---------- Packaging ----------
+
+// F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): las 7 empresas
+// reales de packaging descubiertas por esa misión quedaron TODAS en
+// WEAK -- ninguna usa literalmente "packaging manufacturer"/"packaging
+// company", incluidas 2 con hiringStatus=LIKELY_HIRING que nunca
+// llegaron a Company.commercialStatus=COMMERCIAL_VALIDATED y por lo
+// tanto nunca fueron elegibles para select_target_companies, pese a
+// tener señal de contratación real. "packaging" suelto agregado a
+// companyTypes (mismo criterio que "manufacturing" standalone).
+test("packaging válido (caso real MIS-20260729-0009): 'Plastipak Packaging Inc' -> EXACT vía 'packaging' suelto (LIKELY_HIRING real, nunca llegó a COMMERCIAL_VALIDATED antes del fix)", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Plastipak Packaging Inc", taxonomyKey: "packaging" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+  assert.equal(result.detectedSector, "Manufacturing");
+});
+
+test("packaging válido (caso real MIS-20260729-0009): 'Graphic Packaging International - Carol Stream' -> EXACT vía 'packaging' suelto (LIKELY_HIRING real)", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Graphic Packaging International - Carol Stream", taxonomyKey: "packaging" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("packaging válido (caso real MIS-20260729-0009): 'Shorr Packaging Corp - West Chicago' -> EXACT vía 'packaging' suelto", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Shorr Packaging Corp - West Chicago", taxonomyKey: "packaging" }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
 // ---------- Warehousing ----------
 
 test("warehouse válido: nombre contiene 'Warehouse' -> EXACT", () => {

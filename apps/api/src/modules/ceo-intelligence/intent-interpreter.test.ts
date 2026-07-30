@@ -128,6 +128,63 @@ test("roofing: 'Busca roofing contractors.'", () => {
   assert.deepEqual(intent.industries, ["Construction"]);
 });
 
+// F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): "Manufactura",
+// "Centros de distribución", "Logística", "Warehouses" y "Healthcare no
+// clínico" aparecían cada uno como su propio ítem explícito de la lista
+// -- pero manufacturing/warehousing/distribution/healthcare son
+// isGenericFallback=true en la taxonomía (F14: "bucket amplio, último
+// recurso"), así que specificMatchedTaxonomyKeys los excluía como si
+// nunca se hubieran pedido. La misión real terminó rechazando candidatos
+// reales de "Manufacturing (General)" con el mensaje "la misión pidió
+// específicamente: Hospitality, Food Manufacturing, Packaging,
+// Janitorial, Commercial Cleaning" -- una mentira, dado que la
+// instrucción sí pidió más categorías explícitamente.
+test("misión multiindustria (caso real MIS-20260729-0009): Manufactura/Warehouses/Centros de distribución/Healthcare, cada uno su propio ítem explícito, SÍ cuentan como específicamente pedidos pese a ser isGenericFallback=true", () => {
+  const intent = interpret(
+    "Busca empresas en Illinois. Prioriza: * Manufactura * Centros de distribución * Logística * Warehouses * Food processing * Packaging * Hoteles * Limpieza comercial * Healthcare no clínico",
+  );
+  assert.ok(intent.matchedTaxonomyKeys.includes("manufacturing"));
+  assert.ok(intent.matchedTaxonomyKeys.includes("warehousing"));
+  assert.ok(intent.matchedTaxonomyKeys.includes("distribution"));
+  assert.ok(intent.matchedTaxonomyKeys.includes("healthcare"));
+
+  // El bug real: estas 4 quedaban afuera de specificMatchedTaxonomyKeys
+  // pese a estar en su propio ítem explícito de la lista.
+  assert.ok(intent.specificMatchedTaxonomyKeys.includes("manufacturing"), "Manufactura fue su propio ítem explícito -- debe contar como pedido específicamente");
+  assert.ok(intent.specificMatchedTaxonomyKeys.includes("warehousing"), "Warehouses fue su propio ítem explícito -- debe contar como pedido específicamente");
+  assert.ok(intent.specificMatchedTaxonomyKeys.includes("distribution"), "Centros de distribución/Logística fueron su propio ítem explícito -- debe contar como pedido específicamente");
+  assert.ok(intent.specificMatchedTaxonomyKeys.includes("healthcare"), "Healthcare no clínico fue su propio ítem explícito -- debe contar como pedido específicamente");
+});
+
+// F28 (guardrail de regresión, roofing IL 2026-07-27): el fix de arriba
+// NO debe reintroducir el bug original -- cuando "construction" solo
+// matchea por una palabra ambigua/compartida ("contractor", también
+// parte de "roofing contractor"), nunca debe contar como pedido
+// específicamente. Si este test fallara, un candidato real de
+// "Construction (General)" (ej. una constructora general sin ninguna
+// evidencia de roofing) volvería a aceptarse en una misión que solo
+// pidió roofing -- exactamente el bug de contaminación cruzada que F28
+// corrigió.
+test("guardrail F28: 'Busca roofing contractors en Illinois.' NUNCA trata 'construction' como pedido específicamente (match incidental vía 'contractor', subsumido por 'roofing contractor')", () => {
+  const intent = interpret("Busca roofing contractors en Illinois.");
+  assert.ok(intent.matchedTaxonomyKeys.includes("roofing"));
+  assert.ok(intent.matchedTaxonomyKeys.includes("construction"), "construction matchea incidentalmente vía 'contractor' -- ese es justamente el caso a proteger");
+
+  assert.ok(intent.specificMatchedTaxonomyKeys.includes("roofing"), "roofing sí fue pedido específicamente");
+  assert.ok(
+    !intent.specificMatchedTaxonomyKeys.includes("construction"),
+    "construction NUNCA debe contar como pedido específicamente -- solo matcheó vía 'contractor', subsumido por el match más específico de roofing ('roofing contractor')",
+  );
+});
+
+// F29: "producción industrial" faltaba en los sinónimos de manufacturing
+// -- término real de una instrucción real que quedaba sin reconocer.
+test("'Producción industrial' matchea manufacturing (sinónimo agregado, hallazgo real MIS-20260729-0009)", () => {
+  const intent = interpret("Busca empresas de producción industrial en Illinois.");
+  assert.ok(intent.matchedTaxonomyKeys.includes("manufacturing"));
+  assert.ok(intent.specificMatchedTaxonomyKeys.includes("manufacturing"));
+});
+
 // F13 (auditoría PO, 2026-07-19): "contratistas eléctricos" (adjetivo)
 // es la frase real que usó el PO al validar el descubrimiento externo --
 // antes solo estaba la forma sustantivo ("electricistas") en los

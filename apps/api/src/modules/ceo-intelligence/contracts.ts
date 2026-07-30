@@ -137,6 +137,16 @@ export const structuredIntentSchema = z.object({
   // Trazabilidad: qué entradas de la taxonomía matchearon — permite
   // auditar/testear el intérprete sin adivinar su lógica interna.
   matchedTaxonomyKeys: z.array(z.string()),
+  // F29 (hallazgo real, MIS-20260729-0009): subconjunto de
+  // matchedTaxonomyKeys que cuenta como "específicamente pedido" por
+  // esta misión -- toda entrada no genérica, más las entradas genéricas
+  // (isGenericFallback=true) cuyo propio match no está subsumido por el
+  // match de otra entrada (ver intent-interpreter.ts para el algoritmo
+  // completo). Única fuente de verdad para "qué trades exige evidencia
+  // cruzada" (business-validation.ts) y "qué tradeKeys acotan el
+  // fallback de selección" (mission-orchestrator.ts) -- nunca un filtro
+  // por isGenericFallback duplicado en cada consumidor.
+  specificMatchedTaxonomyKeys: z.array(z.string()),
   // F15: nombres canónicos de clientes de infraestructura crítica
   // detectados literalmente en la instrucción (ver
   // critical-infrastructure-clients.ts) -- ej. "QTS", "Meta", "Google".
@@ -183,6 +193,11 @@ export const missionPlanSchema = z.object({
   objective: missionObjectiveSchema,
   searchQueries: z.array(missionPlanSearchQuerySchema),
   exclusions: z.array(z.string()),
+  // F29: copiado 1:1 de StructuredIntent.specificMatchedTaxonomyKeys --
+  // ver ese campo para el algoritmo. mission-executor.ts lo usa para el
+  // cross-check de business-validation.ts sin recalcular su propio
+  // filtro por isGenericFallback.
+  specificTaxonomyKeys: z.array(z.string()),
   cities: z.array(z.string()),
   states: z.array(z.string()),
   // Orden real de ejecución — nunca se reordena en runtime, el plan ES

@@ -205,6 +205,13 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
       "plantas industriales",
       "industrial plant",
       "factory",
+      // F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): "producción
+      // industrial"/"industrial production" faltaba -- término real
+      // usado en una instrucción real ("Producción industrial" como su
+      // propio ítem de la lista) que quedó en unrecognizedTerms pese a
+      // ser un sinónimo directo y sin ambigüedad de "manufacturing".
+      "produccion industrial",
+      "industrial production",
     ],
     // F7.4 Parte A: "manufacturing"/"manufacturer"/"production"/
     // "fabrication"/"processing"/"assembly"/"plant" agregados -- evidencia
@@ -247,7 +254,18 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     // F7.4 Parte A: "food processing"/"beverage production"/"packaging
     // food"/"plant"/"factory" agregados -- evidencia de aceptacion
     // explicita pedida por el PO (ver docs/F7.../PLAN.md §"Food Manufacturing").
-    companyTypes: ["food manufacturer", "food processing plant", "bakery manufacturer", "dairy processor", "food processing", "beverage production", "packaging food", "plant", "factory"],
+    // F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): "food"/
+    // "processing" sueltos agregados -- mismo criterio que "manufacturing"
+    // standalone (más abajo, entrada "manufacturing"): nombres reales
+    // ("Pure Foods Company", "Subco Foods Inc", "Ajinomoto Foods North
+    // America", "Central Illinois Poultry Processing, LLC") casi nunca
+    // usan la frase completa "food manufacturer"/"food processing" tal
+    // cual, así que quedaban en WEAK pese a ser candidatos de food
+    // manufacturing reales y correctamente encontrados por su propia
+    // query específica -- nunca se llegaba a evaluar señal de
+    // contratación ni pipeline comercial porque WEAK nunca alcanza
+    // COMMERCIAL_VALIDATED (deriveCommercialStatus, conversion-policy.ts).
+    companyTypes: ["food manufacturer", "food processing plant", "bakery manufacturer", "dairy processor", "food processing", "beverage production", "packaging food", "plant", "factory", "food", "processing"],
     crmIndustryBucket: "Manufacturing",
     googleSearchPhrases: ["food manufacturing company", "food processing plant", "food production facility"],
     websitePhrases: ["food safety", "FDA", "HACCP", "food production"],
@@ -287,7 +305,18 @@ export const BUSINESS_TAXONOMY: BusinessTaxonomyEntry[] = [
     key: "packaging",
     label: "Packaging",
     synonyms: ["packaging", "empaques", "empaquetado", "packaging company", "packaging manufacturer"],
-    companyTypes: ["packaging manufacturer", "packaging company"],
+    // F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): "packaging"
+    // suelto agregado -- mismo criterio que "manufacturing" standalone
+    // (más abajo). TODOS los candidatos reales de packaging de esa
+    // misión ("Plastipak Packaging Inc", "Graphic Packaging
+    // International", "Shorr Packaging Corp", "Graham Packaging Co",
+    // "Elevate Packaging", "Custom Packaging Lane") quedaron en WEAK
+    // porque ninguno usa literalmente "packaging manufacturer"/"packaging
+    // company" -- incluidas 2 empresas con hiringStatus=LIKELY_HIRING
+    // que nunca llegaron a Company.commercialStatus=COMMERCIAL_VALIDATED
+    // y por lo tanto nunca fueron elegibles para select_target_companies,
+    // pese a tener señal de contratación real.
+    companyTypes: ["packaging manufacturer", "packaging company", "packaging"],
     crmIndustryBucket: "Manufacturing",
     googleSearchPhrases: ["packaging manufacturing company", "packaging plant"],
     websitePhrases: ["packaging solutions", "corrugated", "co-packing"],

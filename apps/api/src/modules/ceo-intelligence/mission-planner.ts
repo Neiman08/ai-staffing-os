@@ -243,6 +243,7 @@ export function buildMissionPlan(intent: StructuredIntent): MissionPlan {
     objective: intent.objective,
     searchQueries: buildSearchQueries(intent),
     exclusions: intent.exclusions,
+    specificTaxonomyKeys: intent.specificMatchedTaxonomyKeys,
     cities: intent.preferredCities,
     states: intent.states,
     steps,

@@ -110,6 +110,7 @@ function manufacturingPlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
     objective: { type: "find_companies", targetCompanyCount: 1, rawText: "1 empresa de manufactura" },
     searchQueries: [{ searchTerm: "manufacturing company", crmIndustryBucket: "Manufacturing", taxonomyKey: "manufacturing" }],
     exclusions: [],
+    specificTaxonomyKeys: [],
     cities: [],
     states: ["IL"],
     steps: ["discover_companies"],

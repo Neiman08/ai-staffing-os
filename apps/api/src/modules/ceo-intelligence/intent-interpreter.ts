@@ -129,6 +129,43 @@ export function interpretBusinessIntent(rawInstruction: string): StructuredInten
   );
   const matchedTaxonomyKeys = matchedEntries.map((e) => e.key);
 
+  // F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): "Manufactura",
+  // "Warehouses", "Centros de distribución"/"Logística" y "Healthcare no
+  // clínico" aparecían como su PROPIO ítem explícito en la instrucción
+  // (misma viñeta que "Food processing"/"Packaging"), pero
+  // matchedTaxonomyKeys por sí solo no alcanza para saber si un match
+  // fue deliberado o incidental -- "construction" también matchea
+  // siempre que aparezca la palabra "contractor" (F28, misión real de
+  // roofing: "roofing contractor" matcheaba TANTO "roofing" [específico]
+  // como "construction" [genérico, vía la palabra suelta "contractor"],
+  // sin que el usuario haya pedido construcción general en absoluto).
+  //
+  // La distinción real: un match de una entrada GENÉRICA
+  // (isGenericFallback=true) cuenta como "específicamente pedido" SOLO
+  // si al menos uno de sus propios sinónimos matcheados NO es un
+  // substring del sinónimo matcheado de NINGUNA OTRA entrada -- ej.
+  // "warehouse" (sinónimo propio de warehousing) no es substring de
+  // ningún otro match real de esta misión, así que cuenta; "contractor"
+  // (sinónimo propio de construction) SÍ es substring del match de
+  // roofing ("roofing contractor"), así que no cuenta -- es evidencia
+  // subsumida por el trade específico, no un pedido independiente.
+  const matchedSynonymsByKey = new Map(
+    matchedEntries.map((entry) => [
+      entry.key,
+      entry.synonyms.filter((syn) => containsWord(normalizedPositive, normalizeText(syn))),
+    ]),
+  );
+  const specificMatchedTaxonomyKeys = matchedEntries
+    .filter((entry) => {
+      if (!entry.isGenericFallback) return true;
+      const ownSynonyms = matchedSynonymsByKey.get(entry.key) ?? [];
+      const otherSynonyms = matchedEntries
+        .filter((other) => other.key !== entry.key)
+        .flatMap((other) => matchedSynonymsByKey.get(other.key) ?? []);
+      return ownSynonyms.some((syn) => !otherSynonyms.some((otherSyn) => otherSyn !== syn && otherSyn.includes(syn)));
+    })
+    .map((e) => e.key);
+
   // F28 (misión real de Hospitality, 2026-07-28, pedido explícito del
   // PO): "hoteles comerciales" debe EXCLUIR motel/inn/bed and breakfast/
   // guest house de las queries por completo -- no solo despriorizarlos
@@ -226,6 +263,7 @@ export function interpretBusinessIntent(rawInstruction: string): StructuredInten
     ambiguities,
     unsupportedCapabilities,
     matchedTaxonomyKeys,
+    specificMatchedTaxonomyKeys,
     criticalInfrastructureClients,
   };
 }

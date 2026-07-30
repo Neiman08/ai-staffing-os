@@ -513,6 +513,36 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   // discoveredCompanyIdsThisMission queda vacío (ver el fix de esa
   // variable, unas líneas abajo) -- nunca el bucket amplio de Industry
   // completo, que puede compartirse entre varios trades distintos.
+  // F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): este filtro por
+  // isGenericFallback===false se mantiene sin cambios acá -- forzar
+  // descubrimiento real por sobre la oferta interna ya suficiente
+  // (hasSpecificTradeMatch) y acotar por Company.tradeKey EXACTO
+  // (restrictToTradeKeys, más abajo) son mecanismos pensados para trades
+  // angostos y específicos (roofing, electrical, food_manufacturing...)
+  // que sí quedan bien identificados por su propio taxonomyKey -- nunca
+  // para una entrada GENÉRICA pedida deliberadamente pero amplia por
+  // naturaleza (ej. "manufactura" sola): la mayoría de las Companies
+  // reales de esa Industry tienen tradeKey de un trade más específico o
+  // ninguno en absoluto (datos históricos/importados), así que acotar
+  // por tradeKey="manufacturing" exacto las excluiría por completo -- el
+  // bucket amplio de industryId (ya aplicado siempre) es el nivel de
+  // precisión correcto para un pedido deliberadamente amplio. Y forzar
+  // descubrimiento real cuando el CRM YA tiene oferta suficiente de ese
+  // mismo bucket amplio no tiene sentido -- a diferencia de un trade
+  // angosto, acá no hay "trade más específico" que se esté perdiendo.
+  //
+  // Este NO es el mismo "específicamente pedido" que corrige el bug real
+  // de esta misión (candidatos reales rechazados por el cross-check de
+  // business-validation.ts pese a que la misión sí pidió "Manufactura"
+  // explícitamente) -- ESE fix vive en StructuredIntent.specificMatchedTaxonomyKeys
+  // (intent-interpreter.ts) y llega a business-validation.ts vía
+  // MissionPlan.specificTaxonomyKeys (mission-planner.ts) ->
+  // missionSpecificTaxonomyKeys() (mission-executor.ts) -- nunca por acá.
+  // Confirmado con un test real (missions.test.ts) que reprodujo
+  // exactamente la regresión de ampliar esto también acá: una Company de
+  // manufactura sin tradeKey dejaba de encontrarse en el fallback, y
+  // discovery se forzaba innecesariamente pese a oferta interna ya
+  // suficiente en el tenant compartido de tests.
   const specificMatchedTaxonomyKeys = externalIntent.matchedTaxonomyKeys.filter((key) => getTaxonomyEntry(key)?.isGenericFallback === false);
   const hasSpecificTradeMatch = specificMatchedTaxonomyKeys.length > 0;
   if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0 || hasSpecificTradeMatch)) {

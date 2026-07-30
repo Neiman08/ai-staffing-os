@@ -45,6 +45,7 @@ function basePlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
     objective: { type: "find_companies", targetCompanyCount: 1, rawText: "fixture" },
     searchQueries: [],
     exclusions: [],
+    specificTaxonomyKeys: [],
     cities: [],
     states: ["IL"],
     steps: [],

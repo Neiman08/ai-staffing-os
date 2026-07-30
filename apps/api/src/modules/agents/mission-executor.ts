@@ -591,13 +591,23 @@ interface Candidate extends DiscoveryCandidateLike {
  * recién en el enrichment posterior, F7.4 Parte B).
  */
 // F28 (validación de industria para roofing, hallazgo real
-// 2026-07-27): keys NO genéricas presentes en el plan de ESTA misión --
-// se recalcula una vez por candidato (barato, plan.searchQueries es
-// chico) en vez de cachear entre llamadas, misma filosofía "puro y
-// determinista" que el resto de este módulo.
+// 2026-07-27): keys NO genéricas presentes en el plan de ESTA misión,
+// excluyendo la del propio candidato.
+//
+// F29 (hallazgo real, MIS-20260729-0009, 2026-07-29): antes recalculaba
+// acá mismo con su propio filtro por isGenericFallback -- eso trataba
+// trades pedidos explícitamente por la misión (ej. "Manufactura",
+// "Warehouses", "Healthcare no clínico", cada uno su propia viñeta) como
+// si nunca se hubieran pedido, solo porque esas entradas de taxonomía
+// son "bucket amplio" en general. Se usa ahora plan.specificTaxonomyKeys
+// (ver StructuredIntent.specificMatchedTaxonomyKeys en
+// intent-interpreter.ts para el algoritmo real -- distingue un match
+// deliberado de uno incidental/subsumido por otro trade más específico,
+// ej. "contractor" dentro de "roofing contractor" nunca cuenta como
+// "construction" pedido) -- una sola fuente de verdad, nunca un filtro
+// duplicado por consumidor.
 function missionSpecificTaxonomyKeys(plan: MissionPlan, excludeKey: string): string[] {
-  const uniqueKeys = new Set(plan.searchQueries.map((q) => q.taxonomyKey));
-  return Array.from(uniqueKeys).filter((key) => key !== excludeKey && getTaxonomyEntry(key)?.isGenericFallback === false);
+  return plan.specificTaxonomyKeys.filter((key) => key !== excludeKey);
 }
 
 function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActivities: string[]) {
