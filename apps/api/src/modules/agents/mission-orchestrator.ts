@@ -557,7 +557,24 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   // suficiente en el tenant compartido de tests.
   const specificMatchedTaxonomyKeys = externalIntent.matchedTaxonomyKeys.filter((key) => getTaxonomyEntry(key)?.isGenericFallback === false);
   const hasSpecificTradeMatch = specificMatchedTaxonomyKeys.length > 0;
-  if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0 || hasSpecificTradeMatch)) {
+  // F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): un término
+  // literal (StructuredIntent.literalCompanyTypeTerms -- un tipo de
+  // empresa que el usuario pidió explícitamente pero que ninguna entrada
+  // de BUSINESS_TAXONOMY reconoce todavía, ver intent-interpreter.ts) es
+  // SIEMPRE específico por construcción -- nunca hay "trade más
+  // específico" que se esté perdiendo, porque no hay ninguna entrada de
+  // taxonomía en absoluto de la que depender. Sin este OR, cuando el LLM
+  // (interpretDailyDirective) adivinaba una industryNames aproximada NO
+  // vacía (ej. "Construction" para "instalación de paneles solares") Y
+  // esa Industry amplia ya tenía CUALQUIER oferta interna (de otro
+  // trade, de otra misión), ni industries.length===0 ni
+  // hasSpecificTradeMatch (taxonomía pura, siempre vacío para un término
+  // literal) disparaban el gate -- la misión real terminó sin
+  // discoveryExecution en absoluto, exactamente la clase de bug que esta
+  // auditoría existe para eliminar, un nivel más adentro de donde ya se
+  // había corregido en intent-interpreter.ts/mission-planner.ts.
+  const hasLiteralCompanyTypeTerms = externalIntent.literalCompanyTypeTerms.length > 0;
+  if (externalPlan.searchQueries.length > 0 && (explicitVolumeInsufficient || industries.length === 0 || hasSpecificTradeMatch || hasLiteralCompanyTypeTerms)) {
     // Bug real encontrado en auditoría: sin excluir DEMO_SEED/INTERNAL_TEST
     // (mismo criterio que crm/service.ts y campaign-tools.impl.ts), una
     // misión real podía ver "suficiente" oferta interna por culpa de
@@ -574,11 +591,14 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
             },
           })
         : 0;
-    // hasSpecificTradeMatch ignora por completo internalSupply: contar
-    // "cuántas empresas de Construction en general" nunca responde "cuántas
-    // de ROOFING" -- la única forma de saberlo es corriendo el
-    // descubrimiento+validación real de ese trade.
-    if (hasSpecificTradeMatch || internalSupply < perCampaignVolume) {
+    // hasSpecificTradeMatch/hasLiteralCompanyTypeTerms ignoran por
+    // completo internalSupply: contar "cuántas empresas de Construction
+    // en general" nunca responde "cuántas de ROOFING", y para un término
+    // literal la respuesta ya se sabe de antemano (cero: ninguna Company
+    // existente puede tener evidencia de un rubro que la taxonomía ni
+    // siquiera reconoce) -- la única forma real de saberlo es corriendo
+    // el descubrimiento+validación real de ese trade/término.
+    if (hasSpecificTradeMatch || hasLiteralCompanyTypeTerms || internalSupply < perCampaignVolume) {
       if ((await checkForStop()) === "stop") return;
       const fallbackResult = await runAutoExternalDiscoveryFallback(
         missionTaskId,
@@ -663,7 +683,20 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
           // no aplica) por trade específico -- nunca al bucket amplio de
           // Industry completo, que puede compartirse entre varios trades
           // distintos (ver el comentario de campaign-tools.impl.ts).
-          restrictToTradeKeys: specificMatchedTaxonomyKeys.length > 0 ? specificMatchedTaxonomyKeys : undefined,
+          // F32 (hallazgo real, MIS-20260731-0011): términos literales se
+          // incluyen con el mismo prefijo "literal:" que
+          // mission-planner.ts/mission-executor.ts ya usan para
+          // etiquetar Company.tradeKey al descubrirlas -- ninguna Company
+          // preexistente puede coincidir por accidente (nadie tiene
+          // tradeKey="literal:<frase exacta de esta misión>"), así que
+          // esto restringe correctamente la reutilización de CRM a CERO
+          // para un término que la taxonomía no reconoce, en vez de caer
+          // al bucket amplio (ej. "Construction") que interpretDailyDirective
+          // adivinó solo para archivar.
+          restrictToTradeKeys:
+            specificMatchedTaxonomyKeys.length > 0 || hasLiteralCompanyTypeTerms
+              ? [...specificMatchedTaxonomyKeys, ...externalIntent.literalCompanyTypeTerms.map((term) => `literal:${term}`)]
+              : undefined,
           // F28 (hallazgo real, misión de Hospitality, 2026-07-29): la
           // exclusión explícita de la misión ("excluye inns, bed &
           // breakfast...") debe prevalecer también sobre empresas YA
@@ -701,12 +734,13 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
             // Hospitality 2026-07-29): un array vacío truthy nunca debe
             // restringir a cero empresas.
             id: discoveredCompanyIdsThisMission?.length ? { in: discoveredCompanyIdsThisMission } : undefined,
-            // F28: mismo fallback seguro por trade específico que la
-            // rama con Campaign, arriba -- nunca el bucket amplio de
+            // F28/F32: mismo fallback seguro por trade específico (más
+            // términos literales, ver el comentario completo en la rama
+            // con Campaign, arriba) que nunca el bucket amplio de
             // Industry completo.
             tradeKey:
-              !discoveredCompanyIdsThisMission?.length && specificMatchedTaxonomyKeys.length > 0
-                ? { in: specificMatchedTaxonomyKeys }
+              !discoveredCompanyIdsThisMission?.length && (specificMatchedTaxonomyKeys.length > 0 || hasLiteralCompanyTypeTerms)
+                ? { in: [...specificMatchedTaxonomyKeys, ...externalIntent.literalCompanyTypeTerms.map((term) => `literal:${term}`)] }
                 : undefined,
           },
           orderBy: [{ commercialScore: "desc" }, { createdAt: "asc" }],

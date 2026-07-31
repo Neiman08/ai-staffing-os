@@ -113,8 +113,21 @@ function extractLiteralCompanyTypeTerms(
   }
   for (const match of positiveText.matchAll(COMPANY_TYPE_TRIGGER_RE)) {
     const clause = match[1] ?? "";
-    for (const term of clause.split(SPLIT_LIST_RE)) {
-      const trimmed = trimTrailingLocation(term.trim(), detectedCities, detectedStateCodes);
+    // F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): el recorte
+    // geográfico DEBE aplicarse ANTES de dividir por SPLIT_LIST_RE, nunca
+    // después -- "...comerciales en Decatur, Illinois" tiene una coma
+    // entre la ciudad y el estado, así que dividir primero separaba
+    // "Illinois" como su PROPIO candidato (nunca coincidía con el patrón
+    // "en/in <lugar>" de trimTrailingLocation, que exige la preposición
+    // justo antes -- una "Illinois" suelta sin "en" delante quedaba
+    // intacta) -- terminaba como un literalCompanyTypeTerm real,
+    // generando una query real sin sentido ("Illinois in Decatur,
+    // Illinois"). Recortar la cláusula COMPLETA primero (el calificador
+    // geográfico siempre es lo último de la frase) deja limpio lo que
+    // sea que SPLIT_LIST_RE divida después.
+    const clauseWithoutLocation = trimTrailingLocation(clause.trim(), detectedCities, detectedStateCodes);
+    for (const term of clauseWithoutLocation.split(SPLIT_LIST_RE)) {
+      const trimmed = term.trim();
       if (trimmed) candidates.add(trimmed);
     }
   }

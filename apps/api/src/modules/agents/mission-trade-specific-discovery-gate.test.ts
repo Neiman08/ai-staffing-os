@@ -145,3 +145,131 @@ test(
     );
   },
 );
+
+/**
+ * F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): mismo bug
+ * estructural que el test de arriba (F28, roofing), un nivel más
+ * profundo -- para un término LITERAL (un tipo de empresa que la
+ * taxonomía no reconoce todavía, ej. "instalación de paneles solares
+ * comerciales"), hasSpecificTradeMatch (arriba) es SIEMPRE falso
+ * (matchedTaxonomyKeys=[] -- no hay ninguna entrada de taxonomía
+ * involucrada). La misión real usó exactamente este input
+ * (industryNames=["Construction"], la industria aproximada que
+ * interpretDailyDirective adivinó solo para archivar -- ver el prompt
+ * en ceo-tools.impl.ts) con el CRM ya teniendo oferta de Construction de
+ * OTRO trade: el gate nunca se activaba, discoveryFallback quedaba
+ * completamente ausente del output, y la misión terminaba "COMPLETED"
+ * con 0 empresas sin haber intentado nada.
+ */
+test(
+  "runMissionPipeline: un término literal sin taxonomía SIEMPRE corre descubrimiento+validación externa real, aunque industryNames traiga una industria aproximada ya poblada (caso real MIS-20260731-0011)",
+  { skip: process.env.GOOGLE_PLACES_API_KEY ? false : "requiere GOOGLE_PLACES_API_KEY real" },
+  async () => {
+    const tenant = await prisma.tenant.create({
+      data: { name: `${TEST_PREFIX}-LITERAL-${Date.now()}`, slug: `${TEST_PREFIX.toLowerCase()}-literal-${Date.now()}` },
+    });
+    createdTenantIds.push(tenant.id);
+
+    const construction = await prisma.industry.findFirstOrThrow({ where: { name: "Construction", isGlobal: true } });
+    const ceoDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "ceo" } });
+    const ceoInstance = await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: ceoDefinition.id, isActive: true } });
+    for (const key of ["discovery", "campaign", "sales", "outreach"]) {
+      const definition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key } });
+      await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: definition.id, isActive: true } });
+    }
+
+    // Mismo escenario real: el bucket amplio "Construction" en IL YA
+    // tiene oferta (de un trade completamente ajeno al pedido).
+    await prisma.company.create({
+      data: {
+        tenantId: tenant.id,
+        name: "Old Roofing Company (pre-existente, otro rubro por completo)",
+        industryId: construction.id,
+        state: "IL",
+        origin: "API_PROVIDER",
+      },
+    });
+
+    const missionRestrictions = {
+      allowOutreach: false,
+      allowDraftCreation: true,
+      allowMessageSending: false,
+      allowCampaignCreation: true,
+      allowOpportunityCreation: true,
+    };
+
+    const task = await prisma.agentTask.create({
+      data: {
+        tenantId: tenant.id,
+        agentInstanceId: ceoInstance.id,
+        type: "daily_revenue_mission",
+        status: "RUNNING",
+        triggeredBy: "USER",
+        input: {
+          rawInstruction:
+            "Busca hasta 3 empresas nuevas de instalación de paneles solares comerciales en Decatur, Illinois que puedan necesitar personal de campo.",
+          launchedByUserId: "test-user",
+          // Mismo input real observado en producción: el LLM adivinó
+          // "Construction" como industria de archivo aproximada, sin
+          // useExternalDiscovery ni externalSearchTerms -- exactamente lo
+          // que hace que este camino (auto-fallback clásico) sea la
+          // única red de seguridad real.
+          industryNames: ["Construction"],
+          state: "IL",
+          city: "Decatur",
+          categoryNames: [],
+          desiredVolume: null,
+          businessObjective: { type: "companies_found", target: null, unit: "empresas", rawText: "instalación de paneles solares comerciales en Illinois" },
+          unrecognizedTerms: [],
+          useExternalDiscovery: false,
+          externalSearchTerms: [],
+          missionRestrictions,
+        },
+        output: {
+          missionState: "RUNNING",
+          companiesTargeted: 0,
+          leadsCreated: 0,
+          opportunitiesCreated: 0,
+          sequencesPlanned: 0,
+          draftsAwaitingApproval: 0,
+          costUsdSoFar: 0,
+          objectiveProgress: { type: "companies_found", target: null, unit: "empresas", current: 0, percentComplete: null, rawText: "instalación de paneles solares comerciales en Illinois" },
+          progressUpdatedAt: new Date().toISOString(),
+          error: null,
+          appliedRestrictions: missionRestrictions,
+          restrictionNotes: [],
+        },
+      },
+    });
+
+    await runWithTenancyContext({ tenantId: tenant.id, userId: "test-user", permissions: [] }, () =>
+      runMissionPipeline(task.id, tenant.id, "test-user"),
+    );
+
+    const finished = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+    const output = finished.output as {
+      discoveryFallback?: { queryExecutions?: Array<{ query?: string }> };
+    } | null;
+
+    assert.ok(
+      output?.discoveryFallback,
+      "el descubrimiento externo real nunca corrió -- el gate se saltó por completo pese a un término literal, exactamente el bug real de MIS-20260731-0011",
+    );
+    // F32 (bugfix real encontrado ejecutando ESTE mismo test, 2026-07-31):
+    // este camino (clásico + auto-fallback, a diferencia del
+    // completamente dinámico) nunca persiste ceoIntent en su output --
+    // la trazabilidad real que SÍ se puede verificar acá es que la query
+    // ejecutada de verdad sea el término literal limpio, nunca un
+    // fragmento roto por el calificador geográfico ("Illinois" suelto,
+    // el bug real que este mismo test atrapó antes de este fix).
+    const queries = (output?.discoveryFallback?.queryExecutions ?? []).map((q) => q.query);
+    assert.ok(
+      queries.some((q) => q?.toLowerCase().includes("paneles solares") || q?.toLowerCase().includes("solar")),
+      `la query ejecutada debe ser el término literal real, nunca un fragmento geográfico roto -- queries reales: ${JSON.stringify(queries)}`,
+    );
+    assert.ok(
+      !queries.some((q) => q === "Illinois" || q?.toLowerCase() === "illinois"),
+      `ninguna query debe ser un fragmento geográfico suelto ("Illinois" solo) -- bug real encontrado y corregido en esta misma investigación: queries reales: ${JSON.stringify(queries)}`,
+    );
+  },
+);

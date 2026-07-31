@@ -487,3 +487,33 @@ test("el calificador geográfico se recorta también cuando el término termina 
   assert.deepEqual(intent.literalCompanyTypeTerms, ["reparación de drones comerciales"]);
   assert.deepEqual(intent.preferredCities, ["Chicago"]);
 });
+
+// F32 (bugfix real encontrado ejecutando una prueba de integración con
+// runMissionPipeline real, MIS-20260731-0011, 2026-07-31): "ciudad,
+// estado" (con coma, ej. "en Decatur, Illinois") -- recortar el
+// calificador geográfico DESPUÉS de dividir por comas (el separador de
+// listas, "roofing, landscaping y HVAC") dejaba "Illinois" como su
+// PROPIO término literal suelto (nunca coincidía con el patrón "en/in
+// <lugar>" de trimTrailingLocation al evaluarse aislado) -- terminó
+// generando una query real sin sentido en producción ("Illinois in
+// Decatur, Illinois"). El recorte geográfico debe aplicarse sobre la
+// cláusula COMPLETA, antes de partirla en items de lista.
+test("caso real MIS-20260731-0011 (ciudad+estado con coma): 'en Decatur, Illinois' nunca dispersa 'Illinois' como su propio término literal suelto", () => {
+  const intent = interpret(
+    "Busca hasta 3 empresas nuevas de instalación de paneles solares comerciales en Decatur, Illinois que puedan necesitar personal de campo.",
+  );
+  assert.deepEqual(intent.literalCompanyTypeTerms, ["instalación de paneles solares comerciales"]);
+  assert.ok(!intent.literalCompanyTypeTerms.includes("Illinois"), "Illinois nunca debe aparecer como su propio término literal");
+  assert.deepEqual(intent.preferredCities, ["Decatur"]);
+  assert.deepEqual(intent.states, ["IL"]);
+});
+
+test("recorte geográfico con coma NUNCA rompe una lista real de varios rubros (ej. 'roofing, HVAC y landscaping en Chicago')", () => {
+  const intent = interpret("Busca empresas de landscaping, jardineria y paisajismo en Chicago.");
+  // landscaping/jardineria/paisajismo ya matchean la taxonomía real --
+  // esto solo confirma que la coma de la lista real sigue funcionando
+  // como separador de items después del fix (nunca se confunde con la
+  // coma de "ciudad, estado").
+  assert.ok(intent.matchedTaxonomyKeys.includes("landscaping"));
+  assert.deepEqual(intent.preferredCities, ["Chicago"]);
+});
