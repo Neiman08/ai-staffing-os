@@ -453,3 +453,37 @@ test("guardrail F32: 'Encuentra HR Manager o Plant Manager.' (decisionRoles real
   const intent = interpret("Encuentra HR Manager o Plant Manager.");
   assert.equal(intent.objective.type, "find_contacts");
 });
+
+// F32 (hallazgo real, MIS-20260731-0011, 2026-07-31 -- caso de
+// producción real, industria genuinamente desconocida): "empresas
+// NUEVAS de X" nunca disparaba COMPANY_TYPE_TRIGGER_RE -- el patrón
+// exigía "empresas" seguido INMEDIATAMENTE de "de", pero el adjetivo
+// "nuevas" (la forma más natural y común en instrucciones reales) se
+// interpone entre ambos. Sin el LLM upstream (interpretDailyDirective
+// solo llena externalSearchTerms cuando useExternalDiscovery=true, que
+// esta instrucción nunca activó), este regex determinista era la ÚNICA
+// red de seguridad real para el camino más común (fallback automático
+// clásico) -- y tenía este hueco: la misión real terminó con
+// literalCompanyTypeTerms=[], discover_companies NUNCA se ejecutó.
+test("caso real MIS-20260731-0011: 'empresas NUEVAS de instalación de paneles solares comerciales en Illinois' -- el adjetivo entre 'empresas' y 'de' no debe romper la extracción, y el calificador geográfico final se recorta", () => {
+  const intent = interpret(
+    "Busca hasta 3 empresas nuevas de instalación de paneles solares comerciales en Illinois que puedan necesitar personal de campo.",
+  );
+  assert.deepEqual(intent.literalCompanyTypeTerms, ["instalación de paneles solares comerciales"]);
+  assert.equal(intent.objective.type, "find_companies");
+  assert.ok(intent.plannedSteps.includes("discover_companies"));
+});
+
+test("variantes del mismo hueco: 'compañías reales de X', 'negocios confiables de X' -- adjetivos distintos, mismo mecanismo general (nunca una lista cerrada de adjetivos conocidos)", () => {
+  const a = interpret("Busca compañías reales de reparación de drones industriales en Illinois.");
+  assert.ok(a.literalCompanyTypeTerms.some((t) => t.includes("reparación de drones industriales")));
+
+  const b = interpret("Busca negocios confiables de fabricación de baterías de litio en Texas.");
+  assert.ok(b.literalCompanyTypeTerms.some((t) => t.includes("fabricación de baterías de litio")));
+});
+
+test("el calificador geográfico se recorta también cuando el término termina justo antes de una ciudad conocida (nunca solo estados)", () => {
+  const intent = interpret("Busca empresas nuevas de reparación de drones comerciales en Chicago.");
+  assert.deepEqual(intent.literalCompanyTypeTerms, ["reparación de drones comerciales"]);
+  assert.deepEqual(intent.preferredCities, ["Chicago"]);
+});

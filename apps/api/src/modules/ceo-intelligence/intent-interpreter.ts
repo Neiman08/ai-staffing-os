@@ -2,7 +2,7 @@ import type { MissionRestrictions } from "@ai-staffing-os/agents";
 import { DEFAULT_MISSION_RESTRICTIONS, mergeMissionRestrictions } from "@ai-staffing-os/agents";
 import type { MissionObjective, MissionPlanStep, StructuredIntent, BusinessTaxonomyEntry } from "./contracts";
 import { BUSINESS_TAXONOMY } from "./taxonomy";
-import { detectCitiesAndStates } from "./geo";
+import { detectCitiesAndStates, SUPPORTED_STATE_CODES } from "./geo";
 import { containsWord, normalizeText } from "./text-normalize";
 import { detectCriticalInfrastructureClients } from "./critical-infrastructure-clients";
 import { classifyNonIndustryTerm } from "./semantic-normalization";
@@ -45,8 +45,24 @@ const FIND_COMPANIES_VERB_RE =
 // sin importar si BUSINESS_TAXONOMY los reconoce. Vocabulario de
 // disparadores cerrado (son conectores gramaticales, no industrias), el
 // TEXTO capturado después del disparador es completamente abierto.
+//
+// F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): "Busca hasta 3
+// empresas NUEVAS DE instalación de paneles solares comerciales..."
+// nunca disparaba este trigger -- "empresas?\s+de" exige "empresas"
+// seguido INMEDIATAMENTE de "de", pero el adjetivo "nuevas" (el patrón
+// más natural y común en instrucciones reales: "empresas nuevas/reales/
+// confiables de X") se interpone entre ambos. Como el LLM upstream
+// (interpretDailyDirective) solo llena externalSearchTerms cuando ÉL
+// mismo decide que la instrucción pide "descubrimiento externo"
+// (useExternalDiscovery=true) -- una instrucción sin esa frase mágica
+// nunca le pasa nada a este respaldo determinista -- este regex es la
+// ÚNICA red de seguridad real para el camino más común (el fallback
+// automático clásico), y tenía este hueco. `(?:\s+\S+){0,3}?` tolera
+// hasta 3 palabras de relleno (cualquier adjetivo/calificador) entre el
+// sustantivo y la preposición, sin volverse una lista cerrada de
+// adjetivos conocidos -- nunca importa CUÁL adjetivo es.
 const COMPANY_TYPE_TRIGGER_RE =
-  /\b(?:dedicad[oa]s?\s+a|empresas?\s+de|compa[nñ][ií]as?\s+de|negocios?\s+de|del\s+rubro\s+de|del\s+sector\s+de|companies?\s+(?:specializing\s+in|in\s+the\s+field\s+of|that\s+do|dedicated\s+to|of)|in\s+the\s+(?:field|sector|industry)\s+of)\b\s*:?\s*([^.;]+?)(?=\s+\b(?:que|that|which|quienes)\b|[.;]|$)/gi;
+  /\b(?:dedicad[oa]s?\s+a|empresas?(?:\s+\S+){0,3}?\s+de|compa[nñ][ií]as?(?:\s+\S+){0,3}?\s+de|negocios?(?:\s+\S+){0,3}?\s+de|del\s+rubro\s+de|del\s+sector\s+de|companies?(?:\s+\S+){0,3}?\s+(?:specializing\s+in|in\s+the\s+field\s+of|that\s+do|dedicated\s+to|of)|in\s+the\s+(?:field|sector|industry)\s+of)\b\s*:?\s*([^.;]+?)(?=\s+\b(?:que|that|which|quienes)\b|[.;]|$)/gi;
 
 /**
  * F32: extrae candidatos a "tipo de empresa" que el usuario nombró
@@ -64,10 +80,31 @@ const COMPANY_TYPE_TRIGGER_RE =
  * rol/objeto/acción/capacidad conocida (classifyNonIndustryTerm), nunca
  * un término ya cubierto por un match real de taxonomía.
  */
+/**
+ * F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): "empresas nuevas
+ * de instalación de paneles solares comerciales EN ILLINOIS" -- sin
+ * ningún "que"/"that" antes del calificador geográfico, la captura no
+ * greedy de COMPANY_TYPE_TRIGGER_RE se comía "en Illinois" como parte
+ * del término literal (nunca se dividía por SPLIT_LIST_RE, que no
+ * reconoce "en <lugar>" como separador). Se recorta acá un calificador
+ * geográfico final SOLO si coincide con una ciudad/estado ya detectado
+ * para ESTA instrucción (reusa detectCitiesAndStates, nunca un
+ * gazetteer nuevo/paralelo) -- nunca se inventa qué palabra es un lugar.
+ */
+function trimTrailingLocation(term: string, cities: string[], stateCodes: string[]): string {
+  const placeNames = [...cities, ...stateCodes.map((code) => SUPPORTED_STATE_CODES[code]).filter((n): n is string => !!n)];
+  if (placeNames.length === 0) return term;
+  const alternation = placeNames.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const re = new RegExp(`\\s+(?:en|in)\\s+(?:${alternation})\\b.*$`, "i");
+  return term.replace(re, "").trim();
+}
+
 function extractLiteralCompanyTypeTerms(
   positiveText: string,
   matchedEntries: BusinessTaxonomyEntry[],
   modelProposedTerms: string[],
+  detectedCities: string[],
+  detectedStateCodes: string[],
 ): string[] {
   const candidates = new Set<string>();
   for (const term of modelProposedTerms) {
@@ -77,7 +114,7 @@ function extractLiteralCompanyTypeTerms(
   for (const match of positiveText.matchAll(COMPANY_TYPE_TRIGGER_RE)) {
     const clause = match[1] ?? "";
     for (const term of clause.split(SPLIT_LIST_RE)) {
-      const trimmed = term.trim();
+      const trimmed = trimTrailingLocation(term.trim(), detectedCities, detectedStateCodes);
       if (trimmed) candidates.add(trimmed);
     }
   }
@@ -309,7 +346,12 @@ export function interpretBusinessIntent(rawInstruction: string, modelProposedTer
   // BUSINESS_TAXONOMY no reconoce todavía -- nunca se pierden. Ver
   // extractLiteralCompanyTypeTerms para el algoritmo completo (prioriza
   // modelProposedTerms, respaldo determinista vía COMPANY_TYPE_TRIGGER_RE).
-  const literalCompanyTypeTerms = extractLiteralCompanyTypeTerms(positiveText, matchedEntries, modelProposedTerms);
+  // F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): calculado ACÁ
+  // (antes estaba después de literalCompanyTypeTerms) -- se necesita ya
+  // para recortar un calificador geográfico final de cada término
+  // literal extraído (ver trimTrailingLocation).
+  const { cities: preferredCities, states } = detectCitiesAndStates(rawInstruction);
+  const literalCompanyTypeTerms = extractLiteralCompanyTypeTerms(positiveText, matchedEntries, modelProposedTerms, preferredCities, states);
   const explicitFindCompaniesVerb = FIND_COMPANIES_VERB_RE.test(normalizedPositive);
 
   const searchTerms = Array.from(
@@ -331,7 +373,6 @@ export function interpretBusinessIntent(rawInstruction: string, modelProposedTer
   const hiringSignals = Array.from(new Set([...targetJobTitles, ...matchedEntries.flatMap((e) => e.jobTitles)]));
   const decisionRoles = Array.from(new Set([...literalDecisionRoles, ...matchedEntries.flatMap((e) => e.decisionMakers)]));
 
-  const { cities: preferredCities, states } = detectCitiesAndStates(rawInstruction);
   const providersRequested = detectProvidersRequested(rawInstruction);
   // F15: clientes de infraestructura crítica mencionados literalmente
   // (ej. "QTS", "Meta", "Google") -- nunca un tipo de empresa, se usan
