@@ -39,6 +39,15 @@ const OVERPASS_PATTERNS: Record<string, Array<{ key: string; value: string }>> =
     { key: "craft", value: "builder" },
     { key: "office", value: "construction_company" },
   ],
+  // F31 (hallazgo real, MIS-20260730-0007, 2026-07-30): faltaba por
+  // completo -- toda misión de landscaping/lawn care con Google Places
+  // omitido (presupuesto) caía en NO_RESULTS en <1s, sin un solo fetch
+  // real a Overpass, pese a que el plan de la misión declaraba Overpass
+  // como respaldo real (ver mission-planner.ts:buildFallbackStrategy).
+  // "craft"="gardener" es el tag real y documentado de OpenStreetMap
+  // para negocios de jardinería/mantenimiento de espacios verdes (ver
+  // https://wiki.openstreetmap.org/wiki/Tag:craft=gardener).
+  "Landscaping & Lawn Care": [{ key: "craft", value: "gardener" }],
 };
 
 interface OverpassElement {
@@ -176,6 +185,24 @@ export async function searchOverpass(params: ProviderSearchParams): Promise<Prov
   const candidates: ProviderCandidate[] = [];
   const sourcesUsed = new Set<string>();
   const patternsFailed: string[] = [];
+
+  // F31 (hallazgo real, MIS-20260730-0007, 2026-07-30): antes, una
+  // industria sin ningún patrón OSM definido (la mayoría -- solo
+  // Manufacturing/Warehouse-Logistics/Construction/Landscaping & Lawn
+  // Care tienen uno hoy) hacía que el `for` de abajo nunca corriera ni
+  // una sola vez -- se devolvía candidates=[] sin ningún fetch real,
+  // indistinguible de "se intentó y no encontró nada". El plan de la
+  // misión (mission-planner.ts:buildFallbackStrategy) declara Overpass
+  // como respaldo real siempre que hay discover_companies, sin saber
+  // qué industrias tienen cobertura real acá -- sin esta señal
+  // explícita, ni el Executive Report ni el JSON crudo de la misión
+  // podían explicar por qué "sin proveedor" era la respuesta honesta:
+  // Overpass nunca tuvo nada que intentar, no que lo haya intentado y
+  // fallado.
+  if (patterns.length === 0) {
+    patternsFailed.push(`${params.industryName}: sin patrones OSM soportados para esta industria -- Overpass nunca fue invocado`);
+    return { candidates, costUsd: 0, sourcesUsed: [], patternsFailed, cancelled: false };
+  }
 
   for (const pattern of patterns) {
     if (candidates.length >= params.limit) break;
