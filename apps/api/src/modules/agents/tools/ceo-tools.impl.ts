@@ -20,6 +20,7 @@ import type { UsageAccumulator } from "../usage";
 import { interpretBusinessIntent } from "../../ceo-intelligence/intent-interpreter";
 import { normalizeText } from "../../ceo-intelligence/text-normalize";
 import { CRITICAL_INFRASTRUCTURE_CLIENTS, detectCriticalInfrastructureClients } from "../../ceo-intelligence/critical-infrastructure-clients";
+import { isKnownNonIndustryTerm } from "../../ceo-intelligence/semantic-normalization";
 
 function tryParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
   try {
@@ -366,39 +367,6 @@ export async function computeContactCoverage(missionTaskId: string): Promise<Mis
  * esos clientes ya resueltos -- nunca se vuelve a evaluar el término
  * solo para esto.
  */
-// F28 (hallazgo real, misiones roofing/landscaping 2026-07-27): "Ejecuta
-// Discovery, Company Enrichment, Contact Intelligence y Email
-// Verification. Crea Leads, Opportunities y Drafts... hiring signals o
-// growth signals" listado COMPLETO en unrecognizedTerms -- estas son
-// capacidades/objetos reales del propio producto (lo que la instrucción
-// está invocando explícitamente), nunca un sector/industria, así que
-// nunca deberían evaluarse contra ese vocabulario. Vocabulario cerrado,
-// ES/EN -- mismo criterio que CRITICAL_INFRASTRUCTURE_CLIENTS abajo:
-// una lista real y trazable, nunca una heurística de "palabra
-// capitalizada" que podría atrapar un sector real por accidente.
-const KNOWN_CAPABILITY_TERMS = [
-  "discovery",
-  "descubrimiento",
-  "company enrichment",
-  "enriquecimiento de empresas",
-  "enriquecimiento de compañias",
-  "contact intelligence",
-  "inteligencia de contactos",
-  "email verification",
-  "verificacion de email",
-  "verificacion de correo",
-  "verificacion de emails",
-  "leads",
-  "opportunities",
-  "oportunidades",
-  "drafts",
-  "borradores",
-  "hiring signals",
-  "senales de contratacion",
-  "growth signals",
-  "senales de crecimiento",
-].map((t) => normalizeText(t));
-
 export function filterActuallyUnrecognizedTerms(
   unrecognizedTerms: string[],
   externalSearchTerms: string[],
@@ -437,15 +405,20 @@ export function filterActuallyUnrecognizedTerms(
     // tampoco "no reconocido". Comparado contra los alias YA resueltos
     // arriba con el contexto completo, nunca reevaluado aislado.
     if (recognizedClientAliasesNormalized.has(normalizedTerm)) return false;
-    // (d) F28: capacidad/objeto real del producto (Discovery, Leads,
-    // Drafts, hiring signals...) -- nunca un sector, nunca "no
-    // reconocido". Bidireccional, mismo criterio que (a): el término del
-    // LLM puede venir más largo (ej. "hiring signals o growth signals"
-    // como un solo fragmento) o más corto que la frase cerrada.
-    const isKnownCapabilityTerm = KNOWN_CAPABILITY_TERMS.some(
-      (phrase) => normalizedTerm.includes(phrase) || phrase.includes(normalizedTerm),
-    );
-    if (isKnownCapabilityTerm) return false;
+    // (d) F28/F32: capacidad/objeto/rol/acción real del producto o del
+    // pipeline (Discovery, Leads, Opportunity, Drafts, Owner, HR,
+    // Recruiting, hiring signals, "crear"/"verificar"/"buscar"...) --
+    // nunca un sector, nunca "no reconocido". Antes esto solo cubría
+    // capacidades del producto con una lista propia y comparación de
+    // substring cruda (bug real: "Opportunity" nunca matcheaba
+    // "opportunities" -- "opportunities" no contiene "opportunity" como
+    // substring). isKnownNonIndustryTerm (semantic-normalization.ts,
+    // única fuente de verdad compartida con intent-interpreter.ts) cubre
+    // capacidades + roles de decisión (incluye los que vienen sueltos,
+    // ej. "HR"/"Recruiting", hallazgo real MIS-20260731-0003) + objetos
+    // del CRM + acciones del pipeline, y normaliza plurales simples
+    // antes de comparar.
+    if (isKnownNonIndustryTerm(term)) return false;
     return true;
   });
 }

@@ -46,6 +46,7 @@ function basePlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
     searchQueries: [],
     exclusions: [],
     specificTaxonomyKeys: [],
+    literalCompanyTypeTerms: [],
     cities: [],
     states: ["IL"],
     steps: [],

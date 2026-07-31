@@ -18,9 +18,12 @@ test("with context, hybrid global models (Industry) are visible regardless of te
   await runWithTenancyContext({ tenantId: "tenant-titan", userId: "irrelevant", permissions: [] }, async () => {
     const industries = await scopedDb.industry.findMany();
     // F28 agregó Landscaping & Lawn Care como 6ta Industry global real
-    // (antes 5, F13) -- ver la nota completa en el test de abajo con el
-    // mismo conteo.
-    assert.equal(industries.length, 6);
+    // (antes 5, F13). F32 agregó "Uncategorized" como 7ma -- catch-all
+    // real y permanente para candidatos cuyo tipo de empresa la Business
+    // Taxonomy no reconoce todavía (decisión explícita del PO,
+    // 2026-07-31, ver seed.ts) -- ver la nota completa en el test de
+    // abajo con el mismo conteo.
+    assert.equal(industries.length, 7);
   });
 });
 
@@ -44,8 +47,9 @@ test("an unrelated tenant still sees hybrid global rows (Industry), but no tenan
       // este conteo quedó desactualizado en ese momento, nunca ejercitado
       // hasta correr la suite completa en F14.
       // F28 agregó Landscaping & Lawn Care como 6ta Industry global real
-      // (antes 5, ver la nota completa arriba con el mismo conteo).
-      assert.equal(industries.length, 6);
+      // (antes 5). F32 agregó "Uncategorized" como 7ma -- ver la nota
+      // completa arriba con el mismo conteo.
+      assert.equal(industries.length, 7);
       assert.ok(industries.every((i) => i.isGlobal));
     },
   );

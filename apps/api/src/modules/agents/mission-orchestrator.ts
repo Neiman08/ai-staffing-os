@@ -367,7 +367,7 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   // (useExternalDiscovery=false, debajo) sigue exactamente igual que
   // antes de F7.3.
   if (interpreted.useExternalDiscovery) {
-    await runDynamicDiscoveryMission(missionTaskId, interpreted.rawInstruction);
+    await runDynamicDiscoveryMission(missionTaskId, interpreted.rawInstruction, interpreted.externalSearchTerms ?? []);
     return;
   }
 
@@ -382,7 +382,19 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   // reportado por el PO: una misión de hoteles le mandó outreach a una
   // empresa de logística porque el filtro vacío caía a "cualquier
   // empresa del estado").
-  const externalIntent = interpretBusinessIntent(interpreted.rawInstruction);
+  // F32 (hallazgo real, MIS-20260731-0002/0003, 2026-07-31): antes se
+  // llamaba sin el segundo argumento -- interpretDailyDirective (LLM,
+  // arriba) ya calcula externalSearchTerms (frases de búsqueda libres,
+  // una por cada rubro/trade que el usuario nombró explícitamente, ver
+  // ceo-tools.impl.ts), pero ESE dato nunca llegaba acá: el intérprete
+  // determinista se recalculaba desde cero solo con matchedTaxonomyKeys,
+  // así que una industria fuera del vocabulario cerrado de la taxonomía
+  // (ej. "HVAC") producía 0 searchQueries, sin importar que el LLM ya la
+  // hubiera identificado como un rubro real a buscar. Se pasan ahora --
+  // interpretBusinessIntent sigue siendo puro/determinista para el mismo
+  // input, el modelo solo PROPONE candidatos que pasan por el mismo
+  // filtro que la extracción de respaldo (ver intent-interpreter.ts).
+  const externalIntent = interpretBusinessIntent(interpreted.rawInstruction, interpreted.externalSearchTerms ?? []);
   const externalPlan = buildMissionPlan(externalIntent);
 
   // F28 (misión real de Hospitality, 2026-07-28): interpretDailyDirective
@@ -934,8 +946,8 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
  * esta fase es 100% estructurado (discoveryExecution), sin narración de
  * LLM, consistente con que F7.3 tiene prohibido llamar a OpenAI.
  */
-async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction: string): Promise<void> {
-  const intent = interpretBusinessIntent(rawInstruction);
+async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction: string, externalSearchTerms: string[] = []): Promise<void> {
+  const intent = interpretBusinessIntent(rawInstruction, externalSearchTerms);
   const plan = buildMissionPlan(intent);
   const restrictions = intent.restrictions;
   const restrictionNotes = buildRestrictionNotes(restrictions);

@@ -11,6 +11,7 @@ function baseInput(overrides: Partial<BusinessValidationInput>): BusinessValidat
     state: null,
     allowedStates: [],
     missionSpecificTaxonomyKeys: [],
+    missionLiteralTerms: [],
     missionExclusions: [],
     providerTypes: [],
     description: null,
@@ -600,4 +601,88 @@ test("F16 guardrail (d): ninguna estrategia de búsqueda futura puede afectar la
   type NoForbiddenFieldPresent = Extract<keyof BusinessValidationInput, ForbiddenSearchFields> extends never ? true : false;
   const guardrail: NoForbiddenFieldPresent = true;
   assert.equal(guardrail, true);
+});
+
+// ============================================================
+// F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003,
+// 2026-07-31): taxonomyKey="literal:<término>" -- candidatos de un tipo
+// de empresa que la Business Taxonomy no reconoce todavía
+// (StructuredIntent.literalCompanyTypeTerms, ver intent-interpreter.ts/
+// mission-planner.ts). ANTES, getTaxonomyEntry("HVAC") devolvía
+// undefined y el candidato se rechazaba automáticamente ("Taxonomy key
+// desconocida") sin importar cuán buena fuera su evidencia real --
+// exactamente lo que este bloque prueba que ya no sucede.
+// ============================================================
+
+test("literal: candidato cuyo NOMBRE contiene el término literal -> EXACT, aceptado (sin ninguna entrada curada de taxonomía)", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Midwest HVAC Solutions", taxonomyKey: "literal:HVAC" }),
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+  assert.equal(result.detectedBusinessType, "HVAC");
+  assert.ok(result.warnings.some((w) => w.includes("Sin entrada de Business Taxonomy curada")));
+});
+
+test("literal: providerTypes (categorías reales del proveedor) también cuentan como evidencia EXACT", () => {
+  // El término literal es siempre una frase en lenguaje natural (viene de
+  // extracción de texto o de un LLM, nunca de un slug) -- providerTypes
+  // sí llega como slug con guion bajo (Google Places) y se normaliza a
+  // espacios antes de comparar (ver providerTypesText en
+  // validateLiteralCompanyType).
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Acme Services LLC", taxonomyKey: "literal:HVAC contractor", providerTypes: ["hvac_contractor"] }),
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "EXACT");
+});
+
+test("literal: sin ninguna evidencia del término -> WEAK, pero NUNCA rechazado automáticamente (sin negativeKeywords curadas para un término desconocido)", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Acme Services LLC", taxonomyKey: "literal:refrigeración comercial" }),
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.confidence, "WEAK");
+});
+
+test("literal: exclusión explícita de la misión sigue rechazando, igual que para un taxonomyKey real", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Staffing Agency HVAC Services", taxonomyKey: "literal:HVAC", missionExclusions: ["staffing agency"] }),
+  );
+  assert.equal(result.accepted, false);
+});
+
+test("literal: restricción de estado sigue rechazando, igual que para un taxonomyKey real", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Texas HVAC Co", taxonomyKey: "literal:HVAC", state: "TX", allowedStates: ["IL"] }),
+  );
+  assert.equal(result.accepted, false);
+});
+
+// Cruce anti-contaminación (F28, ahora extendido a missionLiteralTerms,
+// F32): un candidato encontrado vía una entrada GENÉRICA (ej.
+// "construction") cuando la misión también pidió un término literal
+// específico (ej. "low voltage contractor", sin entrada propia en la
+// taxonomía) tampoco debe aceptarse solo por el bucket amplio.
+test("cruce anti-contaminación con missionLiteralTerms: candidato genérico de 'construction' SIN evidencia del término literal pedido -> rechazado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({
+      candidateName: "IRPINO Construction",
+      taxonomyKey: "construction",
+      missionLiteralTerms: ["low voltage contractor"],
+    }),
+  );
+  assert.equal(result.accepted, false);
+  assert.match(result.rejectionReasons.join(" "), /low voltage contractor/);
+});
+
+test("cruce anti-contaminación con missionLiteralTerms: candidato genérico de 'construction' CON evidencia real del término literal -> aceptado", () => {
+  const result = validateBusinessCandidate(
+    baseInput({
+      candidateName: "Acme Low Voltage Contractor Inc",
+      taxonomyKey: "construction",
+      missionLiteralTerms: ["low voltage contractor"],
+    }),
+  );
+  assert.equal(result.accepted, true);
 });

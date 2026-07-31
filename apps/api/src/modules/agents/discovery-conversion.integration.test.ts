@@ -106,6 +106,7 @@ function manufacturingPlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
     searchQueries: [{ searchTerm: "manufacturing company", crmIndustryBucket: "Manufacturing", taxonomyKey: "manufacturing" }],
     exclusions: [],
     specificTaxonomyKeys: [],
+    literalCompanyTypeTerms: [],
     cities: [],
     states: ["IL"],
     steps: ["discover_companies", "find_hiring_signals"],

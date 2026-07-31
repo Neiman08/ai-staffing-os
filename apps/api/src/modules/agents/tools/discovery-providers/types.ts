@@ -39,8 +39,21 @@ export interface ProviderSearchParams {
   // libre (Google Places) la usa TAL CUAL en vez de resolver una frase
   // fija a partir de industryName. Overpass no tiene búsqueda de texto
   // libre (requiere tags OSM estructurados) — la ignora, sigue
-  // resolviendo por industryName como siempre, degradación honesta.
+  // resolviendo por trade/industria, degradación honesta.
   queryPhrase?: string;
+  // F32 (hallazgo real, MIS-20260731-0003, 2026-07-31): Overpass
+  // resolvía sus patrones OSM EXCLUSIVAMENTE por crmIndustryBucket (el
+  // bucket amplio del CRM, ej. "Construction") -- una query específica
+  // de "electrical contractor" (taxonomyKey="electrical") terminaba
+  // usando los patrones genéricos de Construction (craft=builder), sin
+  // relación real con electricidad. taxonomyKey (trade/company type
+  // específico, ej. "electrical", "roofing") es ahora la resolución
+  // PRIMARIA para Overpass -- crmIndustryBucket abajo queda como
+  // respaldo solo cuando no existe un patrón específico del trade. Un
+  // proveedor que no lo necesita (Google Places, que usa queryPhrase en
+  // texto libre) simplemente lo ignora.
+  taxonomyKey?: string;
+  crmIndustryBucket?: string | null;
   stateCode: string; // "IL"
   stateName: string; // "Illinois"
   city?: string;

@@ -113,6 +113,15 @@ export interface BusinessValidationInput {
   // bucket amplio (Construction). Vacío = la misión no pidió ningún
   // trade específico además del genérico, nada que exigir.
   missionSpecificTaxonomyKeys: string[];
+  // F32 (hallazgo real, MIS-20260731-0002/0003, 2026-07-31): mismo
+  // criterio que missionSpecificTaxonomyKeys de arriba, pero para
+  // términos de tipo de empresa que la misión pidió explícitamente y que
+  // NINGUNA entrada de BUSINESS_TAXONOMY reconoce (StructuredIntent.
+  // literalCompanyTypeTerms) -- un candidato encontrado vía una entrada
+  // GENÉRICA (ej. "construction") cuando la misión también pidió un
+  // término literal (ej. "low voltage contractor", sin entrada propia en
+  // la taxonomía) tampoco debe aceptarse solo por el bucket amplio.
+  missionLiteralTerms: string[];
   missionExclusions: string[];
   // Categorías reales que el proveedor de discovery le asigna al
   // candidato -- Google Places `place.types` (ej. "electrician"). Puede
@@ -220,13 +229,86 @@ function buildEmptyResult(
  * `providerTypes`/`description` vienen vacíos, simplemente no aportan
  * evidencia (nunca se inventa una).
  */
+// F32 (hallazgo real, MIS-20260731-0002/0003, 2026-07-31): prefijo
+// compartido con mission-planner.ts (buildSearchQueries) -- una query
+// generada a partir de StructuredIntent.literalCompanyTypeTerms (un tipo
+// de empresa que la misión pidió explícitamente pero que
+// BUSINESS_TAXONOMY no reconoce) usa este prefijo como taxonomyKey, para
+// que este módulo sepa validar por evidencia directa del término mismo
+// en vez de intentar (y fallar) una búsqueda en getTaxonomyEntry.
+const LITERAL_TAXONOMY_KEY_PREFIX = "literal:";
+
+/**
+ * F32: valida un candidato encontrado vía un término literal (sin
+ * entrada curada en BUSINESS_TAXONOMY) -- mismo diseño "max sobre
+ * señales independientes" que el resto de este módulo, pero las
+ * "frases" a buscar son el término mismo (nunca una lista curada de
+ * companyTypes/websitePhrases/negativeKeywords, que no existe para un
+ * término desconocido). Limitación real y honesta: sin negativeKeywords
+ * propias, este camino nunca puede RECHAZAR por evidencia negativa de
+ * industria (sí sigue rechazando por exclusión explícita de la misión y
+ * por estado, ver validateBusinessCandidate) -- exactamente lo que pide
+ * el diseño general: "si la confianza es baja, conservar el término
+ * como criterio de búsqueda y validación", nunca inventar una lista de
+ * rechazo que no existe.
+ */
+function validateLiteralCompanyType(input: BusinessValidationInput, domain: string | null): BusinessValidationResult {
+  const literalTerm = input.taxonomyKey.slice(LITERAL_TAXONOMY_KEY_PREFIX.length);
+  const phrases = [literalTerm];
+  const providerTypesText = input.providerTypes.map((t) => t.replace(/_/g, " ")).join(" ");
+
+  const nameMatches = matchPhrasesInText(input.candidateName, phrases);
+  const providerTypeMatches = matchPhrasesInText(providerTypesText, phrases);
+  const domainMatches = matchWordsInDomain(domain, singleWordItems(phrases));
+  const descriptionMatches = matchPhrasesInText(input.description, phrases);
+  const businessActivityMatches = matchPhrasesInText(input.businessActivities.join(" "), phrases);
+
+  const matchedEvidence = [
+    ...new Set([...nameMatches, ...providerTypeMatches, ...domainMatches, ...descriptionMatches, ...businessActivityMatches]),
+  ];
+  const sourceSignals: string[] = [];
+  if (nameMatches.length > 0) sourceSignals.push("name");
+  if (providerTypeMatches.length > 0) sourceSignals.push("providerTypes");
+  if (domainMatches.length > 0) sourceSignals.push("website");
+  if (descriptionMatches.length > 0) sourceSignals.push("description");
+  if (businessActivityMatches.length > 0) sourceSignals.push("businessActivities");
+
+  let confidence: BusinessValidationConfidenceLevel;
+  if (nameMatches.length > 0 || providerTypeMatches.length > 0) confidence = "EXACT";
+  else if (domainMatches.length > 0 || descriptionMatches.length > 0) confidence = "STRONG";
+  else if (businessActivityMatches.length > 0) confidence = "APPROXIMATE";
+  else confidence = "WEAK";
+
+  const warnings: string[] = [
+    `Sin entrada de Business Taxonomy curada para "${literalTerm}" — validado únicamente por evidencia directa del término (nombre/dominio/descripción/categorías del proveedor), sin lista de negativeKeywords propia.`,
+  ];
+  if (!input.description) warnings.push("Sin descripción pública disponible para esta fuente — evidencia limitada a nombre/dominio.");
+  if (input.providerTypes.length === 0) warnings.push("Sin provider types disponibles para esta fuente — evidencia limitada a nombre/dominio.");
+
+  return {
+    accepted: true,
+    confidence,
+    confidenceScore: CONFIDENCE_SCORE_BY_LEVEL[confidence],
+    detectedBusinessType: literalTerm,
+    detectedSector: null,
+    matchedEvidence,
+    missingEvidence:
+      confidence === "EXACT" ? [] : [`Evidencia pública real de "${literalTerm}" (nombre, sitio, categoría del proveedor, o descripción).`],
+    rejectionReasons: [],
+    warnings,
+    sourceSignals,
+    validationVersion: BUSINESS_VALIDATION_VERSION,
+  };
+}
+
 export function validateBusinessCandidate(input: BusinessValidationInput): BusinessValidationResult {
   if (!input.candidateName || !input.candidateName.trim()) {
     return buildEmptyResult("REJECTED", ["Sin nombre utilizable para validar."]);
   }
 
-  const entry = getTaxonomyEntry(input.taxonomyKey);
-  if (!entry) {
+  const isLiteralTerm = input.taxonomyKey.startsWith(LITERAL_TAXONOMY_KEY_PREFIX);
+  const entry = isLiteralTerm ? undefined : getTaxonomyEntry(input.taxonomyKey);
+  if (!isLiteralTerm && !entry) {
     return buildEmptyResult("REJECTED", [`Taxonomy key desconocida: "${input.taxonomyKey}".`]);
   }
 
@@ -253,13 +335,20 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
     ]);
   }
 
-  const negativeNameMatches = matchPhrasesInText(input.candidateName, entry.negativeKeywords);
-  const negativeDomainMatches = matchWordsInDomain(domain, singleWordItems(entry.negativeKeywords));
-  const negativeDescriptionMatches = matchPhrasesInText(input.description, entry.negativeKeywords);
+  if (isLiteralTerm) {
+    return validateLiteralCompanyType(input, domain);
+  }
+  // A partir de acá `entry` está garantizado (isLiteralTerm=false y ya
+  // se rechazó arriba si getTaxonomyEntry no lo encontró).
+  const nonNullEntry = entry!;
+
+  const negativeNameMatches = matchPhrasesInText(input.candidateName, nonNullEntry.negativeKeywords);
+  const negativeDomainMatches = matchWordsInDomain(domain, singleWordItems(nonNullEntry.negativeKeywords));
+  const negativeDescriptionMatches = matchPhrasesInText(input.description, nonNullEntry.negativeKeywords);
   const allNegativeMatches = [...new Set([...negativeNameMatches, ...negativeDomainMatches, ...negativeDescriptionMatches])];
   if (allNegativeMatches.length > 0) {
     return buildEmptyResult("REJECTED", [
-      `Evidencia negativa para "${entry.label}": coincide con ${allNegativeMatches.map((m) => `"${m}"`).join(", ")}.`,
+      `Evidencia negativa para "${nonNullEntry.label}": coincide con ${allNegativeMatches.map((m) => `"${m}"`).join(", ")}.`,
     ]);
   }
 
@@ -279,7 +368,13 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
   // Places/descripción), la misma señal que ya usa el resto de esta
   // función, aplicada contra las entradas específicas en vez de la
   // genérica que encontró al candidato.
-  if (entry.isGenericFallback && input.missionSpecificTaxonomyKeys.length > 0) {
+  //
+  // F32: mismo criterio ahora también para missionLiteralTerms -- un
+  // término de tipo de empresa sin entrada curada en la taxonomía
+  // (ej. "low voltage contractor") es una petición igual de específica
+  // que un tradeKey real, y debe defender igual contra contaminación de
+  // un bucket amplio.
+  if (nonNullEntry.isGenericFallback && (input.missionSpecificTaxonomyKeys.length > 0 || input.missionLiteralTerms.length > 0)) {
     const specificEntries = input.missionSpecificTaxonomyKeys.map((key) => getTaxonomyEntry(key)).filter((e): e is BusinessTaxonomyEntry => e !== undefined);
     const hasSpecificTradeEvidence = specificEntries.some(
       (specificEntry) =>
@@ -287,18 +382,25 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
         matchPhrasesInText(providerTypesText, specificEntry.companyTypes).length > 0 ||
         matchPhrasesInText(input.description, specificEntry.websitePhrases).length > 0,
     );
-    if (!hasSpecificTradeEvidence) {
+    const hasLiteralTermEvidence = input.missionLiteralTerms.some(
+      (term) =>
+        matchPhrasesInText(input.candidateName, [term]).length > 0 ||
+        matchPhrasesInText(providerTypesText, [term]).length > 0 ||
+        matchPhrasesInText(input.description, [term]).length > 0,
+    );
+    if (!hasSpecificTradeEvidence && !hasLiteralTermEvidence) {
+      const requestedLabels = [...specificEntries.map((e) => e.label), ...input.missionLiteralTerms];
       return buildEmptyResult("REJECTED", [
-        `Encontrada vía una query genérica ("${entry.label}"), pero la misión pidió específicamente: ${specificEntries.map((e) => e.label).join(", ")} -- sin ninguna evidencia real de esos trades (nombre, categoría de Google Places, o descripción del sitio).`,
+        `Encontrada vía una query genérica ("${nonNullEntry.label}"), pero la misión pidió específicamente: ${requestedLabels.join(", ")} -- sin ninguna evidencia real de esos trades (nombre, categoría de Google Places, o descripción del sitio).`,
       ]);
     }
   }
 
-  const nameMatches = matchPhrasesInText(input.candidateName, entry.companyTypes);
-  const providerTypeMatches = matchPhrasesInText(providerTypesText, entry.companyTypes);
-  const domainMatches = matchWordsInDomain(domain, singleWordItems(entry.companyTypes));
-  const descriptionMatches = matchPhrasesInText(input.description, entry.websitePhrases);
-  const businessActivityMatches = matchPhrasesInText(input.businessActivities.join(" "), entry.companyTypes);
+  const nameMatches = matchPhrasesInText(input.candidateName, nonNullEntry.companyTypes);
+  const providerTypeMatches = matchPhrasesInText(providerTypesText, nonNullEntry.companyTypes);
+  const domainMatches = matchWordsInDomain(domain, singleWordItems(nonNullEntry.companyTypes));
+  const descriptionMatches = matchPhrasesInText(input.description, nonNullEntry.websitePhrases);
+  const businessActivityMatches = matchPhrasesInText(input.businessActivities.join(" "), nonNullEntry.companyTypes);
 
   const matchedEvidence = [
     ...new Set([...nameMatches, ...providerTypeMatches, ...domainMatches, ...descriptionMatches, ...businessActivityMatches]),
@@ -329,14 +431,14 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
   if (!input.description) warnings.push("Sin descripción pública disponible para esta fuente — evidencia limitada a nombre/dominio.");
   if (input.providerTypes.length === 0) warnings.push("Sin provider types disponibles para esta fuente — evidencia limitada a nombre/dominio.");
 
-  const missingEvidence = confidence === "EXACT" ? [] : entry.validations;
+  const missingEvidence = confidence === "EXACT" ? [] : nonNullEntry.validations;
 
   return {
     accepted: true,
     confidence,
     confidenceScore: CONFIDENCE_SCORE_BY_LEVEL[confidence],
-    detectedBusinessType: entry.companyTypes[0] ?? null,
-    detectedSector: entry.crmIndustryBucket,
+    detectedBusinessType: nonNullEntry.companyTypes[0] ?? null,
+    detectedSector: nonNullEntry.crmIndustryBucket,
     matchedEvidence,
     missingEvidence,
     rejectionReasons: [],

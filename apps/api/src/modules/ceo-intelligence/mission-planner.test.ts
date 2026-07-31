@@ -41,9 +41,52 @@ test("dedupStrategy queda vacío cuando el plan no incluye discover_companies (b
   assert.deepEqual(missionPlan.requiredSteps, []);
 });
 
-test("fallbackStrategy declara Google Places -> Overpass cuando hay discovery planificado", () => {
+test("fallbackStrategy declara Google Places -> Overpass cuando hay discovery planificado Y cobertura real (food_manufacturing cae al bucket Manufacturing)", () => {
   const missionPlan = plan("Busca fábricas de alimentos en Illinois.");
   assert.ok(missionPlan.fallbackStrategy.some((f) => f.provider === "Google Places" && f.whenUnavailable.includes("Overpass")));
+});
+
+// F32 (hallazgo real, MIS-20260730-0007/MIS-20260731-0003, 2026-07-31):
+// ANTES esto se prometía SIEMPRE que había discover_companies, sin
+// ninguna noción de qué trades tienen cobertura OSM real -- el plan
+// anunciaba un respaldo que el ejecutor a veces nunca podía cumplir
+// (hospitality no tiene ningún patrón OSM curado hoy).
+test("fallbackStrategy NUNCA promete Overpass cuando ninguna query de la misión tiene cobertura real (hospitality, sin patrón OSM hoy)", () => {
+  const missionPlan = plan("Busca hoteles en Illinois.");
+  const googlePlacesFallback = missionPlan.fallbackStrategy.find((f) => f.provider === "Google Places");
+  assert.ok(googlePlacesFallback);
+  assert.ok(!googlePlacesFallback!.whenUnavailable.includes("Usar Overpass"), "no debe prometer Overpass como respaldo real sin cobertura");
+  assert.match(googlePlacesFallback!.whenUnavailable, /[Ss]in respaldo real en Overpass/);
+});
+
+test("fallbackStrategy SÍ promete Overpass cuando el trade específico tiene su propio patrón (electrical -> craft=electrician)", () => {
+  const missionPlan = plan("Busca electrical contractors en Illinois.");
+  const googlePlacesFallback = missionPlan.fallbackStrategy.find((f) => f.provider === "Google Places");
+  assert.ok(googlePlacesFallback!.whenUnavailable.includes("Usar Overpass"));
+});
+
+// ============================================================
+// F32: términos literales (StructuredIntent.literalCompanyTypeTerms) se
+// convierten en queries reales -- ANTES simplemente no generaban
+// ninguna query (buildSearchQueries solo leía matchedTaxonomyKeys), así
+// que una industria desconocida terminaba con 0 queries reales pese a
+// que plannedSteps sí incluía discover_companies.
+// ============================================================
+
+test("caso real MIS-20260731-0002: término literal sin taxonomía (HVAC) genera una query real con taxonomyKey='literal:HVAC' y crmIndustryBucket=null", () => {
+  const missionPlan = plan("Busca hasta 20 empresas nuevas en Illinois dedicadas a HVAC.");
+  const literalQuery = missionPlan.searchQueries.find((q) => q.taxonomyKey === "literal:HVAC");
+  assert.ok(literalQuery, "debe existir una query real para el término literal HVAC");
+  assert.equal(literalQuery!.searchTerm, "HVAC");
+  assert.equal(literalQuery!.crmIndustryBucket, null, "nunca se inventa un bucket de CRM para un término desconocido");
+});
+
+test("queries de términos literales van AL FINAL de searchQueries -- nunca compiten por cupo con un trade que la taxonomía sí reconoce", () => {
+  const missionPlan = plan("Busca empresas de roofing y HVAC en Illinois.");
+  const roofingIndex = missionPlan.searchQueries.findIndex((q) => q.taxonomyKey === "roofing");
+  const literalIndex = missionPlan.searchQueries.findIndex((q) => q.taxonomyKey.startsWith("literal:"));
+  assert.ok(roofingIndex !== -1 && literalIndex !== -1);
+  assert.ok(roofingIndex < literalIndex, "las queries de taxonomía real siempre van antes que las literales");
 });
 
 test("fallbackStrategy declara Hunter.io -> Website Intelligence cuando hay búsqueda de emails planificada", () => {

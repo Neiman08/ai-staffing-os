@@ -362,3 +362,94 @@ test("cero llamadas externas, cero DB: interpretBusinessIntent es una función p
   const result = interpretBusinessIntent("Busca hoteles.");
   assert.equal(typeof (result as unknown as Promise<unknown>).then, "undefined", "no debe devolver una Promise");
 });
+
+// ============================================================
+// F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003,
+// 2026-07-31): una industria fuera de BUSINESS_TAXONOMY (HVAC,
+// refrigeración comercial, servicios mecánicos) hacía que
+// matchedTaxonomyKeys=[] -> hasCompanyContext=false -> el objetivo caía
+// a find_contacts y discover_companies desaparecía del plan por
+// completo, pese a que la instrucción decía explícitamente "Busca hasta
+// 20 empresas nuevas... dedicadas a HVAC...". Estas pruebas cubren el
+// caso general -- ninguna industria puntual queda hardcodeada como
+// "arreglada", el mecanismo debe funcionar para CUALQUIER término
+// desconocido.
+// ============================================================
+
+test("caso real MIS-20260731-0002: 'Busca hasta 20 empresas nuevas en Illinois dedicadas a HVAC, refrigeración comercial y servicios mecánicos...' -- objective=find_companies, discover_companies planificado, términos literales preservados", () => {
+  const intent = interpret(
+    "Busca hasta 20 empresas nuevas en Illinois dedicadas a HVAC, refrigeración comercial y servicios mecánicos que puedan necesitar servicios de staffing.",
+  );
+  assert.equal(intent.objective.type, "find_companies", "NUNCA debe degradar a find_contacts solo porque la taxonomía no reconoce el rubro");
+  assert.ok(intent.plannedSteps.includes("discover_companies"), "discover_companies NUNCA debe desaparecer del plan por una industria desconocida");
+  assert.deepEqual(intent.matchedTaxonomyKeys, [], "ninguna entrada de BUSINESS_TAXONOMY reconoce HVAC -- esto es justamente lo que se está probando");
+  for (const term of ["HVAC", "refrigeración comercial", "servicios mecánicos"]) {
+    assert.ok(intent.literalCompanyTypeTerms.includes(term), `"${term}" debe conservarse tal cual como criterio de búsqueda`);
+  }
+});
+
+// Generativo/basado en propiedades: variaciones lingüísticas ES/EN sobre
+// el MISMO mecanismo general -- nunca una rama especial por industria.
+const UNKNOWN_INDUSTRY_INSTRUCTIONS = [
+  "Busca empresas dedicadas a acuicultura comercial en Illinois.",
+  "Encuentra compañías de reparación de drones industriales en Texas.",
+  "Identifica negocios de fabricación de baterías de litio en Illinois.",
+  "Find companies specializing in commercial drone repair in Illinois.",
+  "Search for companies in the field of industrial battery recycling in Texas.",
+  "Busca empresas de refrigeración comercial y servicios mecánicos en Illinois.",
+];
+for (const instruction of UNKNOWN_INDUSTRY_INSTRUCTIONS) {
+  test(`industria genuinamente desconocida (sin rama especial por término) -- "${instruction}"`, () => {
+    const intent = interpret(instruction);
+    assert.equal(intent.objective.type, "find_companies", `debe seguir siendo find_companies para: ${instruction}`);
+    assert.ok(intent.plannedSteps.includes("discover_companies"), `discover_companies debe seguir planificado para: ${instruction}`);
+    assert.ok(intent.literalCompanyTypeTerms.length > 0, `debe extraer al menos un término literal para: ${instruction}`);
+  });
+}
+
+test("modelProposedTerms (F32, puente con interpretDailyDirective/ceo-tools.impl.ts): términos propuestos por el modelo cuentan igual que la extracción determinista de respaldo", () => {
+  const intent = interpretBusinessIntent("Busca empresas en Illinois que puedan necesitar staffing.", [
+    "commercial refrigeration contractor",
+    "mechanical services contractor",
+  ]);
+  assert.ok(intent.literalCompanyTypeTerms.includes("commercial refrigeration contractor"));
+  assert.ok(intent.literalCompanyTypeTerms.includes("mechanical services contractor"));
+  assert.equal(intent.objective.type, "find_companies");
+  assert.ok(intent.plannedSteps.includes("discover_companies"));
+});
+
+test("modelProposedTerms: un término YA cubierto por un match real de taxonomía nunca se duplica en literalCompanyTypeTerms", () => {
+  const intent = interpretBusinessIntent("Busca hoteles en Illinois.", ["hotel", "hospitality group"]);
+  assert.deepEqual(intent.literalCompanyTypeTerms, [], "hotel/hospitality group ya están cubiertos por la entrada real 'hospitality' -- nunca duplicados como literales");
+  assert.ok(intent.matchedTaxonomyKeys.includes("hospitality"));
+});
+
+// Caso real MIS-20260731-0003: roles/objetos/acciones NUNCA deben
+// aparecer como "tipo de empresa desconocido" -- ver
+// semantic-normalization.ts, única fuente de verdad compartida.
+test("roles/objetos del CRM/acciones del pipeline nunca aparecen en literalCompanyTypeTerms, aunque el LLM los proponga por error", () => {
+  const intent = interpretBusinessIntent(
+    "Busca empresas nuevas en Illinois. Identifica a los responsables de contratación (Owner, Operations Manager, HR, Recruiting). Crea Company, Contact, Lead y Opportunity.",
+    ["Owner", "Operations Manager", "HR", "Recruiting", "Opportunity", "Lead", "Contact", "Company"],
+  );
+  for (const term of ["Owner", "Operations Manager", "HR", "Recruiting", "Opportunity", "Lead", "Contact", "Company"]) {
+    assert.ok(!intent.literalCompanyTypeTerms.includes(term), `"${term}" es un rol/objeto/acción -- nunca debe aparecer como tipo de empresa desconocido`);
+  }
+});
+
+test("términos verdaderamente ambiguos (sin disparador de tipo de empresa) no se inventan como literalCompanyTypeTerms", () => {
+  const intent = interpret("Busca proveedores de software empresarial.");
+  assert.deepEqual(intent.literalCompanyTypeTerms, []);
+  assert.equal(intent.objective.type, "custom", "sin ninguna señal real (ni taxonomía, ni término literal disparado, ni rol/título), sigue siendo ambigüedad genuina");
+});
+
+test("guardrail F32: 'Busca empresas que contraten Machine Operators.' (targetJobTitles real) NUNCA se pisa por el detector de verbo -- find_hiring_signals sigue ganando, más específico", () => {
+  const intent = interpret("Busca empresas que contraten Machine Operators.");
+  assert.equal(intent.objective.type, "find_hiring_signals");
+  assert.deepEqual(intent.plannedSteps, ["find_hiring_signals"]);
+});
+
+test("guardrail F32: 'Encuentra HR Manager o Plant Manager.' (decisionRoles real) NUNCA se pisa por el detector de verbo -- find_contacts sigue ganando, más específico", () => {
+  const intent = interpret("Encuentra HR Manager o Plant Manager.");
+  assert.equal(intent.objective.type, "find_contacts");
+});

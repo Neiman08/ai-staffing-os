@@ -231,14 +231,32 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
   // de lo que esta misión agregó (mismo restrictToCompanyIds que ya
   // aísla la selección real, ver mission-orchestrator.ts) -- se usa acá
   // para filtrar el reporte, igual que ya se aísla la ejecución.
+  // F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0003,
+  // 2026-07-31): la condición de abajo usaba missionSelectedCompanyIds.size
+  // para decidir si filtrar -- indistinguible entre "esta misión nunca
+  // corrió select_target_companies" (sí corresponde mostrar
+  // allCampaignCompanies, el caso que F28 arriba resolvía) y "esta misión
+  // SÍ corrió select_target_companies, con restrictToTradeKeys, y
+  // legítimamente no encontró ninguna empresa elegible" (mostrar 0, NUNCA
+  // el historial completo de la campaña). El segundo caso es real: una
+  // misión de "electrical contractor" con restrictToTradeKeys=["electrical"]
+  // encontró 0 empresas reutilizables (ninguna Company del CRM tenía ese
+  // tradeKey), pero selectedCompanies mostraba 43 empresas de roofing/
+  // data centers/contratistas generales -- el historial COMPLETO de la
+  // campaña "Construction" compartida -- contradiciendo directamente
+  // companiesTargeted=0 del mismo reporte. Se distingue ahora si la
+  // tarea CORRIÓ (sin importar cuántos ids devolvió), nunca solo si el
+  // resultado fue no vacío.
+  let missionRanSelectTargetCompanies = false;
   const missionSelectedCompanyIds = new Set<string>();
   for (const t of childTasks) {
     if (t.type === "select_target_companies" && t.output) {
+      missionRanSelectTargetCompanies = true;
       const ids = (t.output as { companyIds?: string[] }).companyIds ?? [];
       for (const id of ids) missionSelectedCompanyIds.add(id);
     }
   }
-  const campaignCompanies = missionSelectedCompanyIds.size
+  const campaignCompanies = missionRanSelectTargetCompanies
     ? allCampaignCompanies.filter((cc) => missionSelectedCompanyIds.has(cc.companyId))
     : allCampaignCompanies;
 

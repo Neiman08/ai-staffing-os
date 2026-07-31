@@ -136,7 +136,21 @@ async function waitForCompletion(missionId: string, timeoutMs = 60_000): Promise
 // CUALQUIER empresa del estado sin relación con lo pedido. Ahora debe
 // quedar en 0 empresas targeteadas -- honesto, nunca una empresa
 // equivocada.
-test("una industria que la taxonomía reconoce pero el CRM no tiene todavía nunca selecciona una empresa sin relación (regresión del bug real)", async () => {
+// F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003,
+// decisión explícita del PO 2026-07-31): ANTES, "retail" (una entrada
+// real de BUSINESS_TAXONOMY con crmIndustryBucket=null, igual que
+// healthcare/janitorial/commercial_cleaning/restaurants) nunca podía
+// persistirse -- Company.industryId es NOT NULL, así que cualquier
+// candidato real se rechazaba siempre ("Sin bucket de Industry real
+// aprobado"), sin importar cuán buena fuera su evidencia. Este test
+// fijaba esa limitación como si fuera el comportamiento correcto
+// ("nunca debe reportar empresas targeteadas"). Con el catch-all real
+// "Uncategorized" (seed.ts), un candidato de retail SÍ se descubre y
+// persiste ahora -- el invariante real que sigue protegiendo este test
+// (nunca contaminación cruzada con OTRA industria real, ej. Construction/
+// Manufacturing) se mantiene intacto, solo cambia la expectativa de
+// "0 empresas siempre" a "0 o más, pero NUNCA de una industria ajena".
+test("una industria que la taxonomía reconoce pero sin Industry real propia (retail): AHORA se descubre y persiste bajo el catch-all 'Uncategorized', pero NUNCA selecciona una empresa de otra industria sin relación", async () => {
   const res = await fetch(`${baseUrl}/api/v1/missions`, {
     method: "POST",
     headers: SALES_HEADERS,
@@ -147,10 +161,22 @@ test("una industria que la taxonomía reconoce pero el CRM no tiene todavía nun
   createdMissionIds.push(body.id);
 
   const detail = await waitForCompletion(body.id);
-  assert.equal(detail.missionState, "COMPLETED");
-  assert.equal(detail.companiesTargeted, 0, "sin Industry real de Retail en el CRM, nunca debe reportar empresas targeteadas");
-  const selected = detail.selectedCompanies as Array<{ industryName: string }>;
-  assert.equal(selected.length, 0, "nunca debe seleccionar una empresa de OTRA industria (Construction/Manufacturing/etc.) solo porque el filtro quedó vacío");
+  // La cobertura de contacto (Hunter/PDL, ambos con créditos reales
+  // finitos) puede dejar la misión en PARTIAL sin que sea un bug de
+  // descubrimiento/matcher -- el invariante real de este test es la
+  // ausencia de contaminación cruzada, no el estado terminal exacto.
+  assert.ok(
+    ["COMPLETED", "PARTIAL"].includes(detail.missionState as string),
+    `estado inesperado: ${detail.missionState}`,
+  );
+  const selected = detail.selectedCompanies as Array<{ companyName: string; industryName: string }>;
+  for (const company of selected) {
+    assert.equal(
+      company.industryName,
+      "Uncategorized",
+      `"${company.companyName}" debe archivarse bajo el catch-all -- retail no tiene Industry real propia, y NUNCA debe colarse bajo Construction/Manufacturing/etc. solo porque el filtro quedó vacío`,
+    );
+  }
 });
 
 // F13: prueba positiva real del fallback -- Hospitality no tenía ninguna

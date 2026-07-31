@@ -1,5 +1,12 @@
 import type { BusinessTaxonomyEntry, MissionPlan, MissionPlanFallback, MissionPlanStep, StructuredIntent } from "./contracts";
 import { getTaxonomyEntry } from "./taxonomy";
+// F32: hasOverpassCoverage es una función pura de lookup estático (sin
+// fetch/red) -- importarla acá NO rompe la garantía "puro, determinista,
+// sin fetch" de este módulo (ver comentario de arriba), solo permite que
+// el planner sepa lo mismo que el ejecutor sabe sobre qué trades tienen
+// cobertura real, en vez de mantener una segunda copia de la respuesta
+// desincronizada (el bug real que esto reemplaza).
+import { hasOverpassCoverage } from "../agents/tools/discovery-providers/overpass";
 
 // F7.1: Mission Planner -- pura, determinista, sin Prisma/fetch/LLM.
 // Construye el MissionPlan a partir de un StructuredIntent ya
@@ -173,16 +180,51 @@ function buildSearchQueries(intent: StructuredIntent) {
       queries.push({ searchTerm: phrase, crmIndustryBucket: entry.crmIndustryBucket, taxonomyKey: entry.key });
     }
   }
+
+  // F32 (hallazgo real, MIS-20260731-0002/0003, 2026-07-31): términos de
+  // tipo de empresa pedidos explícitamente pero sin ninguna entrada de
+  // BUSINESS_TAXONOMY -- ANTES simplemente no generaban ninguna query
+  // (buildSearchQueries solo leía matchedTaxonomyKeys), así que
+  // discover_companies terminaba con 0 queries reales pese a que
+  // plannedSteps SÍ incluía el paso (intent-interpreter.ts ya cuenta
+  // literalCompanyTypeTerms como "hay contexto de empresa"). Cada
+  // término se vuelve su propia query real -- crmIndustryBucket=null
+  // (nunca se archiva bajo un bucket amplio que no corresponde),
+  // taxonomyKey con el prefijo "literal:" (business-validation.ts y
+  // mission-executor.ts lo reconocen para validar/buscar por evidencia
+  // directa del término mismo, sin lista curada). Van AL FINAL -- son la
+  // señal menos curada de todas (ver specificFirst arriba), nunca deben
+  // competir por cupo con un trade que la taxonomía sí reconoce.
+  for (const term of intent.literalCompanyTypeTerms) {
+    queries.push({ searchTerm: term, crmIndustryBucket: null, taxonomyKey: `literal:${term}` });
+  }
   return queries;
 }
 
-function buildFallbackStrategy(steps: MissionPlanStep[]): MissionPlanFallback[] {
+function buildFallbackStrategy(steps: MissionPlanStep[], searchQueries: MissionPlan["searchQueries"]): MissionPlanFallback[] {
   const fallback: MissionPlanFallback[] = [];
   if (steps.includes("discover_companies")) {
-    fallback.push({
-      provider: "Google Places",
-      whenUnavailable: "Usar Overpass (OpenStreetMap) como respaldo gratuito — cobertura más limitada, sin costo.",
-    });
+    // F32 (hallazgo real, MIS-20260730-0007/MIS-20260731-0003, F31/F32):
+    // ANTES esto prometía Overpass como respaldo para CUALQUIER misión
+    // con discover_companies, sin ninguna noción de qué trades/industrias
+    // tienen cobertura real de patrones OSM (overpass.ts) -- el plan
+    // anunciaba un respaldo que el ejecutor a veces nunca podía cumplir.
+    // Única fuente de verdad ahora: hasOverpassCoverage (mismo lookup que
+    // usa el ejecutor real) -- el plan solo promete lo que de verdad
+    // puede intentar, y dice explícitamente cuándo no puede.
+    const overpassCoverable = searchQueries.some((q) => hasOverpassCoverage(q.taxonomyKey, q.crmIndustryBucket));
+    fallback.push(
+      overpassCoverable
+        ? {
+            provider: "Google Places",
+            whenUnavailable: "Usar Overpass (OpenStreetMap) como respaldo gratuito — cobertura real confirmada para al menos un trade/industria de esta misión.",
+          }
+        : {
+            provider: "Google Places",
+            whenUnavailable:
+              "Sin respaldo real en Overpass (OpenStreetMap) para ningún trade/industria de esta misión — no se prometerá como fallback; si Google Places no está disponible, la misión terminará honestamente sin descubrimiento externo.",
+          },
+    );
   }
   if (steps.includes("find_contacts")) {
     fallback.push({
@@ -204,8 +246,15 @@ function buildRationale(intent: StructuredIntent, steps: MissionPlanStep[]): str
   parts.push(
     intent.companyTypes.length > 0
       ? `Se buscarán empresas de tipo: ${intent.companyTypes.join(", ")}.`
-      : "No se identificó ningún tipo de empresa concreto en la instrucción.",
+      : intent.literalCompanyTypeTerms.length > 0
+        ? "No se identificó ningún tipo de empresa de la taxonomía conocida en la instrucción."
+        : "No se identificó ningún tipo de empresa concreto en la instrucción.",
   );
+  if (intent.literalCompanyTypeTerms.length > 0) {
+    parts.push(
+      `Además se buscará TAL CUAL, sin taxonomía curada (evidencia directa de nombre/dominio/descripción/categorías): ${intent.literalCompanyTypeTerms.join(", ")}.`,
+    );
+  }
   if (intent.industries.length > 0) {
     parts.push(`Se archivarán bajo la(s) industria(s) real(es) del CRM: ${intent.industries.join(", ")}.`);
   } else if (intent.companyTypes.length > 0) {
@@ -237,13 +286,15 @@ export function buildMissionPlan(intent: StructuredIntent): MissionPlan {
   const steps = intent.plannedSteps;
   const requiredSteps = steps.filter((s) => ALWAYS_REQUIRED_STEPS.has(s));
   const optionalSteps = steps.filter((s) => !ALWAYS_REQUIRED_STEPS.has(s));
+  const searchQueries = buildSearchQueries(intent);
 
   return {
     schemaVersion: 1,
     objective: intent.objective,
-    searchQueries: buildSearchQueries(intent),
+    searchQueries,
     exclusions: intent.exclusions,
     specificTaxonomyKeys: intent.specificMatchedTaxonomyKeys,
+    literalCompanyTypeTerms: intent.literalCompanyTypeTerms,
     cities: intent.preferredCities,
     states: intent.states,
     steps,
@@ -257,7 +308,7 @@ export function buildMissionPlan(intent: StructuredIntent): MissionPlan {
     dedupStrategy: steps.includes("discover_companies")
       ? ["providerPlaceId", "canonicalDomain", "normalizedPhone", "normalizedNameCityState"]
       : [],
-    fallbackStrategy: buildFallbackStrategy(steps),
+    fallbackStrategy: buildFallbackStrategy(steps, searchQueries),
     restrictions: intent.restrictions,
     rationale: buildRationale(intent, steps),
   };

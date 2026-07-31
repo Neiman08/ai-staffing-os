@@ -155,6 +155,18 @@ export const structuredIntentSchema = z.object({
   // que mission-planner.ts los usa para ampliar las search queries
   // (nunca para reemplazar el tipo de empresa/industria ya detectado).
   criticalInfrastructureClients: z.array(z.string()),
+  // F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003):
+  // términos de tipo de empresa que el usuario nombró explícitamente
+  // pero que NINGUNA entrada de BUSINESS_TAXONOMY reconoce todavía --
+  // ver intent-interpreter.ts (extractLiteralCompanyTypeTerms) para el
+  // algoritmo. Nunca se descartan: mission-planner.ts los convierte en
+  // MissionPlanSearchQuery reales (taxonomyKey con prefijo "literal:"),
+  // business-validation.ts los valida por evidencia directa (nombre/
+  // dominio/descripción/categorías del proveedor conteniendo el término
+  // mismo, sin lista curada de companyTypes/negativeKeywords -- límite
+  // conocido y honesto, nunca fingido). Única fuente de verdad para "el
+  // sistema no conoce este rubro todavía, pero el usuario SÍ lo pidió".
+  literalCompanyTypeTerms: z.array(z.string()),
 });
 export type StructuredIntent = z.infer<typeof structuredIntentSchema>;
 
@@ -198,6 +210,12 @@ export const missionPlanSchema = z.object({
   // cross-check de business-validation.ts sin recalcular su propio
   // filtro por isGenericFallback.
   specificTaxonomyKeys: z.array(z.string()),
+  // F32: copiado 1:1 de StructuredIntent.literalCompanyTypeTerms -- se
+  // usa como evidencia adicional en el cruce anti-contaminación de
+  // business-validation.ts (missionLiteralTerms) y para que el
+  // Executive Report pueda explicar honestamente qué términos se
+  // buscaron sin respaldo de taxonomía.
+  literalCompanyTypeTerms: z.array(z.string()),
   cities: z.array(z.string()),
   states: z.array(z.string()),
   // Orden real de ejecución — nunca se reordena en runtime, el plan ES

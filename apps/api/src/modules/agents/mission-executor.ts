@@ -24,7 +24,7 @@ import { detectClientOwnerMatch } from "../ceo-intelligence/critical-infrastruct
 import { createQueuedTask } from "./task-executor";
 import { computeConfidenceScore } from "./tools/discovery-tools.impl";
 import { searchGooglePlaces } from "./tools/discovery-providers/google-places";
-import { searchOverpass } from "./tools/discovery-providers/overpass";
+import { searchOverpass, hasOverpassCoverage } from "./tools/discovery-providers/overpass";
 import { emptyResult, type ProviderCandidate, type ProviderSearchResult } from "./tools/discovery-providers/types";
 import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } from "./tools/provider-health";
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
@@ -68,6 +68,9 @@ import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from ".
 const PROVIDER_KEY_GOOGLE_PLACES = "google_places_text_search";
 const PROVIDER_KEY_OVERPASS = "overpass";
 const GOOGLE_PLACES_RESULT_LIMIT_PER_QUERY = 20;
+// F32: bucket de archivo catch-all (seed.ts, decisión explícita del PO
+// 2026-07-31) -- ver el comentario junto a su uso más abajo.
+const UNCATEGORIZED_INDUSTRY_NAME = "Uncategorized";
 
 export interface DiscoveryProviderPort {
   searchGooglePlaces: typeof searchGooglePlaces;
@@ -550,9 +553,19 @@ async function executeOneQuery(
       omittedNote: `${omittedNote ?? ""} Overpass omitido: marcado ${overpassHealth.status} (${overpassHealth.reason}).`.trim(),
     };
   }
+  // F32 (hallazgo real, MIS-20260731-0003, 2026-07-31): antes se pasaba
+  // industryName=crmIndustryBucket ?? "" -- una query específica de
+  // "electrical contractor" (taxonomyKey="electrical",
+  // crmIndustryBucket="Construction") resolvía los patrones OSM
+  // genéricos de Construction, sin relación real con electricidad.
+  // taxonomyKey/crmIndustryBucket viajan ambos ahora -- resolveOverpassPatterns
+  // (overpass.ts) prueba primero el trade específico, después el bucket
+  // amplio, nunca al revés.
   const overpassResult = await deps.providers.searchOverpass({
     taskId: deps.taskId,
-    industryName: query.crmIndustryBucket ?? "",
+    industryName: query.crmIndustryBucket ?? query.taxonomyKey,
+    taxonomyKey: query.taxonomyKey,
+    crmIndustryBucket: query.crmIndustryBucket,
     stateCode: query.state,
     stateName,
     city: query.city ?? undefined,
@@ -610,6 +623,17 @@ function missionSpecificTaxonomyKeys(plan: MissionPlan, excludeKey: string): str
   return plan.specificTaxonomyKeys.filter((key) => key !== excludeKey);
 }
 
+// F32: mismo criterio que missionSpecificTaxonomyKeys de arriba, para
+// StructuredIntent.literalCompanyTypeTerms -- excluye el propio término
+// literal del candidato (cuando la query que lo encontró era ella misma
+// literal) del cruce de "¿la misión también pidió otro trade específico
+// además del genérico que encontró a este candidato?" (ver
+// business-validation.ts, missionLiteralTerms).
+function missionLiteralTermsExcludingOwn(plan: MissionPlan, candidateTaxonomyKey: string): string[] {
+  const ownLiteralTerm = candidateTaxonomyKey.startsWith("literal:") ? candidateTaxonomyKey.slice("literal:".length) : null;
+  return plan.literalCompanyTypeTerms.filter((term) => term !== ownLiteralTerm);
+}
+
 function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActivities: string[]) {
   const website = candidate.raw.fields.website?.status === "CONFIRMED" ? (candidate.raw.fields.website.value as string) : null;
   // F28 (restricción geográfica estricta, hallazgo real 2026-07-27):
@@ -630,6 +654,7 @@ function classifyCandidate(candidate: Candidate, plan: MissionPlan, businessActi
     state: detectedState,
     allowedStates: plan.states,
     missionSpecificTaxonomyKeys: missionSpecificTaxonomyKeys(plan, candidate.query.taxonomyKey),
+    missionLiteralTerms: missionLiteralTermsExcludingOwn(plan, candidate.query.taxonomyKey),
     missionExclusions: plan.exclusions,
     providerTypes: candidate.raw.providerTypes ?? [],
     description: null,
@@ -757,9 +782,16 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   }
 
   if (!googlePlacesApiKey) {
-    const overpassCoverable = finalQueries.some((q) => q.crmIndustryBucket && ["Manufacturing", "Warehouse/Logistics", "Construction"].includes(q.crmIndustryBucket));
+    // F32 (hallazgo real, MIS-20260731-0003, 2026-07-31): esta lista
+    // vivía hardcodeada acá, duplicada y desincronizada de las claves
+    // reales de OVERPASS_TRADE_PATTERNS/OVERPASS_BUCKET_PATTERNS en
+    // overpass.ts (le faltaba "Landscaping & Lawn Care" incluso después
+    // de F31, que sí le agregó cobertura real ahí). Única fuente de
+    // verdad ahora: hasOverpassCoverage, la misma función que
+    // buildFallbackStrategy (mission-planner.ts) y searchOverpass usan.
+    const overpassCoverable = finalQueries.some((q) => hasOverpassCoverage(q.taxonomyKey, q.crmIndustryBucket));
     if (!overpassCoverable) {
-      return emptyReport("BLOCKED", "Google Places no está configurada y ninguna query tiene cobertura de respaldo en Overpass (categorías fuera de Manufacturing/Warehouse-Logistics/Construction).");
+      return emptyReport("BLOCKED", "Google Places no está configurada y ninguna query tiene cobertura de respaldo real en Overpass.");
     }
   }
 
@@ -1041,10 +1073,28 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           continue;
         }
 
-        if (!candidate.query.crmIndustryBucket) {
+        // F32 (auditoría arquitectónica, hallazgo real
+        // MIS-20260731-0002/0003, decisión explícita del PO 2026-07-31):
+        // Company.industryId es NOT NULL -- ANTES, cualquier candidato
+        // sin crmIndustryBucket (toda entrada de taxonomía con
+        // crmIndustryBucket=null -- healthcare/janitorial/
+        // commercial_cleaning/restaurants/retail -- Y todo término
+        // literal sin entrada de taxonomía, ver intent-interpreter.ts)
+        // se rechazaba acá mismo, sin importar cuán buena fuera su
+        // evidencia real. Se archiva ahora bajo el catch-all real
+        // "Uncategorized" (seed.ts) -- la Industry es EXCLUSIVAMENTE
+        // almacenamiento; la elegibilidad real ya quedó decidida arriba
+        // por `validation` (business-validation.ts, específica del
+        // trade/término, nunca del bucket).
+        const resolvedIndustry = candidate.query.crmIndustryBucket
+          ? await scopedDb.industry.findFirst({ where: { name: candidate.query.crmIndustryBucket } })
+          : await scopedDb.industry.findFirst({ where: { name: UNCATEGORIZED_INDUSTRY_NAME } });
+        if (!resolvedIndustry) {
           rejectedResults += 1;
           record.rejectedCount += 1;
-          const reason = `Sin bucket de Industry real aprobado para la categoría "${candidate.query.taxonomyKey}" — decisión pendiente del PO (ver plan §9.4). No se persiste hasta que se apruebe/cree la Industry correspondiente.`;
+          const reason = candidate.query.crmIndustryBucket
+            ? `Industry real "${candidate.query.crmIndustryBucket}" no existe en el CRM de este tenant.`
+            : `Industry catch-all "${UNCATEGORIZED_INDUSTRY_NAME}" no existe todavía en este tenant (ver seed.ts) — no se persiste hasta que se sembre.`;
           rejectionReasons.add(reason);
           rejectedCandidates.push({
             name: candidate.raw.name,
@@ -1057,24 +1107,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
           });
           continue;
         }
-
-        const industry = await scopedDb.industry.findFirst({ where: { name: candidate.query.crmIndustryBucket } });
-        if (!industry) {
-          rejectedResults += 1;
-          record.rejectedCount += 1;
-          const reason = `Industry real "${candidate.query.crmIndustryBucket}" no existe en el CRM de este tenant.`;
-          rejectionReasons.add(reason);
-          rejectedCandidates.push({
-            name: candidate.raw.name,
-            taxonomyKey: candidate.query.taxonomyKey,
-            reason,
-            evidence: candidate.raw.name ?? candidate.raw.sourceUrl,
-            confidence: 1,
-            matchedEvidence: validation.matchedEvidence,
-            missingEvidence: validation.missingEvidence,
-          });
-          continue;
-        }
+        const industry = resolvedIndustry;
 
         const company = await persistAcceptedCandidate({
           candidate,

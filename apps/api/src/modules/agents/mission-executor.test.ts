@@ -111,6 +111,7 @@ function manufacturingPlan(overrides: Partial<MissionPlan> = {}): MissionPlan {
     searchQueries: [{ searchTerm: "manufacturing company", crmIndustryBucket: "Manufacturing", taxonomyKey: "manufacturing" }],
     exclusions: [],
     specificTaxonomyKeys: [],
+    literalCompanyTypeTerms: [],
     cities: [],
     states: ["IL"],
     steps: ["discover_companies"],
@@ -550,7 +551,17 @@ test("Discovery en F7.3 crea Company, pero nunca Lead/Opportunity/Campaign/Conta
   assert.equal(pointsAfter, pointsBefore);
 });
 
-test("categoria sin bucket de Industry real (hospitality): se ejecuta la query por honestidad de costo, pero se rechaza sin persistir", async () => {
+test("categoria sin bucket de Industry real (hospitality): se ejecuta la query por honestidad de costo, y AHORA sí se persiste bajo el catch-all 'Uncategorized' (F32)", async () => {
+  // F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003,
+  // decisión explícita del PO 2026-07-31): ANTES, cualquier candidato
+  // sin crmIndustryBucket se rechazaba SIEMPRE al persistir ("Sin bucket
+  // de Industry real aprobado"), sin importar cuán buena fuera su
+  // evidencia real -- Company.industryId es NOT NULL, así que no había
+  // dónde archivarlo. Se creó un catch-all real y permanente
+  // ("Uncategorized", ver seed.ts) para exactamente este caso -- la
+  // Industry es solo almacenamiento, la elegibilidad real ya la decidió
+  // business-validation.ts (acá: "hotel" matchea la entrada real de
+  // taxonomía "hospitality" -> EXACT, aceptado).
   const tenantId = await setupTenant("no-bucket");
   const hotelPlan = manufacturingPlan({
     searchQueries: [{ searchTerm: "hotel", crmIndustryBucket: null, taxonomyKey: "hospitality" }],
@@ -558,16 +569,14 @@ test("categoria sin bucket de Industry real (hospitality): se ejecuta la query p
   const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture({ name: "Grand Hotel Chicago" })]) });
   const report = await run(tenantId, hotelPlan, providers);
 
-  assert.equal(report.companiesCreated, 0);
-  // F28 (antes F14): el plan por default es de un solo estado (IL) --
-  // aunque ninguna empresa se cree nunca (siempre rechazada por falta de
-  // bucket) y el objetivo (1) nunca se cubra, la ronda 3 (estados
-  // vecinos) ya no dispara sin autorización explícita -- solo la ronda 1
-  // corre (1 ejecución), el candidato se rechaza una sola vez.
+  assert.equal(report.companiesCreated, 1, "con el catch-all 'Uncategorized' ya sembrado, el candidato debe persistirse -- nunca más se pierde evidencia real solo por falta de bucket");
   assert.equal(report.queriesExecuted, 1);
-  assert.equal(report.rejectedResults, 1);
+  assert.equal(report.rejectedResults, 0);
   assert.equal(report.duplicatesWithinMission, 0);
-  assert.ok(report.rejectedCandidates[0]!.reason.includes("bucket"));
+
+  const created = await prisma.company.findFirst({ where: { tenantId, name: "Grand Hotel Chicago" }, include: { industry: true } });
+  assert.ok(created);
+  assert.equal(created!.industry.name, "Uncategorized", "se archiva bajo el catch-all -- la Industry es solo almacenamiento, nunca el criterio de elegibilidad");
 });
 
 test("restricciones: no crear campañas ni oportunidades sigue documentado en restrictionsApplied, y nunca se crea ninguna de las dos igualmente", async () => {

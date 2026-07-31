@@ -25,30 +25,77 @@ function isCancellation(signal: AbortSignal | undefined): boolean {
   return !!signal?.aborted;
 }
 
-// F4.5A §"Alcance prioritario": Manufacturing, Warehouse/Logistics,
-// Construction — cada uno con más de un patrón de tag porque OSM no tiene
-// una única convención por industria; se prueban en orden y se degrada
-// por patrón (nunca se inventa un resultado si uno falla).
-const OVERPASS_PATTERNS: Record<string, Array<{ key: string; value: string }>> = {
-  Manufacturing: [{ key: "office", value: "company" }],
-  "Warehouse/Logistics": [
-    { key: "industrial", value: "warehouse" },
-    { key: "building", value: "warehouse" },
-  ],
-  Construction: [
+// F32 (hallazgo real, MIS-20260731-0003, 2026-07-31): una query
+// específica de "electrical contractor" (taxonomyKey="electrical")
+// resolvía Overpass EXCLUSIVAMENTE por crmIndustryBucket="Construction"
+// -- terminaba probando craft=builder/office=construction_company (los
+// patrones genéricos de construcción), nunca nada relacionado con
+// electricidad, aunque el trade específico sí estuviera identificado.
+// Resolución en DOS niveles ahora: (1) por taxonomyKey/trade específico
+// (más preciso, ver resolveOverpassPatterns) — (2) por crmIndustryBucket
+// amplio, SOLO cuando no existe nada específico para ese trade. Todos
+// los tags de abajo son reales y documentados en OpenStreetMap (nunca
+// inventados) -- ver el wiki de cada uno.
+const OVERPASS_TRADE_PATTERNS: Record<string, Array<{ key: string; value: string }>> = {
+  // https://wiki.openstreetmap.org/wiki/Tag:craft=electrician
+  electrical: [{ key: "craft", value: "electrician" }],
+  // https://wiki.openstreetmap.org/wiki/Tag:craft=roofer
+  roofing: [{ key: "craft", value: "roofer" }],
+  // https://wiki.openstreetmap.org/wiki/Tag:craft=gardener (F31,
+  // hallazgo real MIS-20260730-0007, 2026-07-30)
+  landscaping: [{ key: "craft", value: "gardener" }],
+  construction: [
     { key: "craft", value: "builder" },
     { key: "office", value: "construction_company" },
   ],
-  // F31 (hallazgo real, MIS-20260730-0007, 2026-07-30): faltaba por
-  // completo -- toda misión de landscaping/lawn care con Google Places
-  // omitido (presupuesto) caía en NO_RESULTS en <1s, sin un solo fetch
-  // real a Overpass, pese a que el plan de la misión declaraba Overpass
-  // como respaldo real (ver mission-planner.ts:buildFallbackStrategy).
-  // "craft"="gardener" es el tag real y documentado de OpenStreetMap
-  // para negocios de jardinería/mantenimiento de espacios verdes (ver
-  // https://wiki.openstreetmap.org/wiki/Tag:craft=gardener).
-  "Landscaping & Lawn Care": [{ key: "craft", value: "gardener" }],
+  manufacturing: [{ key: "office", value: "company" }],
+  warehousing: [
+    { key: "industrial", value: "warehouse" },
+    { key: "building", value: "warehouse" },
+  ],
 };
+
+// F4.5A §"Alcance prioritario" -- respaldo por bucket AMPLIO del CRM,
+// usado solo cuando la query no tiene un taxonomyKey con patrón propio
+// arriba (ej. una entrada de taxonomía nueva que todavía comparte el
+// bucket "Construction" pero no tiene su propio tag OSM curado).
+const OVERPASS_BUCKET_PATTERNS: Record<string, Array<{ key: string; value: string }>> = {
+  Manufacturing: OVERPASS_TRADE_PATTERNS.manufacturing!,
+  "Warehouse/Logistics": OVERPASS_TRADE_PATTERNS.warehousing!,
+  Construction: OVERPASS_TRADE_PATTERNS.construction!,
+  "Landscaping & Lawn Care": OVERPASS_TRADE_PATTERNS.landscaping!,
+};
+
+/**
+ * F32: única fuente de verdad para "¿Overpass tiene cobertura real para
+ * esta query?" -- usada tanto por searchOverpass (acá abajo, antes de
+ * intentar cualquier fetch) como por mission-planner.ts
+ * (buildFallbackStrategy, para no prometer Overpass cuando no hay nada
+ * real que intentar) y mission-executor.ts (overpassCoverable). Un solo
+ * lugar, nunca un catálogo paralelo desincronizado (bug real encontrado:
+ * mission-executor.ts tenía su propia lista hardcodeada de buckets, que
+ * había quedado desactualizada apenas se agregó Landscaping & Lawn Care).
+ */
+export function resolveOverpassPatterns(
+  taxonomyKey: string | undefined,
+  crmIndustryBucket: string | null | undefined,
+): Array<{ key: string; value: string }> {
+  // F32: taxonomyKey "literal:<término>" (ver mission-planner.ts) no
+  // tiene -- ni puede tener -- un tag OSM curado: es un término que la
+  // taxonomía no reconoce todavía. Degradación honesta, nunca se inventa
+  // un patrón para un término desconocido.
+  if (taxonomyKey && !taxonomyKey.startsWith("literal:") && OVERPASS_TRADE_PATTERNS[taxonomyKey]) {
+    return OVERPASS_TRADE_PATTERNS[taxonomyKey];
+  }
+  if (crmIndustryBucket && OVERPASS_BUCKET_PATTERNS[crmIndustryBucket]) {
+    return OVERPASS_BUCKET_PATTERNS[crmIndustryBucket];
+  }
+  return [];
+}
+
+export function hasOverpassCoverage(taxonomyKey: string | undefined, crmIndustryBucket: string | null | undefined): boolean {
+  return resolveOverpassPatterns(taxonomyKey, crmIndustryBucket).length > 0;
+}
 
 interface OverpassElement {
   type: string;
@@ -181,26 +228,29 @@ export function extractFieldsFromOsmTags(
 }
 
 export async function searchOverpass(params: ProviderSearchParams): Promise<ProviderSearchResult> {
-  const patterns = OVERPASS_PATTERNS[params.industryName] ?? [];
+  const patterns = resolveOverpassPatterns(params.taxonomyKey, params.crmIndustryBucket);
+  // F32: etiqueta humana para logs/patternsFailed -- prioriza el trade
+  // específico (taxonomyKey) sobre el bucket amplio o industryName, para
+  // que un mensaje de error diga "electrical", nunca "Construction",
+  // cuando la query real era sobre electricistas.
+  const label = params.taxonomyKey ?? params.crmIndustryBucket ?? params.industryName;
   const candidates: ProviderCandidate[] = [];
   const sourcesUsed = new Set<string>();
   const patternsFailed: string[] = [];
 
-  // F31 (hallazgo real, MIS-20260730-0007, 2026-07-30): antes, una
-  // industria sin ningún patrón OSM definido (la mayoría -- solo
-  // Manufacturing/Warehouse-Logistics/Construction/Landscaping & Lawn
-  // Care tienen uno hoy) hacía que el `for` de abajo nunca corriera ni
-  // una sola vez -- se devolvía candidates=[] sin ningún fetch real,
-  // indistinguible de "se intentó y no encontró nada". El plan de la
-  // misión (mission-planner.ts:buildFallbackStrategy) declara Overpass
-  // como respaldo real siempre que hay discover_companies, sin saber
-  // qué industrias tienen cobertura real acá -- sin esta señal
-  // explícita, ni el Executive Report ni el JSON crudo de la misión
-  // podían explicar por qué "sin proveedor" era la respuesta honesta:
-  // Overpass nunca tuvo nada que intentar, no que lo haya intentado y
-  // fallado.
+  // F31/F32 (hallazgo real, MIS-20260730-0007/MIS-20260731-0003): antes,
+  // una industria sin ningún patrón OSM definido hacía que el `for` de
+  // abajo nunca corriera ni una sola vez -- se devolvía candidates=[]
+  // sin ningún fetch real, indistinguible de "se intentó y no encontró
+  // nada". El plan de la misión (mission-planner.ts:buildFallbackStrategy)
+  // declara Overpass como respaldo real siempre que hay
+  // discover_companies, sin saber qué trades/industrias tienen cobertura
+  // real acá -- sin esta señal explícita, ni el Executive Report ni el
+  // JSON crudo de la misión podían explicar por qué "sin proveedor" era
+  // la respuesta honesta: Overpass nunca tuvo nada que intentar, no que
+  // lo haya intentado y fallado.
   if (patterns.length === 0) {
-    patternsFailed.push(`${params.industryName}: sin patrones OSM soportados para esta industria -- Overpass nunca fue invocado`);
+    patternsFailed.push(`${label}: sin patrones OSM soportados para esta industria -- Overpass nunca fue invocado`);
     return { candidates, costUsd: 0, sourcesUsed: [], patternsFailed, cancelled: false };
   }
 
@@ -213,7 +263,7 @@ export async function searchOverpass(params: ProviderSearchParams): Promise<Prov
     const remaining = params.limit - candidates.length;
     const result = await fetchOverpassPattern(params.taskId, params.stateName, pattern, remaining * 3, params.abortSignal);
     if ("error" in result) {
-      patternsFailed.push(`${params.industryName}:${pattern.key}=${pattern.value} (${result.error})`);
+      patternsFailed.push(`${label}:${pattern.key}=${pattern.value} (${result.error})`);
       if (result.cancelled) {
         return { candidates, costUsd: 0, sourcesUsed: Array.from(sourcesUsed), patternsFailed, cancelled: true };
       }

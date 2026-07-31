@@ -518,6 +518,22 @@ const INDUSTRIES = [
   // Industry real aprobado"). Decisión explícita del PO (2026-07-28):
   // crear la Industry real. Ver taxonomy.ts.
   { id: "industry-landscaping-lawn-care", name: "Landscaping & Lawn Care" },
+  // F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003,
+  // 2026-07-31): Company.industryId es NOT NULL en el schema -- ninguna
+  // Company puede persistirse sin una Industry real. Antes de esto, cada
+  // rubro nuevo pedido por una misión real (Hospitality F13, Landscaping
+  // & Lawn Care F28) requería crear su PROPIA Industry real -- el mismo
+  // patrón se repetiría indefinidamente por cada industria futura,
+  // exactamente la clase de parche puntual que esta auditoría busca
+  // eliminar. Bucket catch-all ÚNICO y permanente para candidatos cuyo
+  // tipo de empresa la Business Taxonomy no reconoce todavía
+  // (StructuredIntent.literalCompanyTypeTerms, ver intent-interpreter.ts)
+  // -- decisión explícita del PO (2026-07-31): la Industry acá es
+  // EXCLUSIVAMENTE una categoría de almacenamiento, nunca un criterio de
+  // elegibilidad (eso sigue viniendo del término/tradeKey específico, ver
+  // business-validation.ts). Nunca se crea una Industry nueva por
+  // término -- este es el único catch-all para todos.
+  { id: "industry-uncategorized", name: "Uncategorized" },
 ];
 
 async function seedIndustries() {
