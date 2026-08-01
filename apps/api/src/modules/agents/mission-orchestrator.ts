@@ -580,6 +580,23 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
     // misión real podía ver "suficiente" oferta interna por culpa de
     // empresas de demo/prueba y saltarse el fallback de descubrimiento
     // externo que en realidad necesitaba.
+    //
+    // F33 (auditoría de regresión reportada, 2026-08-01, hallazgo real
+    // MIS-20260801-0005): esta cuenta tampoco filtraba por
+    // commercialStatus="COMMERCIAL_VALIDATED" -- select_target_companies
+    // (campaign-tools.impl.ts, más abajo) SÍ exige ese estado siempre
+    // (F18: DISCOVERY_CANDIDATE -- confianza WEAK/REJECTED al momento de
+    // descubrirla -- nunca es oferta comercial válida). Una industria
+    // genérica (ej. "manufactura" sin trade específico, isGenericFallback
+    // =true) con oferta REAL pero sin validar comercialmente (por
+    // confianza baja al momento del descubrimiento original) hacía que
+    // internalSupply pareciera "suficiente" y el gate se saltara el
+    // descubrimiento real -- pero select_target_companies, con su propio
+    // filtro más estricto, no encontraba NADA que seleccionar
+    // (addedCount=0), y la misión terminaba con 0 empresas sin haber
+    // intentado nunca un descubrimiento real. Mismo filtro que
+    // select_target_companies, para que "hay oferta suficiente" y "hay
+    // oferta REALMENTE seleccionable" sean la misma pregunta.
     const internalSupply =
       industries.length > 0
         ? await scopedDb.company.count({
@@ -588,6 +605,7 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
               state: interpreted.state ?? undefined,
               city: interpreted.city ?? undefined,
               origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] },
+              commercialStatus: "COMMERCIAL_VALIDATED",
             },
           })
         : 0;

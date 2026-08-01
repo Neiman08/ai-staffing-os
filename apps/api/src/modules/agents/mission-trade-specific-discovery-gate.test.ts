@@ -273,3 +273,110 @@ test(
     );
   },
 );
+
+/**
+ * F33 (auditoría de regresión reportada, 2026-08-01, hallazgo real
+ * MIS-20260801-0005): una industria GENÉRICA (isGenericFallback=true,
+ * ej. "manufactura" sin trade específico) con oferta interna REAL pero
+ * SIN VALIDAR comercialmente (Company.commercialStatus=DISCOVERY_CANDIDATE
+ * -- confianza WEAK/REJECTED al momento del descubrimiento original)
+ * hacía que internalSupply pareciera "suficiente" (contaba TODAS las
+ * Company del bucket, sin filtrar por commercialStatus) y el gate se
+ * saltaba el descubrimiento real -- pero select_target_companies, con su
+ * propio filtro más estricto (commercialStatus="COMMERCIAL_VALIDATED",
+ * F18), no encontraba NADA que seleccionar. La misión terminaba
+ * "COMPLETED" con 0 empresas, sin haber intentado nunca un
+ * descubrimiento real, pese a pedir explícitamente "empresas nuevas".
+ */
+test(
+  "runMissionPipeline: una industria genérica con oferta interna NO validada comercialmente SIEMPRE fuerza descubrimiento real, nunca se saltea el gate por un conteo que ignora commercialStatus (caso real MIS-20260801-0005)",
+  { skip: process.env.GOOGLE_PLACES_API_KEY ? false : "requiere GOOGLE_PLACES_API_KEY real" },
+  async () => {
+    const tenant = await prisma.tenant.create({
+      data: { name: `${TEST_PREFIX}-COMMSTATUS-${Date.now()}`, slug: `${TEST_PREFIX.toLowerCase()}-commstatus-${Date.now()}` },
+    });
+    createdTenantIds.push(tenant.id);
+
+    const manufacturing = await prisma.industry.findFirstOrThrow({ where: { name: "Manufacturing", isGlobal: true } });
+    const ceoDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "ceo" } });
+    const ceoInstance = await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: ceoDefinition.id, isActive: true } });
+    for (const key of ["discovery", "campaign", "sales", "outreach"]) {
+      const definition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key } });
+      await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: definition.id, isActive: true } });
+    }
+
+    // Oferta interna REAL (más que perCampaignVolume) pero NUNCA
+    // validada comercialmente -- exactamente el estado real que
+    // internalSupply ignoraba antes de este fix.
+    for (let i = 0; i < 5; i++) {
+      await prisma.company.create({
+        data: {
+          tenantId: tenant.id,
+          name: `Unvalidated Manufacturing Co ${i}`,
+          industryId: manufacturing.id,
+          state: "IL",
+          origin: "API_PROVIDER",
+          commercialStatus: "DISCOVERY_CANDIDATE",
+        },
+      });
+    }
+
+    const missionRestrictions = {
+      allowOutreach: false,
+      allowDraftCreation: true,
+      allowMessageSending: false,
+      allowCampaignCreation: true,
+      allowOpportunityCreation: true,
+    };
+
+    const task = await prisma.agentTask.create({
+      data: {
+        tenantId: tenant.id,
+        agentInstanceId: ceoInstance.id,
+        type: "daily_revenue_mission",
+        status: "RUNNING",
+        triggeredBy: "USER",
+        input: {
+          rawInstruction: "Busca hasta 3 empresas nuevas de manufactura en Decatur, Illinois que puedan necesitar personal de campo.",
+          launchedByUserId: "test-user",
+          industryNames: ["Manufacturing"],
+          state: "IL",
+          city: "Decatur",
+          categoryNames: [],
+          desiredVolume: 3,
+          businessObjective: { type: "companies_found", target: 3, unit: "empresas", rawText: "empresas de manufactura en Illinois" },
+          unrecognizedTerms: [],
+          useExternalDiscovery: false,
+          externalSearchTerms: [],
+          missionRestrictions,
+        },
+        output: {
+          missionState: "RUNNING",
+          companiesTargeted: 0,
+          leadsCreated: 0,
+          opportunitiesCreated: 0,
+          sequencesPlanned: 0,
+          draftsAwaitingApproval: 0,
+          costUsdSoFar: 0,
+          objectiveProgress: { type: "companies_found", target: 3, unit: "empresas", current: 0, percentComplete: 0, rawText: "empresas de manufactura en Illinois" },
+          progressUpdatedAt: new Date().toISOString(),
+          error: null,
+          appliedRestrictions: missionRestrictions,
+          restrictionNotes: [],
+        },
+      },
+    });
+
+    await runWithTenancyContext({ tenantId: tenant.id, userId: "test-user", permissions: [] }, () =>
+      runMissionPipeline(task.id, tenant.id, "test-user"),
+    );
+
+    const finished = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+    const output = finished.output as { discoveryFallback?: unknown } | null;
+
+    assert.ok(
+      output?.discoveryFallback,
+      "el descubrimiento externo real nunca corrió -- internalSupply contó 5 empresas sin validar comercialmente como si fueran oferta real, y el gate se saltó pese a pedir explícitamente empresas nuevas (bug real MIS-20260801-0005)",
+    );
+  },
+);
