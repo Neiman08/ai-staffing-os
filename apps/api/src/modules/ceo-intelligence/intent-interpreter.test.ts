@@ -517,3 +517,61 @@ test("recorte geográfico con coma NUNCA rompe una lista real de varios rubros (
   assert.ok(intent.matchedTaxonomyKeys.includes("landscaping"));
   assert.deepEqual(intent.preferredCities, ["Chicago"]);
 });
+
+// ============================================================
+// F33 (auditoría de regresión reportada, 2026-08-01): "Misiones que
+// explícitamente solicitan 'buscar empresas nuevas' ya no generan
+// discover_companies" -- investigado a fondo (comparación directa
+// contra el commit previo a F32 + misiones reales de producción, ver
+// evidencia en la conversación). Causa raíz real encontrada (distinta
+// de la reportada, pero real): un detector de verbo adicional
+// (FIND_COMPANIES_VERB_RE, ya eliminado) hacía que objective.type
+// dijera "find_companies" para una instrucción SIN ningún tipo de
+// empresa/industria/término literal nombrado, mientras plannedSteps
+// seguía vacío -- un objetivo que prometía descubrimiento sin ningún
+// plan real detrás. La regresión tal como se reportó (industria
+// NOMBRADA perdiendo discover_companies) no se reprodujo en ningún
+// caso -- estas pruebas fijan la invariante real y estructural pedida:
+// "cualquier misión cuyo objetivo sea descubrir empresas SIEMPRE
+// incluye discover_companies en el plan" -- verificada de forma
+// generativa (no un caso puntual) sobre trades de Construction
+// distintos, Hospitality, Manufacturing, Healthcare, Landscaping y un
+// término literal genuinamente desconocido, en ES/EN.
+// ============================================================
+
+const FIND_COMPANIES_INSTRUCTIONS = [
+  "Busca hasta 20 empresas nuevas de roofing en Illinois que puedan necesitar personal.",
+  "Busca hasta 20 empresas nuevas de construcción eléctrica (electrical contractors) en Illinois.",
+  "Busca hasta 20 empresas nuevas en Illinois dedicadas a landscaping.",
+  "Busca hasta 3 empresas nuevas de manufactura en Illinois que puedan necesitar personal.",
+  "Busca hospitales que necesiten personal de limpieza en Illinois.",
+  "Busca hasta 25 hoteles comerciales en Illinois que actualmente estén contratando.",
+  "Find up to 3 new companies specializing in commercial solar panel installation in Illinois.",
+  "Busca hasta 3 empresas nuevas de instalación de paneles solares comerciales en Decatur, Illinois.",
+];
+for (const instruction of FIND_COMPANIES_INSTRUCTIONS) {
+  test(`invariante estructural: objective.type=find_companies SIEMPRE implica discover_companies en plannedSteps -- "${instruction}"`, () => {
+    const intent = interpret(instruction);
+    assert.equal(intent.objective.type, "find_companies", `objective.type debería ser find_companies para: ${instruction}`);
+    assert.ok(
+      intent.plannedSteps.includes("discover_companies"),
+      `objective.type=find_companies pero discover_companies NO está en plannedSteps -- la regresión reportada, para: ${instruction} (plannedSteps: ${JSON.stringify(intent.plannedSteps)})`,
+    );
+    assert.ok(intent.plannedSteps.includes("validate_business_type"), "discover_companies siempre debe ir acompañado de validate_business_type (F18)");
+  });
+}
+
+// F33: el reverso de la invariante de arriba -- nunca al revés
+// (objective.type=find_companies con plannedSteps vacío), el bug real
+// que introdujo el detector de verbo ya eliminado. Instrucción
+// genuinamente sin ningún tipo de empresa/industria/término literal --
+// el valor honesto es "custom", nunca "find_companies" sin ningún plan
+// real detrás.
+test("guardrail F33 (bug real, ya corregido): instrucción sin NINGÚN tipo de empresa/industria/término literal nunca declara find_companies sin plannedSteps real -- 'custom' es el valor honesto", () => {
+  const intent = interpret("Busca hasta 25 empresas nuevas en Illinois que tengan una alta probabilidad de estar contratando.");
+  assert.equal(intent.companyTypes.length, 0);
+  assert.equal(intent.industries.length, 0);
+  assert.equal(intent.literalCompanyTypeTerms.length, 0);
+  assert.equal(intent.objective.type, "custom", "sin ningún tipo de empresa/industria/término literal, el objetivo honesto es 'custom', nunca 'find_companies' sin plan real");
+  assert.deepEqual(intent.plannedSteps, []);
+});

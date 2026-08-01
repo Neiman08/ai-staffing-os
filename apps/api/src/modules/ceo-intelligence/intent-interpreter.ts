@@ -21,24 +21,19 @@ import { classifyNonIndustryTerm } from "./semantic-normalization";
 // buscar empresas" (independiente de si la taxonomía reconoce el rubro)
 // de "qué tan bien entendemos el rubro pedido" -- lo segundo nunca debe
 // poder apagar lo primero.
-// F32: acotado deliberadamente a "empresas/compañías/negocios/
-// contratistas/fabricantes" (los sinónimos de "empresa" que ya usa el
-// resto de este archivo, ver KNOWN_PROVIDERS más abajo para el
-// significado NO relacionado de "proveedor" en este dominio -- Hunter/
-// PDL/Google Places, nunca una empresa objetivo) -- "proveedores"/
-// "vendors"/"suppliers" quedan afuera a propósito: son ambiguos fuera
-// del dominio real de este producto (buscar empresas que necesiten
-// staffing) y romperían el caso de ambigüedad genuina ya cubierto por
-// intent-interpreter.test.ts ("Busca proveedores de software
-// empresarial." debe seguir siendo ambiguo, nunca un falso positivo).
-// F32 (bugfix de acentos): evaluado contra texto YA normalizado
-// (normalizeText -- minúsculas, sin acentos/diéresis/eñe, ver el
-// llamado más abajo), nunca contra el texto crudo -- "compañías" nunca
-// matcheaba "compan[ií]as?" porque la "ñ" no es una "n" para un regex
-// literal (hallazgo real: "Encuentra compañías de..." no disparaba el
-// detector).
-const FIND_COMPANIES_VERB_RE =
-  /\b(?:busca|buscar|encuentra|encontrar|identifica|identificar|localiza|localizar)\b[^.;]{0,40}\b(?:empresas?|companias?|negocios?|contratistas?|fabricantes?)\b|\b(?:find|search\s+for|identify|locate)\b[^.;]{0,40}\b(?:companies|businesses|contractors|manufacturers)\b/i;
+//
+// F33 (auditoría de regresión reportada, 2026-08-01): este archivo tuvo
+// brevemente un detector de verbo adicional (FIND_COMPANIES_VERB_RE,
+// "busca...empresas") que forzaba objective.type="find_companies" aunque
+// hasCompanyContext siguiera en false -- se revirtió (ver buildObjective)
+// porque no resolvía ningún caso real que literalCompanyTypeTerms no
+// resolviera ya, y producía un objetivo que prometía descubrimiento sin
+// ningún plan real detrás (plannedSteps seguía vacío igual, sin ningún
+// tipo de empresa/industria/término literal del que construir una
+// query). Confirmado con evidencia real (misión de producción +
+// comparación directa contra el commit previo a esta auditoría) que
+// plannedSteps=[] para una instrucción genuinamente sin ningún rubro
+// nombrado es comportamiento correcto y preexistente, no una regresión.
 
 // F32: dispara la extracción de "tipos de empresa literales" -- términos
 // que el usuario nombró explícitamente como el rubro/actividad buscada,
@@ -210,32 +205,38 @@ function buildObjective(
   targetJobTitles: string[],
   decisionRoles: string[],
   literalCompanyTypeTerms: string[],
-  explicitFindCompaniesVerb: boolean,
 ): MissionObjective {
   const targetCompanyCount = detectObjectiveTargetCount(rawInstruction);
   const hasCompanyContext = companyTypes.length > 0 || industries.length > 0 || literalCompanyTypeTerms.length > 0;
 
-  // F32: el caso real (MIS-20260731-0002: "Busca hasta 20 empresas...
-  // dedicadas a HVAC...") ya queda resuelto arriba -- literalCompanyTypeTerms
-  // hace hasCompanyContext=true sin depender de este detector de verbo.
-  // explicitFindCompaniesVerb es una red de seguridad ADICIONAL, más
-  // acotada a propósito: solo actúa quando NINGUNA otra señal real
-  // (companyTypes/industries/literalCompanyTypeTerms/targetJobTitles/
-  // decisionRoles) dio ninguna pista de qué buscar -- ahí "custom" (sin
-  // ningún plan real) es peor que declarar find_companies honestamente.
-  // Nunca debe pisar find_contacts/find_hiring_signals cuando SÍ hay una
-  // señal real más específica (ej. "Busca empresas que contraten Machine
-  // Operators" -- el verbo "busca...empresas" aparece, pero
-  // targetJobTitles ya identificó una interpretación más precisa:
-  // find_hiring_signals sobre el CRM existente, no un discovery nuevo
-  // sin ningún criterio de industria).
+  // F33 (auditoría de regresión reportada, 2026-08-01): la versión
+  // anterior de esta función tenía una rama adicional que declaraba
+  // objective.type="find_companies" solo porque la instrucción contenía
+  // un verbo de búsqueda ("busca...empresas"), AUNQUE hasCompanyContext
+  // siguiera en false (sin companyTypes/industries/literalCompanyTypeTerms
+  // -- ej. "Busca hasta 25 empresas nuevas... con alta probabilidad de
+  // contratación", sin ningún rubro nombrado). Eso rompía la invariante
+  // real: objective decía find_companies pero buildPlannedSteps (abajo)
+  // seguía sin ningún criterio real de qué buscar, así que plannedSteps
+  // quedaba vacío igual -- un objetivo que prometía descubrimiento sin
+  // ningún plan real detrás. Confirmado con evidencia directa (git show
+  // del commit previo a esta rama + ejecución real del intérprete) que
+  // plannedSteps=[] para este caso es el comportamiento correcto y
+  // preexistente -- sin ningún tipo de empresa/industria/término literal
+  // nombrado, no existe ningún criterio real con el que construir una
+  // query de descubrimiento, sin importar qué verbo haya en la frase.
+  // El caso real que SÍ debía arreglarse (HVAC, paneles solares...) ya
+  // queda cubierto por literalCompanyTypeTerms arriba, sin necesitar
+  // esta rama -- se revierte a "custom", el valor honesto cuando
+  // ninguna señal real (ni taxonomía, ni término literal, ni rol/título)
+  // identificó qué buscar.
   let type: MissionObjective["type"] = "find_companies";
   if (!hasCompanyContext && decisionRoles.length > 0) {
     type = "find_contacts";
   } else if (!hasCompanyContext && targetJobTitles.length > 0) {
     type = "find_hiring_signals";
   } else if (!hasCompanyContext && targetJobTitles.length === 0 && decisionRoles.length === 0) {
-    type = explicitFindCompaniesVerb ? "find_companies" : "custom";
+    type = "custom";
   }
 
   return { type, targetCompanyCount, rawText: rawInstruction };
@@ -365,7 +366,6 @@ export function interpretBusinessIntent(rawInstruction: string, modelProposedTer
   // literal extraído (ver trimTrailingLocation).
   const { cities: preferredCities, states } = detectCitiesAndStates(rawInstruction);
   const literalCompanyTypeTerms = extractLiteralCompanyTypeTerms(positiveText, matchedEntries, modelProposedTerms, preferredCities, states);
-  const explicitFindCompaniesVerb = FIND_COMPANIES_VERB_RE.test(normalizedPositive);
 
   const searchTerms = Array.from(
     new Set([...matchedEntries.flatMap((e) => e.googleSearchPhrases), ...literalCompanyTypeTerms]),
@@ -393,15 +393,7 @@ export function interpretBusinessIntent(rawInstruction: string, modelProposedTer
   // "contratistas que trabajan en proyectos de <cliente>".
   const criticalInfrastructureClients = detectCriticalInfrastructureClients(rawInstruction);
   const restrictions: MissionRestrictions = mergeMissionRestrictions(null, rawInstruction);
-  const objective = buildObjective(
-    rawInstruction,
-    companyTypes,
-    industries,
-    targetJobTitles,
-    decisionRoles,
-    literalCompanyTypeTerms,
-    explicitFindCompaniesVerb,
-  );
+  const objective = buildObjective(rawInstruction, companyTypes, industries, targetJobTitles, decisionRoles, literalCompanyTypeTerms);
   const plannedSteps = buildPlannedSteps({
     companyTypes,
     industries,
