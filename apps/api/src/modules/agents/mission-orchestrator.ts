@@ -582,21 +582,47 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
     // externo que en realidad necesitaba.
     //
     // F33 (auditoría de regresión reportada, 2026-08-01, hallazgo real
-    // MIS-20260801-0005): esta cuenta tampoco filtraba por
-    // commercialStatus="COMMERCIAL_VALIDATED" -- select_target_companies
-    // (campaign-tools.impl.ts, más abajo) SÍ exige ese estado siempre
-    // (F18: DISCOVERY_CANDIDATE -- confianza WEAK/REJECTED al momento de
-    // descubrirla -- nunca es oferta comercial válida). Una industria
+    // MIS-20260801-0005/0006): esta cuenta divergía de lo que
+    // select_target_companies (campaign-tools.impl.ts) puede REALMENTE
+    // seleccionar, en DOS filtros reales distintos -- una industria
     // genérica (ej. "manufactura" sin trade específico, isGenericFallback
-    // =true) con oferta REAL pero sin validar comercialmente (por
-    // confianza baja al momento del descubrimiento original) hacía que
-    // internalSupply pareciera "suficiente" y el gate se saltara el
-    // descubrimiento real -- pero select_target_companies, con su propio
-    // filtro más estricto, no encontraba NADA que seleccionar
-    // (addedCount=0), y la misión terminaba con 0 empresas sin haber
-    // intentado nunca un descubrimiento real. Mismo filtro que
-    // select_target_companies, para que "hay oferta suficiente" y "hay
-    // oferta REALMENTE seleccionable" sean la misma pregunta.
+    // =true) con oferta interna que PARECÍA suficiente terminaba con
+    // select_target_companies devolviendo 0 (addedCount=0), y la misión
+    // completaba con 0 empresas sin haber intentado nunca un
+    // descubrimiento real, pese a pedir explícitamente empresas nuevas:
+    //
+    // 1. commercialStatus="COMMERCIAL_VALIDATED" (F18): una Company
+    //    DISCOVERY_CANDIDATE (confianza WEAK/REJECTED al momento de
+    //    descubrirla) nunca es oferta comercial válida para
+    //    select_target_companies, pero SÍ contaba acá.
+    // 2. Empresas ya targeteadas (CampaignCompany.status en
+    //    TARGETED/SEQUENCING/HOT/RECOVERED) en CUALQUIER Campaign ACTIVE
+    //    del tenant -- select_target_companies las excluye SIEMPRE
+    //    (`excludedElsewhere`, campaign-tools.impl.ts), sin importar de
+    //    qué campaña/misión vengan, pero tampoco contaba acá. Con
+    //    suficiente actividad real en el tenant, TODA la oferta
+    //    comercialmente válida de una industria puede terminar ya
+    //    targeteada en otra campaña -- exactamente el caso real
+    //    encontrado (MIS-20260801-0006, corrida inmediatamente después
+    //    del fix #1, mismo síntoma).
+    //
+    // Mismos DOS filtros que select_target_companies aplica siempre, para
+    // que "hay oferta suficiente" y "hay oferta REALMENTE seleccionable"
+    // sean la misma pregunta -- nunca dos queries independientes que
+    // puedan divergir. (Nota de mantenimiento: esta cuenta sigue siendo
+    // una duplicación deliberadamente simplificada, no una fuente
+    // compartida -- select_target_companies también filtra por
+    // tradeKey/sizes/minScore/targetCategoryIds cuando la campaña los
+    // declara, que esta cuenta no replica a propósito, ya que solo
+    // decide "¿vale la pena intentar descubrimiento nuevo?", nunca cuánto
+    // exactamente se podrá seleccionar.)
+    const excludedElsewhere =
+      industries.length > 0
+        ? await scopedDb.campaignCompany.findMany({
+            where: { status: { in: ["TARGETED", "SEQUENCING", "HOT", "RECOVERED"] }, campaign: { status: "ACTIVE" } },
+            select: { companyId: true },
+          })
+        : [];
     const internalSupply =
       industries.length > 0
         ? await scopedDb.company.count({
@@ -606,6 +632,7 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
               city: interpreted.city ?? undefined,
               origin: { notIn: ["DEMO_SEED", "INTERNAL_TEST"] },
               commercialStatus: "COMMERCIAL_VALIDATED",
+              id: { notIn: excludedElsewhere.map((c) => c.companyId) },
             },
           })
         : 0;

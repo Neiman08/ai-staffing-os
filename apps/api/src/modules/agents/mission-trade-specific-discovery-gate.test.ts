@@ -380,3 +380,116 @@ test(
     );
   },
 );
+
+/**
+ * F33 (auditoría de regresión reportada, 2026-08-01, hallazgo real
+ * MIS-20260801-0006): SEGUNDO gap real en internalSupply, encontrado
+ * corriendo una misión real inmediatamente después del fix de
+ * commercialStatus de arriba -- oferta interna REAL y comercialmente
+ * validada, pero YA targeteada en otra Campaign ACTIVE del tenant
+ * (CampaignCompany.status en TARGETED/SEQUENCING/HOT/RECOVERED).
+ * select_target_companies excluye esas empresas SIEMPRE
+ * (`excludedElsewhere`, campaign-tools.impl.ts) sin importar de qué
+ * campaña vengan, pero internalSupply tampoco lo replicaba -- mismo
+ * síntoma exacto: la misión "veía" oferta suficiente, forzaba el
+ * camino de reutilización de CRM, y select_target_companies no
+ * encontraba nada real que seleccionar.
+ */
+test(
+  "runMissionPipeline: oferta interna REAL y validada comercialmente pero YA targeteada en otra campaña activa SIEMPRE fuerza descubrimiento real (caso real MIS-20260801-0006)",
+  { skip: process.env.GOOGLE_PLACES_API_KEY ? false : "requiere GOOGLE_PLACES_API_KEY real" },
+  async () => {
+    const tenant = await prisma.tenant.create({
+      data: { name: `${TEST_PREFIX}-ELSEWHERE-${Date.now()}`, slug: `${TEST_PREFIX.toLowerCase()}-elsewhere-${Date.now()}` },
+    });
+    createdTenantIds.push(tenant.id);
+
+    const manufacturing = await prisma.industry.findFirstOrThrow({ where: { name: "Manufacturing", isGlobal: true } });
+    const ceoDefinition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key: "ceo" } });
+    const ceoInstance = await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: ceoDefinition.id, isActive: true } });
+    for (const key of ["discovery", "campaign", "sales", "outreach"]) {
+      const definition = await prisma.agentDefinition.findUniqueOrThrow({ where: { key } });
+      await prisma.agentInstance.create({ data: { tenantId: tenant.id, definitionId: definition.id, isActive: true } });
+    }
+
+    // Oferta interna REAL, comercialmente VALIDADA (a diferencia del test
+    // anterior) -- pero ya targeteada en OTRA Campaign ACTIVE, exactamente
+    // el estado real que select_target_companies excluye siempre.
+    const otherCampaign = await prisma.campaign.create({
+      data: { tenantId: tenant.id, name: "Otra campaña ya activa", industryId: manufacturing.id, state: "IL", status: "ACTIVE" },
+    });
+    for (let i = 0; i < 5; i++) {
+      const company = await prisma.company.create({
+        data: {
+          tenantId: tenant.id,
+          name: `Already Targeted Manufacturing Co ${i}`,
+          industryId: manufacturing.id,
+          state: "IL",
+          origin: "API_PROVIDER",
+          commercialStatus: "COMMERCIAL_VALIDATED",
+        },
+      });
+      await prisma.campaignCompany.create({
+        data: { tenantId: tenant.id, campaignId: otherCampaign.id, companyId: company.id, status: "TARGETED" },
+      });
+    }
+
+    const missionRestrictions = {
+      allowOutreach: false,
+      allowDraftCreation: true,
+      allowMessageSending: false,
+      allowCampaignCreation: true,
+      allowOpportunityCreation: true,
+    };
+
+    const task = await prisma.agentTask.create({
+      data: {
+        tenantId: tenant.id,
+        agentInstanceId: ceoInstance.id,
+        type: "daily_revenue_mission",
+        status: "RUNNING",
+        triggeredBy: "USER",
+        input: {
+          rawInstruction: "Busca hasta 3 empresas nuevas de manufactura en Decatur, Illinois que puedan necesitar personal de campo.",
+          launchedByUserId: "test-user",
+          industryNames: ["Manufacturing"],
+          state: "IL",
+          city: "Decatur",
+          categoryNames: [],
+          desiredVolume: 3,
+          businessObjective: { type: "companies_found", target: 3, unit: "empresas", rawText: "empresas de manufactura en Illinois" },
+          unrecognizedTerms: [],
+          useExternalDiscovery: false,
+          externalSearchTerms: [],
+          missionRestrictions,
+        },
+        output: {
+          missionState: "RUNNING",
+          companiesTargeted: 0,
+          leadsCreated: 0,
+          opportunitiesCreated: 0,
+          sequencesPlanned: 0,
+          draftsAwaitingApproval: 0,
+          costUsdSoFar: 0,
+          objectiveProgress: { type: "companies_found", target: 3, unit: "empresas", current: 0, percentComplete: 0, rawText: "empresas de manufactura en Illinois" },
+          progressUpdatedAt: new Date().toISOString(),
+          error: null,
+          appliedRestrictions: missionRestrictions,
+          restrictionNotes: [],
+        },
+      },
+    });
+
+    await runWithTenancyContext({ tenantId: tenant.id, userId: "test-user", permissions: [] }, () =>
+      runMissionPipeline(task.id, tenant.id, "test-user"),
+    );
+
+    const finished = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+    const output = finished.output as { discoveryFallback?: unknown } | null;
+
+    assert.ok(
+      output?.discoveryFallback,
+      "el descubrimiento externo real nunca corrió -- internalSupply contó 5 empresas ya targeteadas en otra campaña activa como si fueran oferta real disponible (bug real MIS-20260801-0006)",
+    );
+  },
+);
