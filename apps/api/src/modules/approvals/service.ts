@@ -7,14 +7,38 @@ import type {
   RecipientWarning,
 } from "@ai-staffing-os/shared";
 import { EDITABLE_APPROVAL_STATUSES, findKnownPlaceholders } from "@ai-staffing-os/shared";
+import { OpenAIProvider, type LLMProvider, type LLMCompletionResult } from "@ai-staffing-os/agents";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { labelUsers } from "../../core/user-labels";
 import { AppError } from "../../core/errors";
+import { env } from "../../core/env";
 import { sendEmail } from "../email/email-service";
 import { checkSendLimits } from "../email/send-limits";
 import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
 import { evaluateApprovalQualityGate } from "../ceo-intelligence/approval-quality-gate";
+import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
+import type { HiringSignalResult } from "../ceo-intelligence/hiring-signals";
+import {
+  generateOutreachDraft,
+  classifyHiringSignalLevel,
+  resolveDraftLanguage,
+  resolvePositionsToOffer,
+  type DraftRecipientType,
+} from "../agents/draft-generation";
+
+// Mismo patrón exacto que task-executor.ts/draft.executor.ts/
+// mission-executor.ts -- nunca lanza al construirse, solo al llamar
+// .complete() de verdad.
+class MissingApiKeyProvider implements LLMProvider {
+  async complete(): Promise<LLMCompletionResult> {
+    throw AppError.internal("OPENAI_API_KEY no está configurada -- no se puede regenerar un borrador real.");
+  }
+}
+
+function buildLLMProvider(): LLMProvider {
+  return env.OPENAI_API_KEY ? new OpenAIProvider(env.OPENAI_API_KEY) : new MissingApiKeyProvider();
+}
 
 // F24: un ApprovalRequest "activo" todavía puede terminar en un envío
 // real -- SENT/FAILED/REJECTED/EXPIRED ya cerraron su ciclo de vida
@@ -466,6 +490,108 @@ export async function editApprovalDraft(id: string, input: EditApprovalDraftInpu
       },
     });
   }
+
+  const labels = await labelUsers([ctx.userId]);
+  const [recipientWarning] = await computeRecipientWarnings([updated.proposedAction]);
+  return toListItem(updated, labels, null, recipientWarning);
+}
+
+export interface RegenerateApprovalDraftDeps {
+  // Inyección para tests -- nunca se llama a OpenAI real en un test
+  // unitario. Default: mismo patrón buildLLMProvider() que task-executor.ts/
+  // draft.executor.ts/mission-executor.ts.
+  llmProvider?: LLMProvider;
+}
+
+/**
+ * "Regenerate Draft": re-redacta subject/body de un ApprovalRequest EXISTENTE
+ * (ej. un borrador viejo en español, generado antes de este rediseño de
+ * idioma/personalización) con la evidencia REAL y actual de la Company --
+ * nunca envía nada, nunca cambia el destinatario (`to` se preserva tal
+ * cual). Mismas reglas de edición que editApprovalDraft: solo PENDING/
+ * READY_TO_SEND/FAILED son regenerables, y un READY_TO_SEND regenerado
+ * vuelve a PENDING (exige nueva aprobación humana sobre el contenido nuevo).
+ */
+export async function regenerateApprovalDraft(id: string, deps: RegenerateApprovalDraftDeps = {}): Promise<ApprovalRequestListItem> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+
+  const existing = await scopedDb.approvalRequest.findUnique({ where: { id }, include: { agentTask: true } });
+  if (!existing) throw AppError.notFound("Approval request not found");
+  if (!(EDITABLE_APPROVAL_STATUSES as readonly string[]).includes(existing.status)) {
+    throw AppError.badRequest(
+      `Este borrador no se puede regenerar desde el estado ${existing.status} -- solo PENDING, READY_TO_SEND o FAILED son editables.`,
+    );
+  }
+  if (!existing.companyId) {
+    throw AppError.badRequest("Este borrador no tiene una Company asociada -- no se puede regenerar con evidencia real.");
+  }
+
+  const company = await scopedDb.company.findUnique({
+    where: { id: existing.companyId },
+    include: { industry: true, contacts: true, possibleCategories: true },
+  });
+  if (!company) throw AppError.notFound("Company not found");
+
+  const currentPa = existing.proposedAction && typeof existing.proposedAction === "object" ? (existing.proposedAction as Record<string, unknown>) : {};
+  const to = typeof currentPa.to === "string" ? currentPa.to : null;
+  if (!to) throw AppError.badRequest("Este borrador no tiene un destinatario (`to`) real -- no se puede regenerar.");
+
+  const hiringSignal = (company.discoveryMetadata as { hiringSignal?: HiringSignalResult | null } | null)?.hiringSignal ?? null;
+  const taxonomyEntry = company.tradeKey ? getTaxonomyEntry(company.tradeKey) : undefined;
+  // Nunca se recalcula A QUIÉN se le escribe -- el `to` ya elegido se
+  // preserva tal cual; solo se busca el Contact real que corresponde a
+  // ESE email (si existe) para saber si el saludo debe ser personal.
+  const matchedPersonContact = company.contacts.find((c) => c.email === to);
+  const recipientType: DraftRecipientType = matchedPersonContact ? "person" : "organizational";
+
+  const draft = await generateOutreachDraft({
+    llmProvider: deps.llmProvider ?? buildLLMProvider(),
+    input: {
+      companyName: company.name,
+      city: company.city,
+      state: company.state,
+      industryName: company.industry.name,
+      tradeLabel: taxonomyEntry?.label ?? null,
+      services: company.possibleCategories.map((c) => c.name),
+      hiringSignalLevel: classifyHiringSignalLevel(hiringSignal?.hiringStatus ?? null),
+      hiringSignalEvidence: hiringSignal?.evidence ?? [],
+      hiringSignalSourceUrls: hiringSignal?.sourceUrls ?? [],
+      positionsToOffer: resolvePositionsToOffer(hiringSignal?.targetTitlesMatched ?? [], taxonomyEntry?.jobTitles ?? []),
+      recipientType,
+      recipientName: matchedPersonContact?.firstName ?? null,
+      recipientTitle: matchedPersonContact?.title ?? null,
+      companyWebsite: company.website,
+      language: resolveDraftLanguage({ hiringSignalEvidence: hiringSignal?.evidence ?? [] }),
+      stepLabel: null,
+      openOpportunities: [],
+      recentActivitySubjects: [],
+    },
+  });
+
+  const previous = { subject: typeof currentPa.subject === "string" ? currentPa.subject : null, body: typeof currentPa.body === "string" ? currentPa.body : null };
+  const updatedProposedAction = { ...currentPa, subject: draft.subject, body: draft.body, draftMetadata: draft.metadata };
+  const wasReadyToSend = existing.status === "READY_TO_SEND";
+  const nextStatus: typeof existing.status = wasReadyToSend ? "PENDING" : existing.status;
+
+  const updated = await scopedDb.approvalRequest.update({
+    where: { id },
+    data: { proposedAction: updatedProposedAction as never, status: nextStatus },
+    include: { agentTask: true },
+  });
+
+  await scopedDb.auditLog.create({
+    data: {
+      tenantId: ctx.tenantId,
+      actorType: "HUMAN",
+      actorId: ctx.userId,
+      action: "approval.draft_regenerated",
+      entityType: "approvalRequest",
+      entityId: id,
+      before: previous as never,
+      after: { subject: draft.subject, body: draft.body, draftMetadata: draft.metadata, revertedToPending: wasReadyToSend } as never,
+    },
+  });
 
   const labels = await labelUsers([ctx.userId]);
   const [recipientWarning] = await computeRecipientWarnings([updated.proposedAction]);

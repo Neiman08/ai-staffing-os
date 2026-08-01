@@ -10,8 +10,6 @@ import {
   AgentError,
   type AgentExecutor,
   type AgentExecutionContext,
-  type LLMProvider,
-  type LLMCompletionResult,
 } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
@@ -34,6 +32,7 @@ import type { ContactCandidate } from "./tools/contact-providers/types";
 import { createPilotMission } from "./mission-producer";
 import { getMissionTimeline } from "./observability";
 import type { PipelineFlags } from "../../core/pipeline-flags";
+import { fakeDraftLLMProvider } from "./draft-generation.test-support";
 
 /**
  * F25.2 (activación controlada, Prioridad 6): prueba end-to-end LOCAL
@@ -306,12 +305,6 @@ function createTestContactIntelligenceExecutor(): AgentExecutor<ContactIntellige
   };
 }
 
-function fakeLLMProvider(response: { subject: string; body: string } = { subject: "Ayuda con personal para tu operación", body: "Hola equipo,\n\nBest regards,\nDreiStaff Team" }): LLMProvider {
-  return {
-    complete: async (): Promise<LLMCompletionResult> => ({ content: JSON.stringify(response), tokensUsed: 42 }),
-  };
-}
-
 async function runUntilIdle(orchestrator: Orchestrator, dispatcher: EventDispatcher, maxRounds = 15): Promise<void> {
   for (let i = 0; i < maxRounds; i++) {
     const orch = await orchestrator.runOnce("e2e-worker", 10);
@@ -326,7 +319,7 @@ test("misión piloto end-to-end real: Discovery -> evento -> Contact Intelligenc
   const orchestrator = new Orchestrator();
   orchestrator.registerExecutor(createTestDiscoveryExecutor());
   orchestrator.registerExecutor(createTestContactIntelligenceExecutor());
-  orchestrator.registerExecutor(createDraftExecutor(fakeLLMProvider()));
+  orchestrator.registerExecutor(createDraftExecutor(fakeDraftLLMProvider().provider));
   orchestrator.registerExecutor(createQualityAgentExecutor());
 
   const dispatcher = new EventDispatcher();

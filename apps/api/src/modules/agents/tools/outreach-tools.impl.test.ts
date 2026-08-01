@@ -5,6 +5,7 @@ import type { LLMCompletionResult, LLMProvider } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../../../core/tenancy/context";
 import { createOutreachTools } from "./outreach-tools.impl";
 import { UsageAccumulator } from "../usage";
+import { fakeDraftLLMProvider } from "../draft-generation.test-support";
 
 /**
  * F21 Fase 2/3: personalizeMessage NUNCA debe crear un ApprovalRequest
@@ -36,17 +37,6 @@ function throwingLLMProvider(): LLMProvider {
     complete: async (): Promise<LLMCompletionResult> => {
       throw new Error("outreach-tools.impl.test.ts: el LLM NUNCA debe llamarse cuando no hay canal de email real.");
     },
-  };
-}
-
-function fakeLLMProvider(subject: string, body: string): LLMProvider {
-  return {
-    complete: async (): Promise<LLMCompletionResult> => ({
-      content: JSON.stringify({ subject, body }),
-      tokensUsed: 10,
-      promptTokens: 5,
-      completionTokens: 5,
-    }),
   };
 }
 
@@ -116,14 +106,14 @@ test("personalizeMessage: Company SIN ningún canal de email real -> nunca llama
 });
 
 test("personalizeMessage: Company CON email organizacional real -> genera el borrador y crea el ApprovalRequest de siempre", async () => {
-  const fx = await setupCampaignCompany("with-channel", { email: "info@testhotel.com" });
+  const fx = await setupCampaignCompany("with-channel", { email: "info@testhotel.com", city: "Chicago", state: "IL" });
 
   let approvalCount = 0;
   await runWithTenancyContext({ tenantId: fx.tenantId, userId: `${TEST_PREFIX}-user`, permissions: ["missions.create"] }, async () => {
     const tools = createOutreachTools({
       taskId: fx.taskId,
       agentInstanceId: fx.agentInstanceId,
-      llmProvider: fakeLLMProvider("Colaboración con nuestro equipo", "Hola equipo, ..."),
+      llmProvider: fakeDraftLLMProvider().provider,
       usage: new UsageAccumulator(),
     });
     const planSequence = tools.find((t) => t.name === "planSequence")!;

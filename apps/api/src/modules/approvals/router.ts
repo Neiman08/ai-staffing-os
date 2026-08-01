@@ -44,6 +44,19 @@ approvalsRouter.patch("/approvals/:id/draft", requirePermission("approvals.decid
   }
 });
 
+// Regenerate Draft: re-redacta subject/body con la evidencia real y
+// actual de la Company (ver approvals/service.ts's regenerateApprovalDraft)
+// -- nunca envía nada, nunca cambia el destinatario. Pensado para
+// borradores viejos generados antes del rediseño de idioma/personalización
+// (ej. en español) que ahora deben regenerarse en inglés con más evidencia.
+approvalsRouter.post("/approvals/:id/regenerate", requirePermission("approvals.decide"), async (req, res, next) => {
+  try {
+    res.json(await approvalsService.regenerateApprovalDraft(req.params.id!));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // F21 Fase 4: acción EXPLÍCITA y separada de /decide -- decidir APPROVED
 // nunca envía nada (ver approvals/service.ts), solo este endpoint puede
 // disparar un envío real, y solo cuando el ApprovalRequest ya está

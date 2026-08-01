@@ -1,7 +1,5 @@
 import { z } from "zod";
 import {
-  DEFAULT_MODEL,
-  OUTREACH_AGENT_SYSTEM_PROMPT,
   personalizeMessageTool as personalizeMessageToolStub,
   personalizeMessageInputSchema,
   planSequenceTool as planSequenceToolStub,
@@ -14,7 +12,6 @@ import {
   type LLMProvider,
 } from "@ai-staffing-os/agents";
 import { Prisma } from "@ai-staffing-os/db";
-import { DEFAULT_EMAIL_SIGNATURE } from "@ai-staffing-os/shared";
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { getTenancyContext } from "../../../core/tenancy/context";
 import { AppError } from "../../../core/errors";
@@ -24,8 +21,15 @@ import type { UsageAccumulator } from "../usage";
 import { resolveBestContactChannel, type ContactChannelType } from "../../ceo-intelligence/contact-channel";
 import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
 import { hasActiveApprovalForCompany } from "../../approvals/service";
+import { getTaxonomyEntry } from "../../ceo-intelligence/taxonomy";
+import {
+  generateOutreachDraft,
+  classifyHiringSignalLevel,
+  resolveDraftLanguage,
+  type DraftRecipientType,
+} from "../draft-generation";
+import type { HiringSignalResult } from "../../ceo-intelligence/hiring-signals";
 
-const BUSINESS_NAME = "DreiStaff";
 // F21 Fase 3: perfiles reales que un hotel necesita, pedidos explícitamente
 // por el PO -- el mensaje de hospitality se enfoca en estos, nunca en
 // roles genéricos de otra industria.
@@ -39,23 +43,10 @@ const HOSPITALITY_ROLE_FOCUS = [
   "Maintenance",
   "General Labor",
 ];
-const CONFIRMED_HIRING_STATUSES = new Set(["CONFIRMED_HIRING", "LIKELY_HIRING"]);
 
 // F4 §14: día 1 (hoy) / día 4 / día 9 / día 18 — offsets en días desde hoy.
 const SEQUENCE_DAY_OFFSETS = [0, 4, 9, 18];
 const STEP_LABELS = ["primer contacto", "seguimiento", "caso de éxito", "último intento"];
-
-function tryParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
-  try {
-    const jsonStart = raw.indexOf("{");
-    const jsonEnd = raw.lastIndexOf("}");
-    if (jsonStart === -1 || jsonEnd === -1) return null;
-    const parsed: unknown = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
-    return schema.parse(parsed);
-  } catch {
-    return null;
-  }
-}
 
 async function auditAgentAction(params: {
   agentInstanceId: string;
@@ -172,7 +163,7 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         const company = cc.company;
         const metadata = (company.discoveryMetadata as {
           contactChannel?: { careersPageUrl?: string | null; contactFormUrl?: string | null; linkedinUrl?: string | null };
-          hiringSignal?: { hiringStatus?: string | null };
+          hiringSignal?: HiringSignalResult | null;
         } | null) ?? null;
 
         // F21/F22 Fase 2: resuelve el mejor canal disponible ANTES de
@@ -283,49 +274,52 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
           }),
         ]);
 
-        const hiringStatus = metadata?.hiringSignal?.hiringStatus ?? null;
-        const hiringConfirmed = hiringStatus != null && CONFIRMED_HIRING_STATUSES.has(hiringStatus);
+        const hiringSignal = metadata?.hiringSignal ?? null;
         const isHospitality = company.industry.name === "Hospitality";
 
-        const prompt = `Redactá el mensaje de "${stepLabel}" (paso ${input.step + 1}/4) de una secuencia comercial por email para ${BUSINESS_NAME}, una agencia de staffing. Es SOLO un borrador — nunca digas que ya fue enviado.
+        // F27-lang: destinatario -- persona real solo cuando el canal
+        // resuelto ES un email de persona (VERIFIED_PERSON_EMAIL); nunca
+        // se etiqueta un email organizacional (info@/hr@/careers@) como
+        // "persona identificada", aunque exista un Contact con ese
+        // mismo email en otra fila.
+        const matchedPersonContact =
+          channelResolution.channel === "VERIFIED_PERSON_EMAIL"
+            ? company.contacts.find((c) => c.email === channelResolution.value)
+            : null;
+        const recipientType: DraftRecipientType = matchedPersonContact ? "person" : "organizational";
 
-Empresa: ${company.name}
-Industria: ${company.industry.name}
-Ciudad/estado: ${company.city ?? "—"}, ${company.state ?? "—"}
-Tamaño: ${company.estimatedSize ?? "desconocido"}
-Señal de contratación: ${hiringStatus ?? "sin evaluar"}${hiringConfirmed ? "" : " (NO confirmada — nunca afirmes que la empresa está contratando)"}
-Necesidades posibles: ${company.possibleCategories.map((c) => c.name).join(", ") || "sin datos"}
-Oportunidades abiertas: ${openOpportunities.map((o) => o.title).join(", ") || "ninguna"}
-Historial reciente: ${recentActivity.map((a) => a.subject).join("; ") || "sin actividad previa"}
-${isHospitality ? `Perfiles a enfocar (hospitality): ${HOSPITALITY_ROLE_FOCUS.join(", ")}.` : ""}
+        const taxonomyEntry = company.tradeKey ? getTaxonomyEntry(company.tradeKey) : undefined;
+        const positionsToOffer =
+          hiringSignal?.targetTitlesMatched && hiringSignal.targetTitlesMatched.length > 0
+            ? hiringSignal.targetTitlesMatched
+            : isHospitality
+              ? HOSPITALITY_ROLE_FOCUS
+              : (taxonomyEntry?.jobTitles ?? []);
 
-Reglas obligatorias:
-- Estructura: asunto corto; saludo adecuado; referencia real a la empresa (nombre, ubicación o señal real de arriba — nunca un dato inventado); explicación breve de qué hace ${BUSINESS_NAME} (agencia de staffing); propuesta concreta de personal relevante a la industria; llamada a la acción sencilla (ej. coordinar una llamada breve); firma.
-- Nunca afirmes que la empresa está contratando salvo que la señal de arriba esté confirmada (CONFIRMED_HIRING o LIKELY_HIRING). Si no está confirmada, usá lenguaje prudente, por ejemplo (en inglés, tal cual): "We help ${isHospitality ? "hospitality operators" : "operators like you"} maintain reliable staffing coverage during busy periods, turnover or seasonal demand."
-- Nunca prometas precios, tarifas ni compromisos.
-- Nunca inventes un dato (nombre de contacto, número de empleados, proyecto específico) que no esté en el contexto de arriba.
-- Nunca te presentes como una persona con nombre propio (nunca escribas frases como "My name is [something]" o similar) -- escribí en nombre del equipo de ${BUSINESS_NAME}, nunca de un individuo sin nombre real.
-- Termina el mensaje EXACTAMENTE con esta firma, sin modificarla ni traducirla, y nunca uses ningún placeholder entre corchetes en ninguna parte del mensaje (ej. "[Your Name]", "[Your Position]"):
-${DEFAULT_EMAIL_SIGNATURE}
-
-Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body": "<mensaje completo siguiendo la estructura de arriba, en inglés, terminando con la firma exacta de arriba>"}.`;
-
-        const completion = await deps.llmProvider.complete({
-          model: DEFAULT_MODEL,
-          messages: [
-            { role: "system", content: OUTREACH_AGENT_SYSTEM_PROMPT },
-            { role: "user", content: prompt },
-          ],
+        const draft = await generateOutreachDraft({
+          llmProvider: deps.llmProvider,
+          usage: deps.usage,
+          input: {
+            companyName: company.name,
+            city: company.city,
+            state: company.state,
+            industryName: company.industry.name,
+            tradeLabel: taxonomyEntry?.label ?? null,
+            services: company.possibleCategories.map((c) => c.name),
+            hiringSignalLevel: classifyHiringSignalLevel(hiringSignal?.hiringStatus ?? null),
+            hiringSignalEvidence: hiringSignal?.evidence ?? [],
+            hiringSignalSourceUrls: hiringSignal?.sourceUrls ?? [],
+            positionsToOffer,
+            recipientType,
+            recipientName: matchedPersonContact?.firstName ?? null,
+            recipientTitle: matchedPersonContact?.title ?? null,
+            companyWebsite: company.website,
+            language: resolveDraftLanguage({ hiringSignalEvidence: hiringSignal?.evidence ?? [] }),
+            stepLabel,
+            openOpportunities: openOpportunities.map((o) => o.title),
+            recentActivitySubjects: recentActivity.map((a) => a.subject),
+          },
         });
-        deps.usage.record(completion);
-
-        const parsed = tryParseJson(
-          completion.content,
-          z.object({ subject: z.string().min(1), body: z.string().min(1) }),
-        );
-        if (!parsed) {
-          throw AppError.internal("El Outreach Agent no pudo generar un borrador válido. Intenta de nuevo.");
-        }
 
         const proposedAction = {
           campaignId: cc.campaignId,
@@ -334,8 +328,9 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           channel: "EMAIL",
           to: channelResolution.value,
           contactChannelSource: channelResolution.channel,
-          subject: parsed.subject,
-          body: parsed.body,
+          subject: draft.subject,
+          body: draft.body,
+          draftMetadata: draft.metadata,
         };
 
         let approvalRequestId: string;
@@ -396,12 +391,12 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
             actorId: deps.agentInstanceId,
             entityType: "approval_request",
             entityId: approvalRequestId,
-            payload: { approvalRequestId, companyId: cc.companyId, channel: "EMAIL", subjectPreview: parsed.subject },
+            payload: { approvalRequestId, companyId: cc.companyId, channel: "EMAIL", subjectPreview: draft.subject },
             idempotencyKey: buildIdempotencyKey(deps.taskId, "outreach.draft_created.v1", approvalRequestId),
           }),
         );
 
-        return { draftBody: parsed.body, subject: parsed.subject, channel: channelResolution.channel, alternativeChannelTaskId: null };
+        return { draftBody: draft.body, subject: draft.subject, channel: channelResolution.channel, alternativeChannelTaskId: null };
       },
     },
 

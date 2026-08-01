@@ -1,9 +1,10 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { prisma } from "@ai-staffing-os/db";
-import { DEFAULT_POLICY_ENVELOPE, type LLMProvider, type LLMCompletionResult } from "@ai-staffing-os/agents";
+import { DEFAULT_POLICY_ENVELOPE, type LLMProvider } from "@ai-staffing-os/agents";
 import { runWithTenancyContext } from "../../../core/tenancy/context";
 import { createDraftExecutor, type DraftTaskInput } from "./draft.executor";
+import { fakeDraftLLMProvider } from "../draft-generation.test-support";
 
 /**
  * F26 (primer piloto de outreach real): Draft real, un solo disparo.
@@ -66,16 +67,7 @@ function fakeContext(tenantId: string, taskId = "task_test") {
   };
 }
 
-function fakeLLMProvider(response: { subject: string; body: string } = { subject: "Asunto de prueba", body: "Cuerpo de prueba, sin placeholders." }): { provider: LLMProvider; callCount: () => number } {
-  let calls = 0;
-  const provider: LLMProvider = {
-    complete: async (): Promise<LLMCompletionResult> => {
-      calls += 1;
-      return { content: JSON.stringify(response), tokensUsed: 42 };
-    },
-  };
-  return { provider, callCount: () => calls };
-}
+const fakeLLMProvider = fakeDraftLLMProvider;
 
 test("execute() con Company DEMO_SEED: gate bloquea, agentSuccess con blockReason DEMO_SEED, nunca llama al LLM", async () => {
   const { tenantId, industryId } = await setupTenant("demo-seed");
@@ -209,7 +201,7 @@ test("execute() camino feliz: crea Lead + ApprovalRequest real + publica outreac
     data: { tenantId, companyId: company.id, firstName: "Jane", lastName: "Doe", title: "Operations Manager", email: "jane.doe@acme-electrical-real.example", emailVerificationStatus: "VERIFIED", isPrimary: true },
   });
 
-  const { provider, callCount } = fakeLLMProvider({ subject: "Ayuda con personal para Acme Electrical Real", body: "Hola equipo,\n\nBest regards,\nDreiStaff Team" });
+  const { provider, callCount } = fakeLLMProvider();
   const executor = createDraftExecutor(provider);
   const taskId = await withTenant(tenantId, () => realTaskId(tenantId));
   const context = fakeContext(tenantId, taskId);
@@ -231,10 +223,12 @@ test("execute() camino feliz: crea Lead + ApprovalRequest real + publica outreac
   assert.equal(lead.source, "pilot-mission");
 
   const approval = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: result.output.approvalRequestId! } });
-  const proposedAction = approval.proposedAction as { to: string; leadId: string; contactId: string; subject: string; body: string };
+  const proposedAction = approval.proposedAction as { to: string; leadId: string; contactId: string; subject: string; body: string; draftMetadata?: { recipientType?: string; recipientName?: string | null } };
   assert.equal(proposedAction.to, "jane.doe@acme-electrical-real.example");
   assert.equal(proposedAction.leadId, lead.id);
-  assert.equal(proposedAction.subject, "Ayuda con personal para Acme Electrical Real");
+  assert.match(proposedAction.subject, /Acme Electrical Real/);
+  assert.equal(proposedAction.draftMetadata?.recipientType, "person");
+  assert.equal(proposedAction.draftMetadata?.recipientName, "Jane");
   assert.equal(approval.status, "PENDING", "nunca se auto-aprueba -- queda esperando decisión humana");
 });
 

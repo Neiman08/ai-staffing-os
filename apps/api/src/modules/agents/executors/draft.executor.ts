@@ -1,9 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@ai-staffing-os/db";
-import { DEFAULT_EMAIL_SIGNATURE } from "@ai-staffing-os/shared";
 import {
   OpenAIProvider,
-  SALES_AGENT_SYSTEM_PROMPT,
   agentSuccess,
   agentFailure,
   classifyError,
@@ -19,6 +17,10 @@ import { env } from "../../../core/env";
 import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
 import { resolveBestContactChannel } from "../../ceo-intelligence/contact-channel";
 import { hasActiveApprovalForCompany } from "../../approvals/service";
+import { getTaxonomyEntry } from "../../ceo-intelligence/taxonomy";
+import { generateOutreachDraft, classifyHiringSignalLevel, resolveDraftLanguage, resolvePositionsToOffer, type DraftRecipientType } from "../draft-generation";
+import { UsageAccumulator } from "../usage";
+import type { HiringSignalResult } from "../../ceo-intelligence/hiring-signals";
 
 /**
  * F26 (primer piloto de outreach real): Draft real, un solo disparo --
@@ -54,17 +56,6 @@ export type DraftTaskInput = z.infer<typeof draftTaskInputSchema>;
 export interface DraftExecutionOutput {
   approvalRequestId: string | null;
   blockReason: string | null;
-}
-
-function tryParseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
-  try {
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
-    const result = schema.safeParse(parsed);
-    return result.success ? result.data : null;
-  } catch {
-    return null;
-  }
 }
 
 // Mismo patrón exacto que MissingApiKeyProvider (task-executor.ts) --
@@ -151,29 +142,38 @@ export function createDraftExecutor(llmProvider: LLMProvider = buildLLMProvider(
 
         const contact = contactableContacts.find((c) => c.isPrimary) ?? contactableContacts.find((c) => c.decisionRole) ?? contactableContacts[0] ?? null;
 
-        const prompt = `Redacta un borrador de primer contacto por email para esta empresa. Es SOLO un borrador -- nunca digas que ya fue enviado.
+        const hiringSignal = (company.discoveryMetadata as { hiringSignal?: HiringSignalResult | null } | null)?.hiringSignal ?? null;
+        const taxonomyEntry = company.tradeKey ? getTaxonomyEntry(company.tradeKey) : undefined;
+        const recipientType: DraftRecipientType = contact ? "person" : "organizational";
 
-Empresa: ${company.name}
-Industria: ${company.industry.name}
-Ubicación: ${company.city ?? "—"}, ${company.state ?? "—"}
-Contacto: ${contact ? `${contact.firstName} ${contact.lastName}${contact.title ? `, ${contact.title}` : ""}` : "sin contacto identificado todavía -- dirígete a la empresa en general"}
-
-Nunca te presentes como una persona con nombre propio (nunca escribas frases como "Mi nombre es [algo]" o similar) -- escribe en nombre del equipo de DreiStaff, nunca de un individuo sin nombre real. Nunca prometas precios, tarifas ni compromisos. Nunca inventes un dato que no esté en el contexto de arriba. Termina el mensaje EXACTAMENTE con esta firma, sin modificarla ni traducirla, y nunca uses ningún placeholder entre corchetes en ninguna parte del mensaje (ej. "[Tu Nombre]", "[Tu Cargo]"):
-${DEFAULT_EMAIL_SIGNATURE}
-
-Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body": "<mensaje breve, profesional, terminando con la firma exacta de arriba>"}.`;
-
-        const completion = await llmProvider.complete({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: SALES_AGENT_SYSTEM_PROMPT },
-            { role: "user", content: prompt },
-          ],
-        });
-
-        const parsed = tryParseJson(completion.content, z.object({ subject: z.string().min(1), body: z.string().min(1) }));
-        if (!parsed) {
-          return agentFailure(new AgentError("PERMANENT_PROVIDER_ERROR", "El modelo no devolvió un borrador válido (JSON con subject/body)."));
+        let draft;
+        try {
+          draft = await generateOutreachDraft({
+            llmProvider,
+            usage: new UsageAccumulator(),
+            input: {
+              companyName: company.name,
+              city: company.city,
+              state: company.state,
+              industryName: company.industry.name,
+              tradeLabel: taxonomyEntry?.label ?? null,
+              services: [],
+              hiringSignalLevel: classifyHiringSignalLevel(hiringSignal?.hiringStatus ?? null),
+              hiringSignalEvidence: hiringSignal?.evidence ?? [],
+              hiringSignalSourceUrls: hiringSignal?.sourceUrls ?? [],
+              positionsToOffer: resolvePositionsToOffer(hiringSignal?.targetTitlesMatched ?? [], taxonomyEntry?.jobTitles ?? []),
+              recipientType,
+              recipientName: contact?.firstName ?? null,
+              recipientTitle: contact?.title ?? null,
+              companyWebsite: company.website,
+              language: resolveDraftLanguage({ hiringSignalEvidence: hiringSignal?.evidence ?? [] }),
+              stepLabel: null,
+              openOpportunities: [],
+              recentActivitySubjects: [],
+            },
+          });
+        } catch (err) {
+          return agentFailure(new AgentError("PERMANENT_PROVIDER_ERROR", err instanceof Error ? err.message : "El modelo no devolvió un borrador válido."));
         }
 
         const lead = await scopedDb.lead.create({
@@ -195,8 +195,9 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           contactId: contact?.id ?? null,
           to: channelResolution.value,
           contactChannelSource: channelResolution.channel,
-          subject: parsed.subject,
-          body: parsed.body,
+          subject: draft.subject,
+          body: draft.body,
+          draftMetadata: draft.metadata,
         };
 
         let approval;
@@ -227,7 +228,7 @@ Responde ÚNICAMENTE con un JSON de la forma {"subject": "<asunto corto>", "body
           actorId: context.agentInstanceId,
           entityType: "approval_request",
           entityId: approval.id,
-          payload: { approvalRequestId: approval.id, companyId: company.id, channel: "EMAIL", subjectPreview: parsed.subject },
+          payload: { approvalRequestId: approval.id, companyId: company.id, channel: "EMAIL", subjectPreview: draft.subject },
           idempotencyKey: buildIdempotencyKey(context.correlationId, "outreach.draft_created.v1", approval.id),
         });
 

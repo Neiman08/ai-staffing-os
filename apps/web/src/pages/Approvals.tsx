@@ -112,6 +112,26 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
     onError: (err) => toast({ title: "No se pudo guardar el borrador", description: String(err), variant: "error" }),
   });
 
+  // Regenerate Draft: re-redacta subject/body con la evidencia real y
+  // actual de la Company (nunca cambia el destinatario) -- pensado para
+  // borradores viejos generados en español, antes del rediseño de
+  // idioma/personalización, o simplemente para pedir una redacción nueva.
+  const regenerate = useMutation({
+    mutationFn: () => apiFetch<ApprovalRequestListItem>(`/approvals/${approval.id}/regenerate`, { method: "POST" }),
+    onSuccess: (result) => {
+      toast({
+        title: "Borrador regenerado",
+        description:
+          result.status === "PENDING" && approval.status === "READY_TO_SEND"
+            ? "Vuelve a estado Pendiente — requiere una nueva aprobación."
+            : "Se generó un borrador nuevo con la evidencia actual de la empresa.",
+        variant: "success",
+      });
+      queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
+    onError: (err) => toast({ title: "No se pudo regenerar el borrador", description: String(err), variant: "error" }),
+  });
+
   const handleSaveDraft = () => {
     const errors: typeof fieldErrors = {};
     const to = draft.to.trim();
@@ -296,9 +316,12 @@ function ApprovalCard({ approval }: { approval: ApprovalRequestListItem }) {
         )}
 
         {!isEditing && canEdit && (
-          <div className="pt-1">
+          <div className="flex gap-2 pt-1">
             <Button size="sm" variant="outline" onClick={startEditing}>
               Editar borrador
+            </Button>
+            <Button size="sm" variant="outline" disabled={regenerate.isPending} onClick={() => regenerate.mutate()}>
+              {regenerate.isPending ? "Regenerando..." : "Regenerar borrador"}
             </Button>
           </div>
         )}

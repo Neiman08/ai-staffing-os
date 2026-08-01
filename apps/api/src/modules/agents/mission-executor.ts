@@ -1,4 +1,4 @@
-import type { MissionRestrictions } from "@ai-staffing-os/agents";
+import { OpenAIProvider, type LLMProvider, type LLMCompletionResult, type MissionRestrictions } from "@ai-staffing-os/agents";
 import { CEO_INTENT_SCHEMA_VERSION, BUSINESS_TAXONOMY_VERSION } from "@ai-staffing-os/shared";
 import { getTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
@@ -35,6 +35,24 @@ import { enrichCompanyWithDecisionContacts, type ContactProviderPort, type Hunte
 import { createPdlMissionBudget } from "./pdl-budget";
 import { recommendOpportunityAction, type OpportunityRecommendationResult, type BestContactRankingTier } from "../ceo-intelligence/opportunity-recommendation";
 import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from "./discovery-conversion";
+import { resolvePositionsToOffer } from "./draft-generation";
+import { UsageAccumulator } from "./usage";
+
+// Mismo patrón exacto que task-executor.ts/draft.executor.ts -- nunca
+// lanza al construirse, solo al llamar .complete() de verdad (F14:
+// discover_companies/find_contacts no dependen de un LLM, así que
+// registrar OPENAI_API_KEY ausente no puede tumbar el resto del plan;
+// la falla queda contenida a la conversión real, dentro de
+// convertDiscoveredCompany, como cualquier otro error real de este flujo).
+class MissingApiKeyProvider implements LLMProvider {
+  async complete(): Promise<LLMCompletionResult> {
+    throw AppError.internal("OPENAI_API_KEY no está configurada -- no se puede redactar un borrador real.");
+  }
+}
+
+function buildLLMProvider(): LLMProvider {
+  return env.OPENAI_API_KEY ? new OpenAIProvider(env.OPENAI_API_KEY) : new MissingApiKeyProvider();
+}
 
 /**
  * F7.3/F7.4: ejecutor real de descubrimiento a partir de un MissionPlan
@@ -128,6 +146,11 @@ export interface ExecuteDiscoveryPlanParams {
   // Opportunity por cada Company. Nunca activar sin confirmar primero
   // que el llamador es realmente terminal.
   convertToCommercialActions?: boolean;
+  // Inyección para tests -- nunca se llama a OpenAI real en un test
+  // unitario. Default: mismo patrón buildLLMProvider() que task-executor.ts/
+  // draft.executor.ts (OpenAIProvider si hay OPENAI_API_KEY, si no un
+  // provider que solo lanza al invocarse -- nunca al construirse).
+  llmProvider?: LLMProvider;
 }
 
 export interface QueryExecutionRecord {
@@ -679,6 +702,8 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   const startedAt = Date.now();
   const providers = params.providers ?? REAL_PROVIDERS;
   const googlePlacesApiKey = params.googlePlacesApiKey ?? env.GOOGLE_PLACES_API_KEY;
+  const llmProvider = params.llmProvider ?? buildLLMProvider();
+  const draftUsage = new UsageAccumulator();
   const requestedCompanyCount = params.plan.stopConditions.maxCompanies;
   // F16 debt fix: antes había acá un mensaje FIJO afirmando que ningún
   // proveedor poblaba providerTypes -- quedó desactualizado desde F16
@@ -1436,22 +1461,29 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         let conversion: ConvertDiscoveredCompanyResult | null = null;
         if (params.convertToCommercialActions) {
           const bestVerifiedOrgEmail = enrichment.emails.find((e) => e.status === "VERIFIED")?.email ?? null;
-          let bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null } | null = null;
+          let bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null; title: string | null } | null = null;
           if (bestContactIdForCompany && (bestContactRankingTierForCompany === "HIGH_CONFIDENCE" || bestContactRankingTierForCompany === "MEDIUM_CONFIDENCE")) {
             const contactRow = await scopedDb.contact.findUnique({
               where: { id: bestContactIdForCompany },
-              select: { id: true, firstName: true, lastName: true, email: true },
+              select: { id: true, firstName: true, lastName: true, email: true, title: true },
             });
             if (contactRow) {
-              bestRealContact = { contactId: contactRow.id, firstName: contactRow.firstName, lastName: contactRow.lastName, email: contactRow.email };
+              bestRealContact = { contactId: contactRow.id, firstName: contactRow.firstName, lastName: contactRow.lastName, email: contactRow.email, title: contactRow.title };
             }
           }
+          const conversionTaxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
+          const conversionPositionsToOffer = resolvePositionsToOffer(hiringSignal?.targetTitlesMatched ?? [], conversionTaxonomyEntry?.jobTitles ?? []);
           conversion = await convertDiscoveredCompany({
             taskId: childTask.id,
             company: {
               id: company.id,
               name: candidate.raw.name!,
               industryId: industry.id,
+              industryName: industry.name,
+              city: company.city,
+              state: company.state,
+              website: company.website,
+              tradeLabel: conversionTaxonomyEntry?.label ?? null,
               // F24 (auditoría de producción): mismos valores ya
               // calculados arriba en este mismo loop (líneas ~983 y
               // ~1236) -- nunca se recalculan, solo se pasan al gate de
@@ -1473,12 +1505,21 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
             },
             bestVerifiedOrgEmail,
             bestRealContact,
+            hiringSignal: { evidence: hiringSignal?.evidence ?? [], sourceUrls: hiringSignal?.sourceUrls ?? [] },
+            positionsToOffer: conversionPositionsToOffer,
+            llmProvider,
+            usage: draftUsage,
           });
           if (conversion.leadId) leadsCreatedTotal += 1;
           if (conversion.opportunityId) opportunitiesCreatedTotal += 1;
           if (conversion.opportunityBlockedByRestriction) opportunitiesBlockedByRestrictionTotal += 1;
           if (conversion.draftCreated) draftsCreatedTotal += 1;
           if (conversion.draftBlockedByRestriction) draftsBlockedByRestrictionTotal += 1;
+          if (draftUsage.costUsd > 0) {
+            totalCostUsd += draftUsage.costUsd;
+            draftUsage.costUsd = 0;
+            draftUsage.tokensUsed = 0;
+          }
         }
 
         // F15: "empresas y personas con las que realmente podamos

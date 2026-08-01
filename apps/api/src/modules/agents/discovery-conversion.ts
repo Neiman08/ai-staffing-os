@@ -1,4 +1,4 @@
-import type { MissionRestrictions } from "@ai-staffing-os/agents";
+import type { LLMProvider, MissionRestrictions } from "@ai-staffing-os/agents";
 import { buildEventEnvelope, buildIdempotencyKey } from "@ai-staffing-os/agents";
 import { Prisma } from "@ai-staffing-os/db";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
@@ -12,6 +12,14 @@ import * as opportunitiesService from "../opportunities/service";
 import { decideCompanyConversion, evaluateDraftEligibility, type ConversionEvidence, type ConversionDecision, type DraftEligibility } from "../ceo-intelligence/conversion-policy";
 import { evaluateDraftCreationGate, type DraftCreationBlockReason } from "../ceo-intelligence/draft-creation-gate";
 import { hasActiveApprovalForCompany } from "../approvals/service";
+import {
+  generateOutreachDraft,
+  classifyHiringSignalLevel,
+  resolveDraftLanguage,
+  type HiringSignalLevel,
+  type DraftRecipientType,
+} from "./draft-generation";
+import type { UsageAccumulator } from "./usage";
 
 /**
  * F14: convierte UNA Company ya descubierta (con evidencia ya reunida
@@ -44,6 +52,12 @@ export interface ConvertDiscoveredCompanyParams {
     id: string;
     name: string;
     industryId: string;
+    industryName: string;
+    city: string | null;
+    state: string | null;
+    website: string | null;
+    /** BusinessTaxonomyEntry.label real de candidate.query.taxonomyKey -- null cuando no hubo trade específico. */
+    tradeLabel: string | null;
     // F24 (auditoría de producción): el Draft (no el Lead/Opportunity,
     // que igual sirven para revisión humana) se bloquea cuando la
     // Company fue marcada como posible cliente final -- ver
@@ -56,7 +70,14 @@ export interface ConvertDiscoveredCompanyParams {
   /** Mejor email organizacional VERIFIED disponible (nunca RISKY/INVALID) -- ver company-enrichment.ts. */
   bestVerifiedOrgEmail: string | null;
   /** Mejor contacto de persona real (PDL) con ranking HIGH/MEDIUM_CONFIDENCE y email real -- nunca inventado. */
-  bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null } | null;
+  bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null; title: string | null } | null;
+  /** Evidencia real ya reunida por Hiring Signal Intelligence (F7.5) -- nunca recalculada acá. */
+  hiringSignal: { evidence: string[]; sourceUrls: string[] };
+  /** Títulos reales a ofrecer (matched real de la señal, o de la taxonomía del trade) -- nunca la lista completa de un catálogo. */
+  positionsToOffer: string[];
+  /** Inyección para tests -- default: proveedor real (OpenAI), construido por el llamador (mission-executor.ts). */
+  llmProvider: LLMProvider;
+  usage?: UsageAccumulator;
 }
 
 export interface ConvertDiscoveredCompanyResult {
@@ -78,23 +99,6 @@ export interface ConvertDiscoveredCompanyResult {
 // nunca se disfraza un email de departamento (info@/hr@/careers@) como
 // si fuera una persona real identificada.
 export type DraftRecipientKind = "person" | "organizational";
-
-function buildOutreachDraft(companyName: string, contactFirstName: string | null, recipientKind: DraftRecipientKind): { subject: string; body: string } {
-  // F14/F15: plantilla genérica, sin datos inventados -- nunca asume un
-  // dolor/necesidad específica del negocio que no fue confirmada.
-  // `contactFirstName` solo se usa si viene de un Contact real (PDL/
-  // Website Intelligence/Hunter, ver contact-enrichment.ts); sin eso, el
-  // saludo queda genérico, nunca "Hola [nombre inventado]".
-  const greeting = contactFirstName ? `Hola ${contactFirstName},` : "Hola,";
-  const orgNote =
-    recipientKind === "organizational"
-      ? "\n\n(Este mensaje se dirige al contacto organizacional general de la empresa -- no se identificó todavía a una persona específica de decisión.)"
-      : "";
-  return {
-    subject: `Posible colaboración con ${companyName}`,
-    body: `${greeting}\n\nVimos que ${companyName} podría estar buscando personal para sus operaciones. Nos gustaría conversar brevemente para entender sus necesidades actuales de staffing y ver si podemos ayudar.\n\n¿Tendría disponibilidad esta semana para una llamada breve?\n\nSaludos.${orgNote}`,
-  };
-}
 
 export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyParams): Promise<ConvertDiscoveredCompanyResult> {
   const ctx = getTenancyContext();
@@ -199,7 +203,32 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
             // aunque bestRealContact exista sin email, el canal real usado
             // es igual el organizacional (`to` ya cayó al org email arriba).
             const recipientKind: DraftRecipientKind = params.bestRealContact?.email ? "person" : "organizational";
-            const { subject, body } = buildOutreachDraft(params.company.name, params.bestRealContact?.firstName ?? null, recipientKind);
+            const recipientType: DraftRecipientType = recipientKind;
+            const hiringSignalLevel: HiringSignalLevel = classifyHiringSignalLevel(params.evidence.hiringStatus);
+            const draft = await generateOutreachDraft({
+              llmProvider: params.llmProvider,
+              usage: params.usage,
+              input: {
+                companyName: params.company.name,
+                city: params.company.city,
+                state: params.company.state,
+                industryName: params.company.industryName,
+                tradeLabel: params.company.tradeLabel,
+                services: [],
+                hiringSignalLevel,
+                hiringSignalEvidence: params.hiringSignal.evidence,
+                hiringSignalSourceUrls: params.hiringSignal.sourceUrls,
+                positionsToOffer: params.positionsToOffer,
+                recipientType,
+                recipientName: recipientType === "person" ? (params.bestRealContact?.firstName ?? null) : null,
+                recipientTitle: recipientType === "person" ? (params.bestRealContact?.title ?? null) : null,
+                companyWebsite: params.company.website,
+                language: resolveDraftLanguage({ hiringSignalEvidence: params.hiringSignal.evidence }),
+                stepLabel: null,
+                openOpportunities: [],
+                recentActivitySubjects: [],
+              },
+            });
             try {
               const approval = await scopedDb.approvalRequest.create({
                 data: {
@@ -215,8 +244,9 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
                     contactId: params.bestRealContact?.contactId ?? null,
                     recipientKind,
                     to,
-                    subject,
-                    body,
+                    subject: draft.subject,
+                    body: draft.body,
+                    draftMetadata: draft.metadata,
                   },
                   riskLevel: "MEDIUM",
                 },
@@ -241,7 +271,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
                   actorId: ctx.actor?.agentInstanceId ?? "system",
                   entityType: "approval_request",
                   entityId: approval.id,
-                  payload: { approvalRequestId: approval.id, companyId: params.company.id, channel: "EMAIL", subjectPreview: subject },
+                  payload: { approvalRequestId: approval.id, companyId: params.company.id, channel: "EMAIL", subjectPreview: draft.subject },
                   idempotencyKey: buildIdempotencyKey(params.taskId, "outreach.draft_created.v1", approval.id),
                 }),
               );

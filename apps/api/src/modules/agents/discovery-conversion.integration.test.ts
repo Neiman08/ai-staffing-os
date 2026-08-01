@@ -11,6 +11,7 @@ import { emptyWebsiteIntelligenceResult } from "./tools/website-intelligence/typ
 import type { WebsiteIntelligencePort } from "./company-enrichment";
 import type { ContactProviderPort } from "./contact-enrichment";
 import type { ContactCandidate } from "./tools/contact-providers/types";
+import { fakeDraftLLMProvider } from "./draft-generation.test-support";
 
 /**
  * F14: los 9 escenarios de validación pedidos explícitamente por el PO
@@ -195,6 +196,7 @@ async function run(
       peopleDataLabsApiKey: opts.contactProvider ? "fake-pdl-key-for-tests" : undefined,
       convertToCommercialActions: true,
       businessActivities: opts.businessActivities ?? [],
+      llmProvider: fakeDraftLLMProvider().provider,
     });
     createdCompanyIds.push(...report.createdCompanyIds);
     return report;
@@ -230,14 +232,15 @@ test("escenario 1: EXACT + Possible Hiring + email verificado crea Company, Lead
 
   const approval = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: validation.conversion!.approvalRequestId! } });
   assert.equal(approval.status, "PENDING");
-  const proposedAction = approval.proposedAction as { to?: string; subject?: string; body?: string; recipientKind?: string };
+  const proposedAction = approval.proposedAction as { to?: string; subject?: string; body?: string; recipientKind?: string; draftMetadata?: { recipientType?: string; recipientName?: string | null } };
   assert.equal(proposedAction.to, "info@acme-mfg.com");
   assert.ok(proposedAction.subject);
   assert.ok(proposedAction.body);
   // F15: sin Contact real, el destinatario es explícitamente organizacional
   // -- nunca se disfraza info@ como si fuera una persona identificada.
   assert.equal(proposedAction.recipientKind, "organizational");
-  assert.match(proposedAction.body!, /contacto organizacional/i);
+  assert.equal(proposedAction.draftMetadata?.recipientType, "organizational");
+  assert.equal(proposedAction.draftMetadata?.recipientName, null);
 });
 
 // ---------- 2. EXACT + Possible Hiring + teléfono, sin email -> Lead + Opportunity, sin Draft ----------
@@ -474,9 +477,10 @@ test("escenario 8: sin ningún candidato de PDL con nombre real, nunca se crea u
   const validation = report.companyValidations[0]!;
   assert.equal(validation.conversion!.draftCreated, true);
   const approval = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: validation.conversion!.approvalRequestId! } });
-  const proposedAction = approval.proposedAction as { body?: string; contactId?: string | null };
+  const proposedAction = approval.proposedAction as { body?: string; contactId?: string | null; draftMetadata?: { recipientType?: string; recipientName?: string | null } };
   assert.equal(proposedAction.contactId, null);
-  assert.ok(proposedAction.body?.startsWith("Hola,"), "sin contacto real, el saludo debe quedar genérico, nunca con un nombre inventado");
+  assert.equal(proposedAction.draftMetadata?.recipientType, "organizational", "sin contacto real, el saludo debe quedar genérico, nunca con un nombre inventado");
+  assert.equal(proposedAction.draftMetadata?.recipientName, null);
 });
 
 // ---------- 9. Taxonomía: Industrial/Commercial/data centers/infraestructura eléctrica ----------
