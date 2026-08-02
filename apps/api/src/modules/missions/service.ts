@@ -297,6 +297,24 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
   for (const companyId of output.discoveryFallback?.createdCompanyIds ?? []) {
     companyIdsFromChildTasks.add(companyId);
   }
+  // Invariante #8/#9 (endurecimiento del motor, hallazgo real
+  // MIS-20260802-0002): las dos fuentes de arriba (output.discoveryExecution/
+  // discoveryFallback) SOLO se escriben en el camino de ÉXITO de
+  // runDynamicDiscoveryMission/runAutoExternalDiscoveryFallback -- si
+  // executeDiscoveryPlan termina en FAILED (aunque haya persistido
+  // Company reales antes del fallo, ver mission-executor.ts), ninguna de
+  // las dos existe y estas empresas quedaban invisibles en el reporte
+  // pese a estar realmente en el CRM. Company.discoveredByAgentTaskId ya
+  // es la fuente de verdad real (mission-executor.ts la persiste al
+  // crear cada Company, sin importar cómo termine la tarea después) --
+  // se consulta acá directamente, nunca depende de si la tarea llegó a
+  // DONE ni de qué shape de output haya (o no) alcanzado a escribir.
+  const discoverCompaniesTaskIds = childTasks.filter((t) => t.type === "discover_companies").map((t) => t.id);
+  const companiesFromDiscoverTasks = discoverCompaniesTaskIds.length
+    ? await scopedDb.company.findMany({ where: { discoveredByAgentTaskId: { in: discoverCompaniesTaskIds } }, select: { id: true } })
+    : [];
+  for (const c of companiesFromDiscoverTasks) companyIdsFromChildTasks.add(c.id);
+
   const campaignCompanyIds = new Set(campaignCompanies.map((cc) => cc.companyId));
   const extraCompanyIds = Array.from(companyIdsFromChildTasks).filter((id) => !campaignCompanyIds.has(id));
   const extraCompanies = extraCompanyIds.length
@@ -305,11 +323,10 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
 
   // F4.6: cadena de métricas de Contact Intelligence — agregada de las
   // tareas find_contacts reales que esta misión delegó, nunca estimada.
-  const discoverTasks = childTasks.filter((t) => t.type === "discover_companies" && t.output);
-  const companiesDiscovered = discoverTasks.reduce(
-    (sum, t) => sum + ((t.output as { companiesCreated?: unknown[] } | null)?.companiesCreated?.length ?? 0),
-    0,
-  );
+  // Invariante #8/#9: companiesDiscovered ahora cuenta las Company reales
+  // (companiesFromDiscoverTasks, consulta DB de arriba) en vez de sumar
+  // t.output.companiesCreated -- mismo motivo que companyIdsFromChildTasks.
+  const companiesDiscovered = companiesFromDiscoverTasks.length;
 
   const findContactsTasks = childTasks.filter((t) => t.type === "find_contacts");
   const findContactsTaskIds = findContactsTasks.map((t) => t.id);

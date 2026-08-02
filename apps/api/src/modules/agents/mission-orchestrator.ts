@@ -5,6 +5,7 @@ import { DEFAULT_MISSION_RESTRICTIONS } from "@ai-staffing-os/agents";
 import { getTenancyContext, runWithTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
+import { logAuditEvent } from "../../core/audit-log";
 import { createAndRunTaskSync, createQueuedTask, runCeoToolDirectly, toAgentTaskDetail } from "./task-executor";
 import { computeMissionProgress, computeContactCoverage } from "./tools/ceo-tools.impl";
 import { abortTask } from "./cancellation";
@@ -183,6 +184,68 @@ async function syncMissionOutput(
 }
 
 /**
+ * Invariantes #2/#3/#12 (endurecimiento del motor, hallazgo real
+ * MIS-20260802-0002): última red de seguridad, ejecutada SIEMPRE justo
+ * antes de que una misión pase a cualquier estado terminal
+ * (failMission/markMissionCancelled/closeMission, los 3 únicos lugares
+ * que escriben AgentTask.status terminal para la misión). Nunca confía
+ * en que cada camino de ejecución haya cerrado bien sus propias tareas
+ * hijas -- vuelve a consultarlas todas, de verdad, y fuerza un cierre
+ * honesto (nunca oculta el motivo real) para cualquiera que:
+ *   1. siga en RUNNING/CLAIMED -- si la misión ya está terminando, nada
+ *      legítimo puede seguir "en curso" para ella; se marca FAILED con
+ *      un motivo explícito de reconciliación (nunca se inventa que
+ *      terminó bien).
+ *   2. esté en AWAITING_APPROVAL sin ningún ApprovalRequest PENDING real
+ *      asociado -- quedaría esperando una acción humana que nunca va a
+ *      poder llegar (el ApprovalRequest real nunca se creó, o ya se
+ *      resolvió por otro camino sin que esta tarea se actualizara); se
+ *      marca FAILED con el motivo real, nunca se inventa una aprobación.
+ * Cada cierre forzado queda auditado (AuditLog, entityType="agentTask")
+ * con el motivo real -- nunca silencioso.
+ */
+async function reconcileMissionChildTasksBeforeClose(missionTaskId: string): Promise<void> {
+  const children = await scopedDb.agentTask.findMany({
+    where: { parentTaskId: missionTaskId, status: { in: ["RUNNING", "CLAIMED", "AWAITING_APPROVAL"] } },
+  });
+  if (children.length === 0) return;
+
+  const awaitingApprovalIds = children.filter((t) => t.status === "AWAITING_APPROVAL").map((t) => t.id);
+  const pendingApprovalTaskIds = awaitingApprovalIds.length
+    ? new Set(
+        (
+          await scopedDb.approvalRequest.findMany({
+            where: { agentTaskId: { in: awaitingApprovalIds }, status: "PENDING" },
+            select: { agentTaskId: true },
+          })
+        ).map((a) => a.agentTaskId),
+      )
+    : new Set<string>();
+
+  for (const task of children) {
+    let reason: string | null = null;
+    if (task.status === "RUNNING" || task.status === "CLAIMED") {
+      reason = `Reconciliación final de la misión: la tarea seguía en ${task.status} cuando la misión pasó a estado terminal -- nunca puede quedar una tarea huérfana en curso.`;
+    } else if (task.status === "AWAITING_APPROVAL" && !pendingApprovalTaskIds.has(task.id)) {
+      reason = "Reconciliación final de la misión: la tarea esperaba una aprobación humana, pero no existe ningún ApprovalRequest PENDING real asociado -- nunca puede quedar esperando una acción que no va a llegar.";
+    }
+    if (!reason) continue;
+
+    await scopedDb.agentTask.update({
+      where: { id: task.id },
+      data: { status: "FAILED", completedAt: new Date(), errorMessage: reason },
+    });
+    await logAuditEvent({
+      action: "mission.child_task_force_closed_by_reconciliation",
+      entityType: "agentTask",
+      entityId: task.id,
+      after: { missionTaskId, previousStatus: task.status, type: task.type, reason },
+    });
+    log(missionTaskId, "child task force-closed by reconciliation", { childTaskId: task.id, type: task.type, previousStatus: task.status, reason });
+  }
+}
+
+/**
  * Bugfix de ciclo de vida: transición terminal real — pone tanto
  * output.missionState=FAILED como AgentTask.status=FAILED (antes nunca
  * pasaba nada de esto: una excepción en el pipeline solo se logueaba a
@@ -192,6 +255,9 @@ async function syncMissionOutput(
  * incluso si lo que falló fue justamente una llamada externa.
  */
 async function failMission(missionTaskId: string, errorMessage: string): Promise<void> {
+  await reconcileMissionChildTasksBeforeClose(missionTaskId).catch((err) =>
+    log(missionTaskId, "reconciliation before failMission errored (never blocks closing the mission)", { error: err instanceof Error ? err.message : String(err) }),
+  );
   const progress = await computeMissionProgress(missionTaskId).catch(() => null);
   const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } }).catch(() => null);
   const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
@@ -219,6 +285,9 @@ async function failMission(missionTaskId: string, errorMessage: string): Promise
 
 /** Bugfix de ciclo de vida: transición terminal real para cancelación — AgentTask.status deja de quedarse en RUNNING para siempre. */
 async function markMissionCancelled(missionTaskId: string): Promise<void> {
+  await reconcileMissionChildTasksBeforeClose(missionTaskId).catch((err) =>
+    log(missionTaskId, "reconciliation before markMissionCancelled errored (never blocks closing the mission)", { error: err instanceof Error ? err.message : String(err) }),
+  );
   const progress = await computeMissionProgress(missionTaskId);
   const existing = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { output: true } });
   const existingOutput = (existing?.output ?? {}) as Partial<MissionOutput>;
@@ -1340,6 +1409,14 @@ export async function applyMissionAction(
 
 /** Genera el Executive Report y cierra la misión (DONE). */
 export async function closeMission(missionTaskId: string): Promise<void> {
+  // Reconciliar ANTES de narrar el reporte -- así closeDailyMission
+  // (LLM) y computeMissionProgress/computeContactCoverage de abajo ya ven
+  // el estado final real de las tareas hijas, nunca una huérfana en
+  // RUNNING/AWAITING_APPROVAL colándose en la narración.
+  await reconcileMissionChildTasksBeforeClose(missionTaskId).catch((err) =>
+    log(missionTaskId, "reconciliation before closeMission errored (never blocks closing the mission)", { error: err instanceof Error ? err.message : String(err) }),
+  );
+
   const result = (await runCeoToolDirectly(missionTaskId, "closeDailyMission", { missionTaskId })) as {
     report: string;
     objectiveProgress: unknown;

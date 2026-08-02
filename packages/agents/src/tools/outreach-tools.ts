@@ -39,8 +39,17 @@ export const personalizeMessageTool: AgentTool<
   // F21 Fase 2/3: null cuando no hay ningún canal de email real disponible
   // -- en ese caso se crea una tarea comercial alternativa
   // (alternativeChannelTaskId) en vez de un ApprovalRequest, y nunca se
-  // llama al LLM.
-  { draftBody: string | null; subject?: string | null; channel: string; alternativeChannelTaskId: string | null }
+  // llama al LLM. draftSkippedReason: motivo real cuando el LLM no pudo
+  // producir un borrador válido (evidencia insuficiente/respuesta
+  // inválida dos veces) -- nunca se fuerza un Draft inventado ni se
+  // aborta la misión por esto (ver draft-generation.ts).
+  {
+    draftBody: string | null;
+    subject?: string | null;
+    channel: string;
+    alternativeChannelTaskId: string | null;
+    draftSkippedReason?: string | null;
+  }
 > = {
   name: "personalizeMessage",
   description:

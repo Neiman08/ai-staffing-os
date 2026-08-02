@@ -232,7 +232,14 @@ test("execute() camino feliz: crea Lead + ApprovalRequest real + publica outreac
   assert.equal(approval.status, "PENDING", "nunca se auto-aprueba -- queda esperando decisión humana");
 });
 
-test("execute() sin OPENAI_API_KEY configurada: agentFailure(INVALID_INPUT), nunca crea nada a medias", async () => {
+// Invariante #6 (endurecimiento del motor, hallazgo real MIS-20260802-0002):
+// un fallo del proveedor de LLM (ej. OPENAI_API_KEY ausente) para UNA
+// Company nunca debe ser un agentFailure duro -- generateOutreachDraft
+// (draft-generation.ts) atrapa el error del proveedor, agota sus 2
+// intentos, y devuelve {status:"skipped"} en vez de lanzar. El executor
+// entonces termina en agentSuccess con un blockReason honesto, nunca crea
+// nada a medias (ni Lead ni ApprovalRequest).
+test("execute() sin OPENAI_API_KEY configurada (LLM falla): agentSuccess con blockReason honesto, nunca crea nada a medias", async () => {
   const { tenantId, industryId } = await setupTenant("no-api-key");
   const company = await prisma.company.create({ data: { tenantId, name: "Sin Key Co", industryId, status: "LEAD", origin: "API_PROVIDER" } });
   await prisma.contact.create({
@@ -247,8 +254,11 @@ test("execute() sin OPENAI_API_KEY configurada: agentFailure(INVALID_INPUT), nun
   const executor = createDraftExecutor(failingProvider);
   const result = await withTenant(tenantId, () => executor.execute(fakeContext(tenantId), { companyId: company.id }));
 
-  assert.equal(result.success, false);
-  if (result.success) return;
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.equal(result.output.approvalRequestId, null);
+  assert.equal(result.output.blockReason, "DRAFT_GENERATION_INSUFFICIENT_EVIDENCE");
+  assert.ok(result.output.draftSkippedReason?.includes("OPENAI_API_KEY"));
   assert.equal(await prisma.lead.count({ where: { tenantId } }), 0);
   assert.equal(await prisma.approvalRequest.count({ where: { tenantId } }), 0);
 });

@@ -321,6 +321,30 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
           },
         });
 
+        if (draft.status === "skipped") {
+          // Invariante #6 (endurecimiento del motor, hallazgo real
+          // MIS-20260802-0002): evidencia insuficiente o el LLM no pudo
+          // producir un borrador válido -- nunca se fuerza un Draft
+          // inventado, nunca se aborta la misión por esto. El paso queda
+          // DONE (se procesó, con un resultado honesto), el motivo real
+          // queda auditado, y la secuencia/misión continúan.
+          await scopedDb.followUp.update({ where: { id: step.id }, data: { status: "DONE", completedAt: new Date() } });
+          await auditAgentAction({
+            agentInstanceId: deps.agentInstanceId,
+            action: "outreach.draft_skipped_insufficient_evidence",
+            entityType: "campaignCompany",
+            entityId: cc.id,
+            after: { reason: draft.reason, attemptsMade: draft.attemptsMade },
+          });
+          return {
+            draftBody: null,
+            subject: null,
+            channel: channelResolution.channel,
+            alternativeChannelTaskId: null,
+            draftSkippedReason: draft.reason,
+          };
+        }
+
         const proposedAction = {
           campaignId: cc.campaignId,
           campaignCompanyId: cc.id,

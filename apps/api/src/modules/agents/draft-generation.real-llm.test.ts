@@ -44,6 +44,8 @@ test(
     const provider = new OpenAIProvider(env.OPENAI_API_KEY!);
 
     const result = await generateOutreachDraft({ llmProvider: provider, input: roofingIllinoisInput });
+    assert.equal(result.status, "generated", result.status === "skipped" ? result.reason : undefined);
+    if (result.status !== "generated") return;
 
     // Nunca en español -- el idioma de la instrucción original de la
     // misión (que pidió esto en español) nunca debe filtrarse al draft.

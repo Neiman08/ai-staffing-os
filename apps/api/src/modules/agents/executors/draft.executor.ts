@@ -56,6 +56,8 @@ export type DraftTaskInput = z.infer<typeof draftTaskInputSchema>;
 export interface DraftExecutionOutput {
   approvalRequestId: string | null;
   blockReason: string | null;
+  /** Motivo real cuando blockReason="DRAFT_GENERATION_INSUFFICIENT_EVIDENCE" -- nunca se fuerza un Draft inventado (ver draft-generation.ts). */
+  draftSkippedReason?: string | null;
 }
 
 // Mismo patrón exacto que MissingApiKeyProvider (task-executor.ts) --
@@ -174,6 +176,16 @@ export function createDraftExecutor(llmProvider: LLMProvider = buildLLMProvider(
           });
         } catch (err) {
           return agentFailure(new AgentError("PERMANENT_PROVIDER_ERROR", err instanceof Error ? err.message : "El modelo no devolvió un borrador válido."));
+        }
+
+        if (draft.status === "skipped") {
+          // Invariante #6 (endurecimiento del motor, hallazgo real
+          // MIS-20260802-0002): evidencia insuficiente o el LLM no pudo
+          // producir un borrador válido -- nunca se fuerza un Draft
+          // inventado. Éxito honesto (agentSuccess, nunca agentFailure):
+          // no es un error técnico, es un resultado esperado y rutinario,
+          // igual que los demás bloqueos del gate más arriba.
+          return agentSuccess({ approvalRequestId: null, blockReason: "DRAFT_GENERATION_INSUFFICIENT_EVIDENCE", draftSkippedReason: draft.reason }, []);
         }
 
         const lead = await scopedDb.lead.create({

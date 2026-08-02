@@ -7,10 +7,10 @@ import type { LLMCompletionResult, LLMProvider } from "@ai-staffing-os/agents";
  * porque generateOutreachDraft (draft-generation.ts) ahora exige
  * `personalizationFactsUsed` (>= 2 ids reales tomados del prompt) y
  * rechaza cualquier respuesta que no los referencie. Este fake lee los
- * `[id]` reales listados en el prompt ("Available real facts...") y los
- * devuelve tal cual -- así cada test sigue controlando la evidencia (vía
- * la Company/Contact real que crea) sin tener que fabricar contenido de
- * email a mano.
+ * ids reales listados en el prompt ("Available real facts...", formato
+ * `id="..."`) y los devuelve tal cual -- así cada test sigue controlando
+ * la evidencia (vía la Company/Contact real que crea) sin tener que
+ * fabricar contenido de email a mano.
  */
 export function fakeDraftLLMProvider(): { provider: LLMProvider; callCount: () => number } {
   let calls = 0;
@@ -18,7 +18,7 @@ export function fakeDraftLLMProvider(): { provider: LLMProvider; callCount: () =
     complete: async (params): Promise<LLMCompletionResult> => {
       calls += 1;
       const prompt = params.messages.map((m) => m.content).join("\n");
-      const factIds = Array.from(new Set(Array.from(prompt.matchAll(/^- \[(\S+)\]/gm)).map((m) => m[1]!)));
+      const factIds = Array.from(new Set(Array.from(prompt.matchAll(/^- id="([^"]+)":/gm)).map((m) => m[1]!)));
       const companyName = /^Company: (.+)$/m.exec(prompt)?.[1]?.trim() ?? "your company";
       const signatureMatch = /exactly with this signature[^:]*:\n([\s\S]+?)\n\nRespond ONLY/i.exec(prompt);
       const signature = signatureMatch?.[1]?.trim() ?? "Best regards,\n\nThe DreiStaff Team";

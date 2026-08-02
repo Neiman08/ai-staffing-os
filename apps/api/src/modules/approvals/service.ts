@@ -569,6 +569,16 @@ export async function regenerateApprovalDraft(id: string, deps: RegenerateApprov
     },
   });
 
+  if (draft.status === "skipped") {
+    // Acción manual y sincrónica disparada por un humano -- a diferencia
+    // de una misión de fondo (donde esto nunca debe abortar nada, ver
+    // draft-generation.ts/discovery-conversion.ts), acá SÍ corresponde
+    // devolver un error claro de inmediato: el usuario pidió regenerar
+    // ESTE borrador ahora, y no hay evidencia suficiente para hacerlo sin
+    // inventar contenido -- nunca se fuerza un Draft inventado.
+    throw AppError.badRequest(`No se pudo regenerar el borrador: ${draft.reason}`);
+  }
+
   const previous = { subject: typeof currentPa.subject === "string" ? currentPa.subject : null, body: typeof currentPa.body === "string" ? currentPa.body : null };
   const updatedProposedAction = { ...currentPa, subject: draft.subject, body: draft.body, draftMetadata: draft.metadata };
   const wasReadyToSend = existing.status === "READY_TO_SEND";

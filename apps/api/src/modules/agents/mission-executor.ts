@@ -4,6 +4,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { scopedDb } from "../../core/tenancy/prisma-extension";
 import { AppError } from "../../core/errors";
 import { env } from "../../core/env";
+import { logger } from "../../core/logger";
 import { logActivity } from "../../core/activity-log";
 import { logAuditEvent } from "../../core/audit-log";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
@@ -193,6 +194,24 @@ export interface RejectedCandidateRecord {
   // faltante) -- ver business-validation.ts.
   matchedEvidence?: string[];
   missingEvidence?: string[];
+}
+
+/**
+ * Invariante #1 (endurecimiento del motor, hallazgo real
+ * MIS-20260802-0002): una excepción real (Prisma, proveedor, LLM, o
+ * cualquier otra) al procesar UNA empresa dentro del loop de candidatos
+ * nunca debe abortar la misión completa -- se registra acá, por
+ * candidato, y el loop continúa con el siguiente. `companyId` es null
+ * cuando la excepción ocurrió ANTES de persistir la Company (ej.
+ * persistAcceptedCandidate falló); cuando ya existe, la Company real
+ * queda en el CRM con lo que sí se alcanzó a persistir -- nunca se
+ * descarta evidencia real ya guardada por un fallo posterior.
+ */
+export interface CompanyErrorRecord {
+  candidateName: string | null;
+  taxonomyKey: string;
+  companyId: string | null;
+  message: string;
 }
 
 // F7.4 Parte A + B: un registro por Company realmente persistida, con el
@@ -408,6 +427,10 @@ export interface DiscoveryExecutionReport {
   companiesWithOrganizationalEmail: number;
   companiesReadyForOrganizationalContact: number;
   companiesPendingInvestigation: number;
+  // Invariante #1: errores reales, aislados por Company/candidato, que
+  // NO abortaron la misión -- ver CompanyErrorRecord. [] cuando nada
+  // falló a nivel de candidato individual.
+  companyErrors: CompanyErrorRecord[];
 }
 
 interface FinalQuery {
@@ -772,6 +795,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesWithOrganizationalEmail: 0,
     companiesReadyForOrganizationalContact: 0,
     companiesPendingInvestigation: 0,
+    companyErrors: [],
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -846,9 +870,58 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
   // en el mismo proceso, nunca vía el loop de claim.
   await scopedDb.agentTask.update({ where: { id: childTask.id }, data: { status: "RUNNING" } });
 
+  // Invariante #2 (endurecimiento del motor, hallazgo real
+  // MIS-20260802-0002): el AgentTask "discover_companies" recién marcado
+  // RUNNING arriba DEBE llegar siempre a un estado terminal (DONE o
+  // FAILED), nunca quedar huérfano. El aislamiento por candidato (ver
+  // más abajo) ya cubre casi todos los fallos reales; este try/catch/
+  // rethrow es la última red de seguridad para cualquier excepción
+  // genuinamente inesperada fuera del loop de candidatos (bookkeeping
+  // entre queries, el update final). Se marca el childTask FAILED con el
+  // error real ANTES de re-lanzar -- el nivel de misión (failMission,
+  // mission-orchestrator.ts) sigue marcando la misión FAILED exactamente
+  // igual que antes; lo único que cambia es que el childTask ya no queda
+  // huérfano en RUNNING para siempre.
+  try {
+    return await runDiscoveryPlanBody(params, { childTask, requestedCompanyCount, startedAt, providers, googlePlacesApiKey, llmProvider, draftUsage, limitations, finalQueries });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await scopedDb.agentTask.update({
+      where: { id: childTask.id },
+      data: { status: "FAILED", completedAt: new Date(), errorMessage: message },
+    });
+    logger.error("mission_executor_discovery_plan_failed", {
+      module: "mission-executor",
+      missionTaskId: params.missionTaskId,
+      childTaskId: childTask.id,
+      error: message,
+    });
+    throw err;
+  }
+}
+
+async function runDiscoveryPlanBody(
+  params: ExecuteDiscoveryPlanParams,
+  ctxParams: {
+    childTask: Awaited<ReturnType<typeof createQueuedTask>>;
+    requestedCompanyCount: number;
+    startedAt: number;
+    providers: DiscoveryProviderPort;
+    googlePlacesApiKey: string | undefined;
+    llmProvider: LLMProvider;
+    draftUsage: UsageAccumulator;
+    limitations: string[];
+    finalQueries: FinalQuery[];
+  },
+): Promise<DiscoveryExecutionReport> {
+  const ctx = getTenancyContext();
+  if (!ctx) throw AppError.unauthorized();
+  const { childTask, requestedCompanyCount, startedAt, providers, googlePlacesApiKey, llmProvider, draftUsage, limitations, finalQueries } = ctxParams;
+
   const queryExecutions: QueryExecutionRecord[] = [];
   const rejectedCandidates: RejectedCandidateRecord[] = [];
   const companyValidations: CompanyValidationRecord[] = [];
+  const companyErrors: CompanyErrorRecord[] = [];
   const providersUsed = new Set<string>();
   const providersOmitted = new Set<string>();
   // F27 Fase 6: UN presupuesto de créditos de PDL para TODA esta misión,
@@ -992,14 +1065,53 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
       continue;
     }
 
-    const { result, origin, provider, omittedNote } = await executeOneQuery(query, {
-      taskId: childTask.id,
-      abortSignal: params.abortSignal,
-      providers,
-      googlePlacesApiKey,
-      tenantId: ctx.tenantId,
-      missionSpentSoFarUsd: totalCostUsd,
-    });
+    // Invariante #1: los proveedores de discovery (google-places.ts/
+    // overpass.ts) ya degradan internamente sus propios fallos HTTP a un
+    // ProviderSearchResult con patternsFailed/cancelled -- nunca lanzan
+    // para eso. Este try/catch es la defensa en profundidad para
+    // cualquier excepción genuinamente inesperada (ej. una excepción de
+    // red que igual escape esa capa): UNA query fallando nunca debe
+    // abortar el resto de la misión -- se registra el error real en
+    // queryExecutions y se continúa con la siguiente query.
+    let queryResult: Awaited<ReturnType<typeof executeOneQuery>>;
+    try {
+      queryResult = await executeOneQuery(query, {
+        taskId: childTask.id,
+        abortSignal: params.abortSignal,
+        providers,
+        googlePlacesApiKey,
+        tenantId: ctx.tenantId,
+        missionSpentSoFarUsd: totalCostUsd,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      queryExecutions.push({
+        query: query.searchTerm,
+        city: query.city,
+        state: query.state,
+        taxonomyKey: query.taxonomyKey,
+        crmIndustryBucket: query.crmIndustryBucket,
+        origin: null,
+        provider: null,
+        executedAt: new Date().toISOString(),
+        rawResultCount: 0,
+        acceptedCount: 0,
+        queryCap,
+        refinementRound: query.refinementRound,
+        rejectedCount: 0,
+        duplicateCount: 0,
+        error: message,
+      });
+      logger.error("mission_executor_query_failed", {
+        module: "mission-executor",
+        missionTaskId: params.missionTaskId,
+        query: query.searchTerm,
+        taxonomyKey: query.taxonomyKey,
+        error: message,
+      });
+      continue;
+    }
+    const { result, origin, provider, omittedNote } = queryResult;
     if (omittedNote) providersOmitted.add(omittedNote);
     if (result.costUsd > 0) totalCostUsd += result.costUsd;
     if (provider) providersUsed.add(provider);
@@ -1134,440 +1246,471 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
         }
         const industry = resolvedIndustry;
 
-        const company = await persistAcceptedCandidate({
-          candidate,
-          industryId: industry.id,
-          confidenceScore: computeConfidenceScore(candidate.raw.fields),
-          businessValidation: validation,
-          missionTaskId: childTask.id,
-        });
-        createdCompanyIds.push(company.id);
-        acceptedResults += 1;
-        record.acceptedCount += 1;
-        if (queryCap !== null) acceptedByQueryKey.set(queryKey, (acceptedByQueryKey.get(queryKey) ?? 0) + 1);
-        // F16: mismo cálculo que dentro de persistAcceptedCandidate (ver
-        // discoveryMetadata.clientOwnerAssociations) -- se repite acá,
-        // barato y puro, para exponerlo también en CompanyValidationRecord
-        // sin acoplar este loop al Json interno de discoveryMetadata.
-        const clientOwnerMatchesForCandidate = detectClientOwnerMatch(candidate.raw.name);
-
-        // F7.10 fix: los pasos F7.5/F7.6/F7.10 escriben cada uno su
-        // propia clave en Company.discoveryMetadata -- `company` nunca
-        // se refresca tras un update, así que sin este acumulador
-        // local cada escritura pisaba la anterior (ej. rolePlan
-        // borraba hiringSignal, opportunityRecommendation borraba
-        // ambos). Se mantiene una única fuente de verdad en memoria y
-        // se persiste completa en cada paso.
-        let currentDiscoveryMetadata = (company.discoveryMetadata as object | null) ?? {};
-
-        // F7.4 Parte B, pasos 7-10 del pipeline: inspeccionar website ->
-        // extraer emails -> validar -> persistir CompanyContactPoint —
-        // solo para Companies genuinamente nuevas (no se re-enriquece
-        // nada que ya existía, esas nunca pasan por acá).
-        const enrichment = await enrichCompanyWithOrganizationalEmails({
-          taskId: childTask.id,
-          companyId: company.id,
-          abortSignal: params.abortSignal,
-          websiteIntelligence: params.websiteIntelligence,
-        });
-        emailsExtractedTotal += enrichment.emailsExtracted;
-        emailsVerifiedTotal += enrichment.emailsVerified;
-        emailsRiskyTotal += enrichment.emailsRisky;
-        emailsInvalidTotal += enrichment.emailsInvalid;
-        emailsUnknownTotal += enrichment.emailsUnknown;
-        companyContactPointsCreatedTotal += enrichment.companyContactPointsCreated;
-        const hasValidEmail = enrichment.emailsVerified > 0 || enrichment.emailsRisky > 0;
-        if (!hasValidEmail) companiesWithoutValidEmailTotal += 1;
-        for (const failure of enrichment.patternsFailed) validationWarnings.add(failure);
-        // F7.9: propagar cancelación de Website Intelligence -- sin esto,
-        // una cancelación a mitad de la corrida seguía disparando pasos
-        // pagos (F7.7) para el resto de candidatos/queries, violando la
-        // condición de parada pedida por el usuario. Los pasos
-        // siguientes (F7.5-F7.7) se saltan para ESTE candidato y para
-        // cualquier otro que quede en el batch -- el registro parcial ya
-        // reunido igual se reporta abajo (nunca se descarta un Company
-        // ya persistido).
-        if (enrichment.cancelled) {
-          cancelled = true;
-          stopReason = "cancelled";
-        }
-
-        // F21 (estrategia de contacto por prioridad, Fase 2): persiste el
-        // canal alternativo real ya capturado en el mismo crawl (nunca un
-        // segundo request al sitio) -- resolveBestContactChannel
-        // (contact-channel.ts) lo lee al momento de generar el borrador de
-        // outreach, sin importar cuánto tiempo después corra esa misión.
-        currentDiscoveryMetadata = {
-          ...currentDiscoveryMetadata,
-          contactChannel: {
-            hasWebsite: enrichment.websiteSignals.hasWebsite,
-            crawlBlocked: enrichment.websiteSignals.crawlBlocked,
-            careersPageUrl: enrichment.websiteSignals.careersPageUrl,
-            hasContactForm: enrichment.websiteSignals.hasContactForm,
-            contactFormUrl: enrichment.websiteSignals.contactFormUrl,
-            // F22: LinkedIn corporativo real encontrado en el sitio --
-            // outreach-tools.impl.ts lo lee acá para resolveBestContactChannel.
-            linkedinUrl: enrichment.websiteSignals.linkedinUrl,
-          },
-        };
-        await scopedDb.company.update({
-          where: { id: company.id },
-          data: { discoveryMetadata: currentDiscoveryMetadata as never },
-        });
-
-        // F7.5: Hiring Signal Intelligence — paso opcional del plan
-        // (find_hiring_signals), nunca corre si el plan no lo declaró.
-        // Reutiliza EXACTAMENTE el mismo crawl que ya hizo el
-        // enriquecimiento de emails (enrichment.websiteSignals) — jamás
-        // un segundo request al mismo sitio.
-        let hiringSignal: HiringSignalResult | null = null;
-        if (!cancelled && params.plan.steps.includes("find_hiring_signals")) {
-          const taxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
-          hiringSignal = evaluateHiringSignals({
-            companyId: company.id,
-            hasWebsite: enrichment.websiteSignals.hasWebsite,
-            crawlBlocked: enrichment.websiteSignals.crawlBlocked,
-            hasCareersPage: enrichment.websiteSignals.hasCareersPage,
-            careersPageUrl: enrichment.websiteSignals.careersPageUrl,
-            pageTexts: enrichment.websiteSignals.pageTexts,
-            targetJobTitles,
-            taxonomyJobTitles: taxonomyEntry?.jobTitles ?? [],
+        // Invariante #1 (endurecimiento del motor, hallazgo real
+        // MIS-20260802-0002): desde acá en adelante se persisten datos
+        // reales (Company/Contact/Lead/Opportunity/Draft) y se llama a
+        // proveedores externos y al LLM -- CUALQUIERA de estos pasos
+        // puede fallar para UNA empresa puntual sin que eso deba abortar
+        // el resto de la misión. Antes de este fix, una excepción acá
+        // (ej. generateOutreachDraft agotando sus reintentos) escapaba
+        // sin aislamiento y tumbaba TODO executeDiscoveryPlan, dejando el
+        // AgentTask "discover_companies" huérfano en RUNNING para
+        // siempre (ver guardia try/catch/finally al nivel de la función,
+        // más abajo) y abortando empresas que ya se habían procesado
+        // bien. Lo que ya se persistió antes del throw (Company, emails,
+        // Lead/Opportunity) queda tal cual -- nunca se descarta evidencia
+        // real ya guardada.
+        let persistedCompanyIdForErrorContext: string | null = null;
+        try {
+          const company = await persistAcceptedCandidate({
+            candidate,
+            industryId: industry.id,
+            confidenceScore: computeConfidenceScore(candidate.raw.fields),
+            businessValidation: validation,
+            missionTaskId: childTask.id,
           });
-          hiringSignalsChecked += 1;
-          hiringStatusCounts[hiringSignal.hiringStatus] = (hiringStatusCounts[hiringSignal.hiringStatus] ?? 0) + 1;
-          for (const warning of hiringSignal.warnings) validationWarnings.add(warning);
-          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, hiringSignal };
-          await scopedDb.company.update({
-            where: { id: company.id },
-            data: { discoveryMetadata: currentDiscoveryMetadata as never },
-          });
-        }
+          persistedCompanyIdForErrorContext = company.id;
+          createdCompanyIds.push(company.id);
+          acceptedResults += 1;
+          record.acceptedCount += 1;
+          if (queryCap !== null) acceptedByQueryKey.set(queryKey, (acceptedByQueryKey.get(queryKey) ?? 0) + 1);
+          // F16: mismo cálculo que dentro de persistAcceptedCandidate (ver
+          // discoveryMetadata.clientOwnerAssociations) -- se repite acá,
+          // barato y puro, para exponerlo también en CompanyValidationRecord
+          // sin acoplar este loop al Json interno de discoveryMetadata.
+          const clientOwnerMatchesForCandidate = detectClientOwnerMatch(candidate.raw.name);
 
-        // F7.6: Decision-Maker Role Planning — QUÉ roles buscar, nunca
-        // QUIÉN (eso es Contact Intelligence, F7.7, todavía no
-        // implementado). Corre solo cuando el plan declara find_contacts
-        // (preparación para esa fase futura) — nunca "por si acaso".
-        let rolePlan: DecisionRolePlan | null = null;
-        if (!cancelled && params.plan.steps.includes("find_contacts")) {
-          const taxonomyEntryForRoles = getTaxonomyEntry(candidate.query.taxonomyKey);
-          rolePlan = buildDecisionRolePlan({
-            companyId: company.id,
-            taxonomyKey: candidate.query.taxonomyKey,
-            intentDecisionRoles: decisionRoles,
-            taxonomyDecisionMakers: taxonomyEntryForRoles?.decisionMakers ?? [],
-            hiringStatus: hiringSignal?.hiringStatus ?? null,
-            missionExclusions: params.plan.exclusions,
-          });
-          rolePlansBuilt += 1;
-          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, rolePlan };
-          await scopedDb.company.update({
-            where: { id: company.id },
-            data: { discoveryMetadata: currentDiscoveryMetadata as never },
-          });
-        }
+          // F7.10 fix: los pasos F7.5/F7.6/F7.10 escriben cada uno su
+          // propia clave en Company.discoveryMetadata -- `company` nunca
+          // se refresca tras un update, así que sin este acumulador
+          // local cada escritura pisaba la anterior (ej. rolePlan
+          // borraba hiringSignal, opportunityRecommendation borraba
+          // ambos). Se mantiene una única fuente de verdad en memoria y
+          // se persiste completa en cada paso.
+          let currentDiscoveryMetadata = (company.discoveryMetadata as object | null) ?? {};
 
-        // F7.7: Contact Intelligence -- QUIÉN (persona real), solo
-        // cuando F7.6 planificó al menos un rol para esta Company.
-        // Nunca busca con una lista de cargos genérica ni "por si
-        // acaso" -- si rolePlan es null o no tiene roles, el paso ni
-        // siquiera llama al proveedor (costo real $0 en ese caso).
-        let contactsFoundForCompany = 0;
-        let rolesWithoutContactForCompany: string[] = [];
-        let bestContactRankingTierForCompany: BestContactRankingTier = null;
-        // F14: id del mejor contacto real (HIGH/MEDIUM_CONFIDENCE) para
-        // esta Company -- usado más abajo para conversión a Lead/
-        // Opportunity/borrador. Nunca un nombre inventado: viene de un
-        // Contact ya persistido por Contact Intelligence (F7.7, PDL).
-        let bestContactIdForCompany: string | null = null;
-        if (!cancelled && rolePlan && rolePlan.targetRoles.length > 0) {
-          const contactEnrichment = await enrichCompanyWithDecisionContacts({
+          // F7.4 Parte B, pasos 7-10 del pipeline: inspeccionar website ->
+          // extraer emails -> validar -> persistir CompanyContactPoint —
+          // solo para Companies genuinamente nuevas (no se re-enriquece
+          // nada que ya existía, esas nunca pasan por acá).
+          const enrichment = await enrichCompanyWithOrganizationalEmails({
             taskId: childTask.id,
             companyId: company.id,
-            companyName: candidate.raw.name!,
-            companyWebsite: company.website,
-            companyState: company.state,
-            companyCity: company.city,
-            industryName: industry.name,
-            rolePlan,
             abortSignal: params.abortSignal,
-            contactProvider: params.contactProvider,
-            peopleDataLabsApiKey: params.peopleDataLabsApiKey,
-            pdlMissionBudget,
-            // F15: 2da y 3ra fuente de la cascada -- namedPeople viene
-            // del MISMO crawl que ya hizo enrichCompanyWithOrganizationalEmails
-            // arriba (nunca un segundo request al sitio); Hunter corre
-            // solo si PDL+Website no cubrieron todos los roles.
-            websiteNamedPeople: enrichment.websiteSignals.namedPeople,
-            hunterProvider: params.hunterProvider,
-            hunterApiKey: params.hunterApiKey,
+            websiteIntelligence: params.websiteIntelligence,
           });
-          if (contactEnrichment.costUsd > 0) totalCostUsd += contactEnrichment.costUsd;
-          for (const source of contactEnrichment.sourcesUsed) providersUsed.add(source);
-          // F16 debt fix: antes providersOmitted SOLO se poblaba desde
-          // executeOneQuery (Google Places/Overpass) -- People Data
-          // Labs/Hunter.io nunca aparecían acá aunque genuinamente se
-          // hayan omitido por falta de credenciales o presupuesto
-          // excedido (ver contact-enrichment.ts, que ahora separa esos
-          // 2 motivos de patternsFailed). Mismo Set que ya usa la capa
-          // de discovery -- un solo providersOmitted real para toda la
-          // misión, nunca dos fuentes de verdad distintas.
-          for (const omitted of contactEnrichment.providersOmitted) providersOmitted.add(omitted);
-          contactCandidatesFoundTotal += contactEnrichment.candidatesFound;
-          contactsCreatedTotal += contactEnrichment.contactsCreated.length;
-          contactDuplicatesSkippedTotal += contactEnrichment.duplicatesSkipped;
-          contactRoleMismatchSkippedTotal += contactEnrichment.roleMismatchSkipped;
-          contactsFoundForCompany = contactEnrichment.contactsCreated.length;
-          rolesWithoutContactForCompany = contactEnrichment.rolesWithoutContact;
-          if (contactsFoundForCompany > 0) companiesWithContactsFoundTotal += 1;
-          const tierRank: Record<Exclude<BestContactRankingTier, null>, number> = {
-            HIGH_CONFIDENCE: 3,
-            MEDIUM_CONFIDENCE: 2,
-            LOW_CONFIDENCE: 1,
-            REJECTED: 0,
-          };
-          for (const created of contactEnrichment.contactsCreated) {
-            if (created.rankingTier === "HIGH_CONFIDENCE") contactsHighConfidenceTotal += 1;
-            else if (created.rankingTier === "MEDIUM_CONFIDENCE") contactsMediumConfidenceTotal += 1;
-            else if (created.rankingTier === "LOW_CONFIDENCE") contactsLowConfidenceTotal += 1;
-            else if (created.rankingTier === "REJECTED") contactsRejectedTotal += 1;
-            if (bestContactRankingTierForCompany === null || tierRank[created.rankingTier] > tierRank[bestContactRankingTierForCompany]) {
-              bestContactRankingTierForCompany = created.rankingTier;
-              bestContactIdForCompany = created.contactId;
-            }
-          }
-          for (const failure of contactEnrichment.patternsFailed) validationWarnings.add(failure);
-          // F7.9: misma razón que enrichment.cancelled arriba -- People
-          // Data Labs es un proveedor PAGO, así que ignorar esta
-          // cancelación sería el caso con mayor impacto real de
-          // presupuesto de los tres.
-          if (contactEnrichment.cancelled) {
+          emailsExtractedTotal += enrichment.emailsExtracted;
+          emailsVerifiedTotal += enrichment.emailsVerified;
+          emailsRiskyTotal += enrichment.emailsRisky;
+          emailsInvalidTotal += enrichment.emailsInvalid;
+          emailsUnknownTotal += enrichment.emailsUnknown;
+          companyContactPointsCreatedTotal += enrichment.companyContactPointsCreated;
+          const hasValidEmail = enrichment.emailsVerified > 0 || enrichment.emailsRisky > 0;
+          if (!hasValidEmail) companiesWithoutValidEmailTotal += 1;
+          for (const failure of enrichment.patternsFailed) validationWarnings.add(failure);
+          // F7.9: propagar cancelación de Website Intelligence -- sin esto,
+          // una cancelación a mitad de la corrida seguía disparando pasos
+          // pagos (F7.7) para el resto de candidatos/queries, violando la
+          // condición de parada pedida por el usuario. Los pasos
+          // siguientes (F7.5-F7.7) se saltan para ESTE candidato y para
+          // cualquier otro que quede en el batch -- el registro parcial ya
+          // reunido igual se reporta abajo (nunca se descarta un Company
+          // ya persistido).
+          if (enrichment.cancelled) {
             cancelled = true;
             stopReason = "cancelled";
           }
-        }
 
-        // F22 Fase 4/5 (Contact Acquisition Engine): resuelve el MEJOR
-        // canal real disponible para esta Company -- se computa ACÁ,
-        // después de que tanto company-enrichment (emails
-        // organizacionales/formulario/careers/LinkedIn del sitio) como
-        // contact-enrichment (personas reales) ya corrieron para esta
-        // Company, así refleja TODA la evidencia reunida hasta este
-        // punto. Se consulta el estado YA PERSISTIDO (Contact/
-        // CompanyContactPoint), nunca solo lo creado en esta corrida --
-        // "nunca eliminar canales inferiores" (Fase 4): un canal
-        // encontrado en una corrida anterior sigue contando acá.
-        const [contactsForChannel, contactPointsForChannel] = await Promise.all([
-          scopedDb.contact.findMany({ where: { companyId: company.id }, select: { email: true, emailVerificationStatus: true, linkedinUrl: true } }),
-          scopedDb.companyContactPoint.findMany({ where: { companyId: company.id }, select: { email: true, verificationStatus: true } }),
-        ]);
-        const channelResolution = resolveBestContactChannel({
-          contacts: contactsForChannel,
-          contactPoints: contactPointsForChannel,
-          companyEmail: company.email,
-          companyPhone: company.phone,
-          careersPageUrl: enrichment.websiteSignals.careersPageUrl,
-          contactFormUrl: enrichment.websiteSignals.contactFormUrl,
-          companyLinkedinUrl: enrichment.websiteSignals.linkedinUrl,
-        });
+          // F21 (estrategia de contacto por prioridad, Fase 2): persiste el
+          // canal alternativo real ya capturado en el mismo crawl (nunca un
+          // segundo request al sitio) -- resolveBestContactChannel
+          // (contact-channel.ts) lo lee al momento de generar el borrador de
+          // outreach, sin importar cuánto tiempo después corra esa misión.
+          currentDiscoveryMetadata = {
+            ...currentDiscoveryMetadata,
+            contactChannel: {
+              hasWebsite: enrichment.websiteSignals.hasWebsite,
+              crawlBlocked: enrichment.websiteSignals.crawlBlocked,
+              careersPageUrl: enrichment.websiteSignals.careersPageUrl,
+              hasContactForm: enrichment.websiteSignals.hasContactForm,
+              contactFormUrl: enrichment.websiteSignals.contactFormUrl,
+              // F22: LinkedIn corporativo real encontrado en el sitio --
+              // outreach-tools.impl.ts lo lee acá para resolveBestContactChannel.
+              linkedinUrl: enrichment.websiteSignals.linkedinUrl,
+            },
+          };
+          await scopedDb.company.update({
+            where: { id: company.id },
+            data: { discoveryMetadata: currentDiscoveryMetadata as never },
+          });
 
-        // F22 Fase 5 (observabilidad): exactamente los campos pedidos --
-        // "por cada Company registrar: website encontrado, sitemap
-        // encontrado, páginas visitadas, emails encontrados, emails
-        // válidos, formularios encontrados, careers encontrada, LinkedIn
-        // encontrado, teléfono encontrado, canal final elegido, motivo
-        // cuando solo quedó teléfono".
-        const contactAcquisitionMetrics = {
-          websiteFound: enrichment.websiteSignals.hasWebsite,
-          sitemapFound: enrichment.websiteSignals.sitemapFound,
-          pagesVisited: enrichment.websitePagesVisited,
-          emailsFound: enrichment.emailsExtracted,
-          emailsValid: enrichment.emailsVerified + enrichment.emailsRisky,
-          contactFormsFound: enrichment.websiteSignals.contactForms.length,
-          careersPageFound: enrichment.websiteSignals.hasCareersPage,
-          linkedinFound: channelResolution.channel === "LINKEDIN" || contactsForChannel.some((c) => c.linkedinUrl != null),
-          phoneFound: !!company.phone,
-          finalChannel: channelResolution.channel as ContactChannelType,
-          reasonWhenPhoneOnly: channelResolution.channel === "PHONE" ? channelResolution.reason : null,
-          headlessPagesRendered: enrichment.websiteSignals.headlessPagesRendered.length,
-          headlessRenderDurationMs: enrichment.websiteSignals.headlessRenderDurationMs,
-        };
-        currentDiscoveryMetadata = { ...currentDiscoveryMetadata, contactAcquisition: contactAcquisitionMetrics };
-        await scopedDb.company.update({
-          where: { id: company.id },
-          data: { discoveryMetadata: currentDiscoveryMetadata as never },
-        });
-
-        // F7.10: Opportunity Recommendation -- combina TODA la evidencia
-        // ya reunida arriba en una recomendación auditable. Corre
-        // siempre (a diferencia de F7.5-F7.7, no depende de un paso
-        // opcional del plan) porque Business Validation (F7.4) también
-        // corre siempre. Nunca crea una Opportunity -- requiresApproval
-        // siempre true, la decisión real queda para el CEO humano.
-        const opportunityRecommendation = recommendOpportunityAction({
-          businessConfidence: validation.confidence,
-          missingEvidence: validation.missingEvidence,
-          hasValidEmail,
-          hiringStatus: hiringSignal?.hiringStatus ?? null,
-          contactsFound: contactsFoundForCompany,
-          bestContactRankingTier: bestContactRankingTierForCompany,
-          rolesWithoutContact: rolesWithoutContactForCompany,
-        });
-        if (opportunityRecommendation.recommendation === "CREATE_OPPORTUNITY") companiesRecommendedForOpportunityTotal += 1;
-        else if (opportunityRecommendation.recommendation === "INVESTIGATE_MORE") companiesRecommendedToInvestigateTotal += 1;
-        else if (opportunityRecommendation.recommendation === "ARCHIVE") companiesRecommendedToArchiveTotal += 1;
-        else if (opportunityRecommendation.recommendation === "MANUAL_REVIEW") companiesRecommendedForManualReviewTotal += 1;
-        currentDiscoveryMetadata = { ...currentDiscoveryMetadata, opportunityRecommendation };
-        await scopedDb.company.update({
-          where: { id: company.id },
-          data: { discoveryMetadata: currentDiscoveryMetadata as never },
-        });
-
-        // F14: convierte la evidencia ya reunida arriba (nunca datos
-        // nuevos) en Lead/Opportunity/borrador reales, según la política
-        // determinista de conversion-policy.ts -- reemplaza el límite
-        // documentado hasta esta fase ("nunca crea Lead/Opportunity").
-        // El registro parcial ya reunido se usa igual aunque `cancelled`
-        // ya sea true (mismo criterio que el resto de este loop: nunca
-        // se descarta evidencia real ya juntada). SOLO corre si el
-        // llamador activó convertToCommercialActions -- ver el
-        // comentario en ExecuteDiscoveryPlanParams (nunca duplicar la
-        // creación de Lead/Opportunity que ya hace el loop clásico para
-        // el llamador de fallback).
-        // F16: Hiring Confidence -- segunda dimensión INDEPENDIENTE de
-        // Business Confidence (validation.confidence), calculada SIEMPRE
-        // (no solo cuando convertToCommercialActions está activo -- es
-        // una lectura pura de evidencia ya reunida, Commercial Conversion
-        // es solo uno de sus consumidores) combinando señal de
-        // contratación + página de carreras + emails organizacionales +
-        // contactos reales ya encontrados. Reemplaza el chequeo anterior,
-        // más angosto, que solo miraba `targetTitlesMatched.length > 0`
-        // -- ahora también reconoce evidencia real de contact enrichment
-        // (F7.6/F7.7/F15).
-        const hiringConfidence = computeHiringConfidence({
-          hiringSignalStatus: hiringSignal?.hiringStatus ?? null,
-          hiringSignalTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
-          hasCareersPage: enrichment.websiteSignals.hasCareersPage,
-          organizationalEmailsVerified: enrichment.emailsVerified,
-          organizationalEmailsRisky: enrichment.emailsRisky,
-          namedContactsFound: contactsFoundForCompany,
-          bestContactRankingTier: bestContactRankingTierForCompany,
-        });
-        currentDiscoveryMetadata = { ...currentDiscoveryMetadata, hiringConfidence };
-        await scopedDb.company.update({
-          where: { id: company.id },
-          data: { discoveryMetadata: currentDiscoveryMetadata as never },
-        });
-
-        let conversion: ConvertDiscoveredCompanyResult | null = null;
-        if (params.convertToCommercialActions) {
-          const bestVerifiedOrgEmail = enrichment.emails.find((e) => e.status === "VERIFIED")?.email ?? null;
-          let bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null; title: string | null } | null = null;
-          if (bestContactIdForCompany && (bestContactRankingTierForCompany === "HIGH_CONFIDENCE" || bestContactRankingTierForCompany === "MEDIUM_CONFIDENCE")) {
-            const contactRow = await scopedDb.contact.findUnique({
-              where: { id: bestContactIdForCompany },
-              select: { id: true, firstName: true, lastName: true, email: true, title: true },
+          // F7.5: Hiring Signal Intelligence — paso opcional del plan
+          // (find_hiring_signals), nunca corre si el plan no lo declaró.
+          // Reutiliza EXACTAMENTE el mismo crawl que ya hizo el
+          // enriquecimiento de emails (enrichment.websiteSignals) — jamás
+          // un segundo request al mismo sitio.
+          let hiringSignal: HiringSignalResult | null = null;
+          if (!cancelled && params.plan.steps.includes("find_hiring_signals")) {
+            const taxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
+            hiringSignal = evaluateHiringSignals({
+              companyId: company.id,
+              hasWebsite: enrichment.websiteSignals.hasWebsite,
+              crawlBlocked: enrichment.websiteSignals.crawlBlocked,
+              hasCareersPage: enrichment.websiteSignals.hasCareersPage,
+              careersPageUrl: enrichment.websiteSignals.careersPageUrl,
+              pageTexts: enrichment.websiteSignals.pageTexts,
+              targetJobTitles,
+              taxonomyJobTitles: taxonomyEntry?.jobTitles ?? [],
             });
-            if (contactRow) {
-              bestRealContact = { contactId: contactRow.id, firstName: contactRow.firstName, lastName: contactRow.lastName, email: contactRow.email, title: contactRow.title };
+            hiringSignalsChecked += 1;
+            hiringStatusCounts[hiringSignal.hiringStatus] = (hiringStatusCounts[hiringSignal.hiringStatus] ?? 0) + 1;
+            for (const warning of hiringSignal.warnings) validationWarnings.add(warning);
+            currentDiscoveryMetadata = { ...currentDiscoveryMetadata, hiringSignal };
+            await scopedDb.company.update({
+              where: { id: company.id },
+              data: { discoveryMetadata: currentDiscoveryMetadata as never },
+            });
+          }
+
+          // F7.6: Decision-Maker Role Planning — QUÉ roles buscar, nunca
+          // QUIÉN (eso es Contact Intelligence, F7.7, todavía no
+          // implementado). Corre solo cuando el plan declara find_contacts
+          // (preparación para esa fase futura) — nunca "por si acaso".
+          let rolePlan: DecisionRolePlan | null = null;
+          if (!cancelled && params.plan.steps.includes("find_contacts")) {
+            const taxonomyEntryForRoles = getTaxonomyEntry(candidate.query.taxonomyKey);
+            rolePlan = buildDecisionRolePlan({
+              companyId: company.id,
+              taxonomyKey: candidate.query.taxonomyKey,
+              intentDecisionRoles: decisionRoles,
+              taxonomyDecisionMakers: taxonomyEntryForRoles?.decisionMakers ?? [],
+              hiringStatus: hiringSignal?.hiringStatus ?? null,
+              missionExclusions: params.plan.exclusions,
+            });
+            rolePlansBuilt += 1;
+            currentDiscoveryMetadata = { ...currentDiscoveryMetadata, rolePlan };
+            await scopedDb.company.update({
+              where: { id: company.id },
+              data: { discoveryMetadata: currentDiscoveryMetadata as never },
+            });
+          }
+
+          // F7.7: Contact Intelligence -- QUIÉN (persona real), solo
+          // cuando F7.6 planificó al menos un rol para esta Company.
+          // Nunca busca con una lista de cargos genérica ni "por si
+          // acaso" -- si rolePlan es null o no tiene roles, el paso ni
+          // siquiera llama al proveedor (costo real $0 en ese caso).
+          let contactsFoundForCompany = 0;
+          let rolesWithoutContactForCompany: string[] = [];
+          let bestContactRankingTierForCompany: BestContactRankingTier = null;
+          // F14: id del mejor contacto real (HIGH/MEDIUM_CONFIDENCE) para
+          // esta Company -- usado más abajo para conversión a Lead/
+          // Opportunity/borrador. Nunca un nombre inventado: viene de un
+          // Contact ya persistido por Contact Intelligence (F7.7, PDL).
+          let bestContactIdForCompany: string | null = null;
+          if (!cancelled && rolePlan && rolePlan.targetRoles.length > 0) {
+            const contactEnrichment = await enrichCompanyWithDecisionContacts({
+              taskId: childTask.id,
+              companyId: company.id,
+              companyName: candidate.raw.name!,
+              companyWebsite: company.website,
+              companyState: company.state,
+              companyCity: company.city,
+              industryName: industry.name,
+              rolePlan,
+              abortSignal: params.abortSignal,
+              contactProvider: params.contactProvider,
+              peopleDataLabsApiKey: params.peopleDataLabsApiKey,
+              pdlMissionBudget,
+              // F15: 2da y 3ra fuente de la cascada -- namedPeople viene
+              // del MISMO crawl que ya hizo enrichCompanyWithOrganizationalEmails
+              // arriba (nunca un segundo request al sitio); Hunter corre
+              // solo si PDL+Website no cubrieron todos los roles.
+              websiteNamedPeople: enrichment.websiteSignals.namedPeople,
+              hunterProvider: params.hunterProvider,
+              hunterApiKey: params.hunterApiKey,
+            });
+            if (contactEnrichment.costUsd > 0) totalCostUsd += contactEnrichment.costUsd;
+            for (const source of contactEnrichment.sourcesUsed) providersUsed.add(source);
+            // F16 debt fix: antes providersOmitted SOLO se poblaba desde
+            // executeOneQuery (Google Places/Overpass) -- People Data
+            // Labs/Hunter.io nunca aparecían acá aunque genuinamente se
+            // hayan omitido por falta de credenciales o presupuesto
+            // excedido (ver contact-enrichment.ts, que ahora separa esos
+            // 2 motivos de patternsFailed). Mismo Set que ya usa la capa
+            // de discovery -- un solo providersOmitted real para toda la
+            // misión, nunca dos fuentes de verdad distintas.
+            for (const omitted of contactEnrichment.providersOmitted) providersOmitted.add(omitted);
+            contactCandidatesFoundTotal += contactEnrichment.candidatesFound;
+            contactsCreatedTotal += contactEnrichment.contactsCreated.length;
+            contactDuplicatesSkippedTotal += contactEnrichment.duplicatesSkipped;
+            contactRoleMismatchSkippedTotal += contactEnrichment.roleMismatchSkipped;
+            contactsFoundForCompany = contactEnrichment.contactsCreated.length;
+            rolesWithoutContactForCompany = contactEnrichment.rolesWithoutContact;
+            if (contactsFoundForCompany > 0) companiesWithContactsFoundTotal += 1;
+            const tierRank: Record<Exclude<BestContactRankingTier, null>, number> = {
+              HIGH_CONFIDENCE: 3,
+              MEDIUM_CONFIDENCE: 2,
+              LOW_CONFIDENCE: 1,
+              REJECTED: 0,
+            };
+            for (const created of contactEnrichment.contactsCreated) {
+              if (created.rankingTier === "HIGH_CONFIDENCE") contactsHighConfidenceTotal += 1;
+              else if (created.rankingTier === "MEDIUM_CONFIDENCE") contactsMediumConfidenceTotal += 1;
+              else if (created.rankingTier === "LOW_CONFIDENCE") contactsLowConfidenceTotal += 1;
+              else if (created.rankingTier === "REJECTED") contactsRejectedTotal += 1;
+              if (bestContactRankingTierForCompany === null || tierRank[created.rankingTier] > tierRank[bestContactRankingTierForCompany]) {
+                bestContactRankingTierForCompany = created.rankingTier;
+                bestContactIdForCompany = created.contactId;
+              }
+            }
+            for (const failure of contactEnrichment.patternsFailed) validationWarnings.add(failure);
+            // F7.9: misma razón que enrichment.cancelled arriba -- People
+            // Data Labs es un proveedor PAGO, así que ignorar esta
+            // cancelación sería el caso con mayor impacto real de
+            // presupuesto de los tres.
+            if (contactEnrichment.cancelled) {
+              cancelled = true;
+              stopReason = "cancelled";
             }
           }
-          const conversionTaxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
-          const conversionPositionsToOffer = resolvePositionsToOffer(hiringSignal?.targetTitlesMatched ?? [], conversionTaxonomyEntry?.jobTitles ?? []);
-          conversion = await convertDiscoveredCompany({
-            taskId: childTask.id,
-            company: {
-              id: company.id,
-              name: candidate.raw.name!,
-              industryId: industry.id,
-              industryName: industry.name,
-              city: company.city,
-              state: company.state,
-              website: company.website,
-              tradeLabel: conversionTaxonomyEntry?.label ?? null,
-              // F24 (auditoría de producción): mismos valores ya
-              // calculados arriba en este mismo loop (líneas ~983 y
-              // ~1236) -- nunca se recalculan, solo se pasan al gate de
-              // creación de Draft (draft-creation-gate.ts).
-              isClientOwnerCandidate: clientOwnerMatchesForCandidate.length > 0,
-              opportunityRecommendation: opportunityRecommendation.recommendation,
-            },
-            restrictions: params.restrictions,
-            evidence: {
-              businessConfidence: validation.confidence,
-              hiringStatus: hiringSignal?.hiringStatus ?? null,
-              hiringEvidenceConcrete: hiringConfidence.concreteEvidence,
-              hasVerifiedOrgEmail: !!bestVerifiedOrgEmail,
-              hasRiskyOrgEmail: enrichment.emailsRisky > 0,
-              hasConfirmedPhone: !!company.phone,
-              hasConfirmedWebsite: !!company.website,
-              hasRealPersonContact: !!bestRealContact,
-              requireHiringSignal: params.restrictions.requireHiringSignal,
-            },
-            bestVerifiedOrgEmail,
-            bestRealContact,
-            hiringSignal: { evidence: hiringSignal?.evidence ?? [], sourceUrls: hiringSignal?.sourceUrls ?? [] },
-            positionsToOffer: conversionPositionsToOffer,
-            llmProvider,
-            usage: draftUsage,
+
+          // F22 Fase 4/5 (Contact Acquisition Engine): resuelve el MEJOR
+          // canal real disponible para esta Company -- se computa ACÁ,
+          // después de que tanto company-enrichment (emails
+          // organizacionales/formulario/careers/LinkedIn del sitio) como
+          // contact-enrichment (personas reales) ya corrieron para esta
+          // Company, así refleja TODA la evidencia reunida hasta este
+          // punto. Se consulta el estado YA PERSISTIDO (Contact/
+          // CompanyContactPoint), nunca solo lo creado en esta corrida --
+          // "nunca eliminar canales inferiores" (Fase 4): un canal
+          // encontrado en una corrida anterior sigue contando acá.
+          const [contactsForChannel, contactPointsForChannel] = await Promise.all([
+            scopedDb.contact.findMany({ where: { companyId: company.id }, select: { email: true, emailVerificationStatus: true, linkedinUrl: true } }),
+            scopedDb.companyContactPoint.findMany({ where: { companyId: company.id }, select: { email: true, verificationStatus: true } }),
+          ]);
+          const channelResolution = resolveBestContactChannel({
+            contacts: contactsForChannel,
+            contactPoints: contactPointsForChannel,
+            companyEmail: company.email,
+            companyPhone: company.phone,
+            careersPageUrl: enrichment.websiteSignals.careersPageUrl,
+            contactFormUrl: enrichment.websiteSignals.contactFormUrl,
+            companyLinkedinUrl: enrichment.websiteSignals.linkedinUrl,
           });
-          if (conversion.leadId) leadsCreatedTotal += 1;
-          if (conversion.opportunityId) opportunitiesCreatedTotal += 1;
-          if (conversion.opportunityBlockedByRestriction) opportunitiesBlockedByRestrictionTotal += 1;
-          if (conversion.draftCreated) draftsCreatedTotal += 1;
-          if (conversion.draftBlockedByRestriction) draftsBlockedByRestrictionTotal += 1;
-          if (draftUsage.costUsd > 0) {
-            totalCostUsd += draftUsage.costUsd;
-            draftUsage.costUsd = 0;
-            draftUsage.tokensUsed = 0;
+
+          // F22 Fase 5 (observabilidad): exactamente los campos pedidos --
+          // "por cada Company registrar: website encontrado, sitemap
+          // encontrado, páginas visitadas, emails encontrados, emails
+          // válidos, formularios encontrados, careers encontrada, LinkedIn
+          // encontrado, teléfono encontrado, canal final elegido, motivo
+          // cuando solo quedó teléfono".
+          const contactAcquisitionMetrics = {
+            websiteFound: enrichment.websiteSignals.hasWebsite,
+            sitemapFound: enrichment.websiteSignals.sitemapFound,
+            pagesVisited: enrichment.websitePagesVisited,
+            emailsFound: enrichment.emailsExtracted,
+            emailsValid: enrichment.emailsVerified + enrichment.emailsRisky,
+            contactFormsFound: enrichment.websiteSignals.contactForms.length,
+            careersPageFound: enrichment.websiteSignals.hasCareersPage,
+            linkedinFound: channelResolution.channel === "LINKEDIN" || contactsForChannel.some((c) => c.linkedinUrl != null),
+            phoneFound: !!company.phone,
+            finalChannel: channelResolution.channel as ContactChannelType,
+            reasonWhenPhoneOnly: channelResolution.channel === "PHONE" ? channelResolution.reason : null,
+            headlessPagesRendered: enrichment.websiteSignals.headlessPagesRendered.length,
+            headlessRenderDurationMs: enrichment.websiteSignals.headlessRenderDurationMs,
+          };
+          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, contactAcquisition: contactAcquisitionMetrics };
+          await scopedDb.company.update({
+            where: { id: company.id },
+            data: { discoveryMetadata: currentDiscoveryMetadata as never },
+          });
+
+          // F7.10: Opportunity Recommendation -- combina TODA la evidencia
+          // ya reunida arriba en una recomendación auditable. Corre
+          // siempre (a diferencia de F7.5-F7.7, no depende de un paso
+          // opcional del plan) porque Business Validation (F7.4) también
+          // corre siempre. Nunca crea una Opportunity -- requiresApproval
+          // siempre true, la decisión real queda para el CEO humano.
+          const opportunityRecommendation = recommendOpportunityAction({
+            businessConfidence: validation.confidence,
+            missingEvidence: validation.missingEvidence,
+            hasValidEmail,
+            hiringStatus: hiringSignal?.hiringStatus ?? null,
+            contactsFound: contactsFoundForCompany,
+            bestContactRankingTier: bestContactRankingTierForCompany,
+            rolesWithoutContact: rolesWithoutContactForCompany,
+          });
+          if (opportunityRecommendation.recommendation === "CREATE_OPPORTUNITY") companiesRecommendedForOpportunityTotal += 1;
+          else if (opportunityRecommendation.recommendation === "INVESTIGATE_MORE") companiesRecommendedToInvestigateTotal += 1;
+          else if (opportunityRecommendation.recommendation === "ARCHIVE") companiesRecommendedToArchiveTotal += 1;
+          else if (opportunityRecommendation.recommendation === "MANUAL_REVIEW") companiesRecommendedForManualReviewTotal += 1;
+          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, opportunityRecommendation };
+          await scopedDb.company.update({
+            where: { id: company.id },
+            data: { discoveryMetadata: currentDiscoveryMetadata as never },
+          });
+
+          // F14: convierte la evidencia ya reunida arriba (nunca datos
+          // nuevos) en Lead/Opportunity/borrador reales, según la política
+          // determinista de conversion-policy.ts -- reemplaza el límite
+          // documentado hasta esta fase ("nunca crea Lead/Opportunity").
+          // El registro parcial ya reunido se usa igual aunque `cancelled`
+          // ya sea true (mismo criterio que el resto de este loop: nunca
+          // se descarta evidencia real ya juntada). SOLO corre si el
+          // llamador activó convertToCommercialActions -- ver el
+          // comentario en ExecuteDiscoveryPlanParams (nunca duplicar la
+          // creación de Lead/Opportunity que ya hace el loop clásico para
+          // el llamador de fallback).
+          // F16: Hiring Confidence -- segunda dimensión INDEPENDIENTE de
+          // Business Confidence (validation.confidence), calculada SIEMPRE
+          // (no solo cuando convertToCommercialActions está activo -- es
+          // una lectura pura de evidencia ya reunida, Commercial Conversion
+          // es solo uno de sus consumidores) combinando señal de
+          // contratación + página de carreras + emails organizacionales +
+          // contactos reales ya encontrados. Reemplaza el chequeo anterior,
+          // más angosto, que solo miraba `targetTitlesMatched.length > 0`
+          // -- ahora también reconoce evidencia real de contact enrichment
+          // (F7.6/F7.7/F15).
+          const hiringConfidence = computeHiringConfidence({
+            hiringSignalStatus: hiringSignal?.hiringStatus ?? null,
+            hiringSignalTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
+            hasCareersPage: enrichment.websiteSignals.hasCareersPage,
+            organizationalEmailsVerified: enrichment.emailsVerified,
+            organizationalEmailsRisky: enrichment.emailsRisky,
+            namedContactsFound: contactsFoundForCompany,
+            bestContactRankingTier: bestContactRankingTierForCompany,
+          });
+          currentDiscoveryMetadata = { ...currentDiscoveryMetadata, hiringConfidence };
+          await scopedDb.company.update({
+            where: { id: company.id },
+            data: { discoveryMetadata: currentDiscoveryMetadata as never },
+          });
+
+          let conversion: ConvertDiscoveredCompanyResult | null = null;
+          if (params.convertToCommercialActions) {
+            const bestVerifiedOrgEmail = enrichment.emails.find((e) => e.status === "VERIFIED")?.email ?? null;
+            let bestRealContact: { contactId: string; firstName: string; lastName: string; email: string | null; title: string | null } | null = null;
+            if (bestContactIdForCompany && (bestContactRankingTierForCompany === "HIGH_CONFIDENCE" || bestContactRankingTierForCompany === "MEDIUM_CONFIDENCE")) {
+              const contactRow = await scopedDb.contact.findUnique({
+                where: { id: bestContactIdForCompany },
+                select: { id: true, firstName: true, lastName: true, email: true, title: true },
+              });
+              if (contactRow) {
+                bestRealContact = { contactId: contactRow.id, firstName: contactRow.firstName, lastName: contactRow.lastName, email: contactRow.email, title: contactRow.title };
+              }
+            }
+            const conversionTaxonomyEntry = getTaxonomyEntry(candidate.query.taxonomyKey);
+            const conversionPositionsToOffer = resolvePositionsToOffer(hiringSignal?.targetTitlesMatched ?? [], conversionTaxonomyEntry?.jobTitles ?? []);
+            conversion = await convertDiscoveredCompany({
+              taskId: childTask.id,
+              company: {
+                id: company.id,
+                name: candidate.raw.name!,
+                industryId: industry.id,
+                industryName: industry.name,
+                city: company.city,
+                state: company.state,
+                website: company.website,
+                tradeLabel: conversionTaxonomyEntry?.label ?? null,
+                // F24 (auditoría de producción): mismos valores ya
+                // calculados arriba en este mismo loop (líneas ~983 y
+                // ~1236) -- nunca se recalculan, solo se pasan al gate de
+                // creación de Draft (draft-creation-gate.ts).
+                isClientOwnerCandidate: clientOwnerMatchesForCandidate.length > 0,
+                opportunityRecommendation: opportunityRecommendation.recommendation,
+              },
+              restrictions: params.restrictions,
+              evidence: {
+                businessConfidence: validation.confidence,
+                hiringStatus: hiringSignal?.hiringStatus ?? null,
+                hiringEvidenceConcrete: hiringConfidence.concreteEvidence,
+                hasVerifiedOrgEmail: !!bestVerifiedOrgEmail,
+                hasRiskyOrgEmail: enrichment.emailsRisky > 0,
+                hasConfirmedPhone: !!company.phone,
+                hasConfirmedWebsite: !!company.website,
+                hasRealPersonContact: !!bestRealContact,
+                requireHiringSignal: params.restrictions.requireHiringSignal,
+              },
+              bestVerifiedOrgEmail,
+              bestRealContact,
+              hiringSignal: { evidence: hiringSignal?.evidence ?? [], sourceUrls: hiringSignal?.sourceUrls ?? [] },
+              positionsToOffer: conversionPositionsToOffer,
+              llmProvider,
+              usage: draftUsage,
+            });
+            if (conversion.leadId) leadsCreatedTotal += 1;
+            if (conversion.opportunityId) opportunitiesCreatedTotal += 1;
+            if (conversion.opportunityBlockedByRestriction) opportunitiesBlockedByRestrictionTotal += 1;
+            if (conversion.draftCreated) draftsCreatedTotal += 1;
+            if (conversion.draftBlockedByRestriction) draftsBlockedByRestrictionTotal += 1;
+            if (draftUsage.costUsd > 0) {
+              totalCostUsd += draftUsage.costUsd;
+              draftUsage.costUsd = 0;
+              draftUsage.tokensUsed = 0;
+            }
           }
+
+          // F15: "empresas y personas con las que realmente podamos
+          // contactar" -- calculado con la MISMA evidencia ya reunida
+          // arriba (contactsFoundForCompany de la cascada F7.7/F15,
+          // hasValidEmail de Email Trust F7.4), nunca un dato nuevo.
+          const readyForOrganizationalContact = contactsFoundForCompany === 0 && hasValidEmail;
+          if (contactsFoundForCompany > 0 || hasValidEmail) companiesEnrichedTotal += 1;
+          if (hasValidEmail) companiesWithOrganizationalEmailTotal += 1;
+          if (readyForOrganizationalContact) companiesReadyForOrganizationalContactTotal += 1;
+          if (contactsFoundForCompany === 0 && !hasValidEmail) companiesPendingInvestigationTotal += 1;
+
+          companyValidations.push({
+            companyId: company.id,
+            name: candidate.raw.name!,
+            taxonomyKey: candidate.query.taxonomyKey,
+            businessConfidence: validation.confidence,
+            detectedBusinessType: validation.detectedBusinessType,
+            detectedSector: validation.detectedSector,
+            matchedEvidence: validation.matchedEvidence,
+            missingEvidence: validation.missingEvidence,
+            emailsExtracted: enrichment.emailsExtracted,
+            emailsVerified: enrichment.emailsVerified,
+            emailsRisky: enrichment.emailsRisky,
+            emailsInvalid: enrichment.emailsInvalid,
+            companyContactPointsCreated: enrichment.companyContactPointsCreated,
+            hasValidEmail,
+            hiringStatus: hiringSignal?.hiringStatus ?? null,
+            hiringConfidence: hiringSignal?.confidence ?? null,
+            targetTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
+            rolePlan,
+            contactsFound: contactsFoundForCompany,
+            rolesWithoutContact: rolesWithoutContactForCompany,
+            opportunityRecommendation,
+            conversion,
+            readyForOrganizationalContact,
+            providerTypes: candidate.raw.providerTypes ?? [],
+            isClientOwnerCandidate: clientOwnerMatchesForCandidate.length > 0,
+            clientOwnerAssociations: clientOwnerMatchesForCandidate,
+            hiringConfidenceTier: hiringConfidence.tier,
+            hiringConfidenceConcreteEvidence: hiringConfidence.concreteEvidence,
+          });
+          // F7.9: cortar el loop de candidatos de ESTA query inmediatamente
+          // al detectar cancelación -- sin este break, el resto de
+          // candidatos de la misma query seguían corriendo pasos pagos
+          // (F7.7) hasta el chequeo original de más abajo, que solo
+          // rompía el loop de queries, no el de candidatos.
+          if (cancelled) break;
+        } catch (err) {
+          // Invariante #1: se registra el error real por candidato y se
+          // continúa con el siguiente -- nunca se aborta la misión por
+          // el fallo de UNA empresa. Nunca se oculta el motivo real.
+          const message = err instanceof Error ? err.message : String(err);
+          companyErrors.push({ candidateName: candidate.raw.name ?? null, taxonomyKey: candidate.query.taxonomyKey, companyId: persistedCompanyIdForErrorContext, message });
+          logger.error("mission_executor_company_processing_failed", {
+            module: "mission-executor",
+            missionTaskId: params.missionTaskId,
+            candidateName: candidate.raw.name ?? undefined,
+            taxonomyKey: candidate.query.taxonomyKey,
+            error: message,
+          });
         }
-
-        // F15: "empresas y personas con las que realmente podamos
-        // contactar" -- calculado con la MISMA evidencia ya reunida
-        // arriba (contactsFoundForCompany de la cascada F7.7/F15,
-        // hasValidEmail de Email Trust F7.4), nunca un dato nuevo.
-        const readyForOrganizationalContact = contactsFoundForCompany === 0 && hasValidEmail;
-        if (contactsFoundForCompany > 0 || hasValidEmail) companiesEnrichedTotal += 1;
-        if (hasValidEmail) companiesWithOrganizationalEmailTotal += 1;
-        if (readyForOrganizationalContact) companiesReadyForOrganizationalContactTotal += 1;
-        if (contactsFoundForCompany === 0 && !hasValidEmail) companiesPendingInvestigationTotal += 1;
-
-        companyValidations.push({
-          companyId: company.id,
-          name: candidate.raw.name!,
-          taxonomyKey: candidate.query.taxonomyKey,
-          businessConfidence: validation.confidence,
-          detectedBusinessType: validation.detectedBusinessType,
-          detectedSector: validation.detectedSector,
-          matchedEvidence: validation.matchedEvidence,
-          missingEvidence: validation.missingEvidence,
-          emailsExtracted: enrichment.emailsExtracted,
-          emailsVerified: enrichment.emailsVerified,
-          emailsRisky: enrichment.emailsRisky,
-          emailsInvalid: enrichment.emailsInvalid,
-          companyContactPointsCreated: enrichment.companyContactPointsCreated,
-          hasValidEmail,
-          hiringStatus: hiringSignal?.hiringStatus ?? null,
-          hiringConfidence: hiringSignal?.confidence ?? null,
-          targetTitlesMatched: hiringSignal?.targetTitlesMatched ?? [],
-          rolePlan,
-          contactsFound: contactsFoundForCompany,
-          rolesWithoutContact: rolesWithoutContactForCompany,
-          opportunityRecommendation,
-          conversion,
-          readyForOrganizationalContact,
-          providerTypes: candidate.raw.providerTypes ?? [],
-          isClientOwnerCandidate: clientOwnerMatchesForCandidate.length > 0,
-          clientOwnerAssociations: clientOwnerMatchesForCandidate,
-          hiringConfidenceTier: hiringConfidence.tier,
-          hiringConfidenceConcreteEvidence: hiringConfidence.concreteEvidence,
-        });
-        // F7.9: cortar el loop de candidatos de ESTA query inmediatamente
-        // al detectar cancelación -- sin este break, el resto de
-        // candidatos de la misma query seguían corriendo pasos pagos
-        // (F7.7) hasta el chequeo original de más abajo, que solo
-        // rompía el loop de queries, no el de candidatos.
-        if (cancelled) break;
       }
     }
 
@@ -1669,6 +1812,7 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesWithOrganizationalEmail: companiesWithOrganizationalEmailTotal,
     companiesReadyForOrganizationalContact: companiesReadyForOrganizationalContactTotal,
     companiesPendingInvestigation: companiesPendingInvestigationTotal,
+    companyErrors,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,

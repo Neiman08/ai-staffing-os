@@ -8,16 +8,20 @@ import {
   resolveDraftLanguage,
   resolvePositionsToOffer,
   type DraftGenerationInput,
+  type DraftGenerationSucceeded,
 } from "./draft-generation";
 
 /**
- * Regresión de la corrección de idioma/profundidad de los email drafts:
- * el idioma del outreach nunca debe depender del idioma de la
- * instrucción de la misión (ver resolveDraftLanguage), toda Company
- * requiere personalización real basada en evidencia (nunca una
- * plantilla genérica), y el nivel de señal de contratación condiciona
- * lo que el mensaje puede afirmar (nunca "está contratando" sin señal
- * CONFIRMED).
+ * Regresión de la corrección de idioma/profundidad de los email drafts,
+ * y de la corrección de resiliencia posterior (hallazgo real
+ * MIS-20260802-0002): el idioma del outreach nunca debe depender del
+ * idioma de la instrucción de la misión (ver resolveDraftLanguage), toda
+ * Company requiere personalización real basada en evidencia (nunca una
+ * plantilla genérica), el nivel de señal de contratación condiciona lo
+ * que el mensaje puede afirmar (nunca "está contratando" sin señal
+ * CONFIRMED), y generateOutreachDraft NUNCA lanza -- cuando no puede
+ * producir un borrador válido devuelve {status:"skipped", reason},
+ * nunca aborta a quien lo llama.
  */
 
 function baseInput(overrides: Partial<DraftGenerationInput> = {}): DraftGenerationInput {
@@ -45,7 +49,7 @@ function baseInput(overrides: Partial<DraftGenerationInput> = {}): DraftGenerati
 }
 
 function extractFactIds(prompt: string): string[] {
-  return Array.from(new Set(Array.from(prompt.matchAll(/^- \[(\S+)\]/gm)).map((m) => m[1]!)));
+  return Array.from(new Set(Array.from(prompt.matchAll(/^- id="([^"]+)":/gm)).map((m) => m[1]!)));
 }
 
 function wordyBody(sentences: number): string {
@@ -74,6 +78,13 @@ function goodResponse(prompt: string, overrides: Record<string, unknown> = {}): 
     generationReasoningSummary: "Used market/area and business type to personalize this outreach.",
     ...overrides,
   };
+}
+
+async function expectGenerated(provider: LLMProvider, input: DraftGenerationInput): Promise<DraftGenerationSucceeded> {
+  const result = await generateOutreachDraft({ llmProvider: provider, input });
+  assert.equal(result.status, "generated", result.status === "skipped" ? result.reason : undefined);
+  if (result.status !== "generated") throw new Error("unreachable");
+  return result;
 }
 
 // ---------- resolveDraftLanguage ----------
@@ -133,14 +144,60 @@ test("resolvePositionsToOffer: sin evidencia ni taxonomía, nunca inventa -- lis
   assert.deepEqual(resolvePositionsToOffer([], []), []);
 });
 
-// ---------- generateOutreachDraft: personalización mínima ----------
+// ---------- generateOutreachDraft: NUNCA lanza -- devuelve {status:"skipped"} ----------
 
-test("generateOutreachDraft: rechaza (tras 2 intentos) una respuesta que no referencia hechos reales -> nunca acepta un genérico sin personalizar", async () => {
+test("generateOutreachDraft: tras 2 intentos con IDs de evidencia inventados -> {status:skipped}, nunca lanza, nunca acepta un genérico sin personalizar", async () => {
   const provider = providerReturning(
     { subject: "Hi", body: wordyBody(3), personalizationFactsUsed: ["made_up_fact"], generationReasoningSummary: "x" },
     { subject: "Hi", body: wordyBody(3), personalizationFactsUsed: ["made_up_fact"], generationReasoningSummary: "x" },
   );
-  await assert.rejects(() => generateOutreachDraft({ llmProvider: provider, input: baseInput() }));
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
+  if (result.status !== "skipped") return;
+  assert.equal(result.attemptsMade, 2);
+  assert.match(result.reason, /made_up_fact/);
+});
+
+// MIS-20260802-0002 (hallazgo real de producción): el modelo devolvió
+// los ids envueltos en corchetes ("[hiring_signal]") en vez del string
+// plano -- normalizeFactId debe recuperarlos igual, nunca rechazar un id
+// real solo por el formato.
+test("generateOutreachDraft: tolera ids envueltos en corchetes (formato real observado en producción, MIS-20260802-0002)", async () => {
+  const provider: LLMProvider = {
+    complete: async (req) => {
+      const prompt = req.messages[req.messages.length - 1]!.content;
+      const factIds = extractFactIds(prompt);
+      const bracketed = factIds.slice(0, 2).map((id) => `[${id}]`);
+      return {
+        content: JSON.stringify({ subject: "Hi", body: wordyBody(3), personalizationFactsUsed: bracketed, generationReasoningSummary: "x" }),
+        tokensUsed: 10,
+      };
+    },
+  };
+  const result = await expectGenerated(provider, baseInput());
+  assert.ok(result.metadata.personalizationFactsUsed.length >= 2);
+});
+
+test("generateOutreachDraft: respuesta que no es JSON válido -> {status:skipped} tras 2 intentos, nunca lanza", async () => {
+  const provider: LLMProvider = {
+    complete: async (): Promise<LLMCompletionResult> => ({ content: "not json at all", tokensUsed: 5 }),
+  };
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
+  if (result.status !== "skipped") return;
+  assert.match(result.reason, /not valid JSON/);
+});
+
+test("generateOutreachDraft: el proveedor LLM lanza (ej. sin API key) -> {status:skipped} tras 2 intentos, nunca propaga la excepción", async () => {
+  const provider: LLMProvider = {
+    complete: async (): Promise<LLMCompletionResult> => {
+      throw new Error("OPENAI_API_KEY no está configurada.");
+    },
+  };
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
+  if (result.status !== "skipped") return;
+  assert.match(result.reason, /OPENAI_API_KEY/);
 });
 
 test("generateOutreachDraft: reintenta una vez y acepta si el 2do intento sí referencia hechos reales", async () => {
@@ -153,7 +210,7 @@ test("generateOutreachDraft: reintenta una vez y acepta si el 2do intento sí re
       return { content: JSON.stringify(body), tokensUsed: 10 };
     },
   };
-  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  const result = await expectGenerated(provider, baseInput());
   assert.ok(result.metadata.personalizationFactsUsed.length >= 2);
 });
 
@@ -167,18 +224,19 @@ test("generateOutreachDraft: con Company sin evidencia adicional (solo nombre/ub
   };
   // Con cero hechos reales disponibles (sin ciudad/estado/trade/sitio),
   // el mínimo exigido baja a 0 -- nunca debe forzar al modelo a inventar.
-  const result = await generateOutreachDraft({ llmProvider: provider, input });
+  const result = await expectGenerated(provider, input);
   assert.ok(result.subject.length > 0);
 });
 
 // ---------- generateOutreachDraft: nivel de señal de contratación ----------
 
-test("generateOutreachDraft: nivel POSSIBLE -- rechaza una respuesta que afirma 'you are hiring' sin señal confirmada", async () => {
+test("generateOutreachDraft: nivel POSSIBLE -- {status:skipped} para una respuesta que afirma 'you are hiring' sin señal confirmada", async () => {
   const provider = providerReturning(
     { subject: "Hi", body: wordyBody(1) + "\n\nWe noticed you are hiring right now.", personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
     { subject: "Hi", body: wordyBody(1) + "\n\nWe noticed you are hiring right now.", personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
   );
-  await assert.rejects(() => generateOutreachDraft({ llmProvider: provider, input: baseInput({ hiringSignalLevel: "possible" }) }));
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput({ hiringSignalLevel: "possible" }) });
+  assert.equal(result.status, "skipped");
 });
 
 test("generateOutreachDraft: nivel CONFIRMED -- permite un mensaje que menciona contratación observada", async () => {
@@ -189,48 +247,52 @@ test("generateOutreachDraft: nivel CONFIRMED -- permite un mensaje que menciona 
       return { content: JSON.stringify(body), tokensUsed: 10 };
     },
   };
-  const result = await generateOutreachDraft({
-    llmProvider: provider,
-    input: baseInput({ hiringSignalLevel: "confirmed", hiringSignalEvidence: ['"Roofer" mencionado en https://acme-roofing.example/careers'] }),
-  });
+  const result = await expectGenerated(
+    provider,
+    baseInput({ hiringSignalLevel: "confirmed", hiringSignalEvidence: ['"Roofer" mencionado en https://acme-roofing.example/careers'] }),
+  );
   assert.equal(result.metadata.hiringSignalLevel, "confirmed");
 });
 
 // ---------- generateOutreachDraft: bloqueo de plantillas genéricas viejas ----------
 
-test("generateOutreachDraft: rechaza la plantilla genérica vieja en español ('Posible colaboración con...')", async () => {
+test("generateOutreachDraft: {status:skipped} para la plantilla genérica vieja en español ('Posible colaboración con...')", async () => {
   const provider = providerReturning(
     { subject: "Posible colaboración con Acme Roofing LLC", body: wordyBody(2), personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
     { subject: "Posible colaboración con Acme Roofing LLC", body: wordyBody(2), personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
   );
-  await assert.rejects(() => generateOutreachDraft({ llmProvider: provider, input: baseInput() }));
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
 });
 
-test("generateOutreachDraft: rechaza la plantilla genérica vieja en inglés ('may be looking for staff')", async () => {
+test("generateOutreachDraft: {status:skipped} para la plantilla genérica vieja en inglés ('may be looking for staff')", async () => {
   const provider = providerReturning(
     { subject: "Hi", body: "Hello,\n\nWe noticed that your company may be looking for staff.\n\n" + DEFAULT_EMAIL_SIGNATURE, personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
     { subject: "Hi", body: "Hello,\n\nWe noticed that your company may be looking for staff.\n\n" + DEFAULT_EMAIL_SIGNATURE, personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
   );
-  await assert.rejects(() => generateOutreachDraft({ llmProvider: provider, input: baseInput() }));
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
 });
 
 // ---------- generateOutreachDraft: firma y placeholders ----------
 
-test("generateOutreachDraft: rechaza un cuerpo que no termina con la firma exacta", async () => {
+test("generateOutreachDraft: {status:skipped} para un cuerpo que no termina con la firma exacta", async () => {
   const provider = providerReturning(
     { subject: "Hi", body: "Hello,\n\nSome body text without the real signature.", personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
     { subject: "Hi", body: "Hello,\n\nSome body text without the real signature.", personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
   );
-  await assert.rejects(() => generateOutreachDraft({ llmProvider: provider, input: baseInput() }));
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
 });
 
-test("generateOutreachDraft: rechaza un placeholder sin completar (ej. [Your Name])", async () => {
+test("generateOutreachDraft: {status:skipped} para un placeholder sin completar (ej. [Your Name])", async () => {
   const bodyWithPlaceholder = `Hello [Your Name],\n\n${wordyBody(2)}`;
   const provider = providerReturning(
     { subject: "Hi", body: bodyWithPlaceholder, personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
     { subject: "Hi", body: bodyWithPlaceholder, personalizationFactsUsed: ["market_area", "business_type"], generationReasoningSummary: "x" },
   );
-  await assert.rejects(() => generateOutreachDraft({ llmProvider: provider, input: baseInput() }));
+  const result = await generateOutreachDraft({ llmProvider: provider, input: baseInput() });
+  assert.equal(result.status, "skipped");
 });
 
 // ---------- generateOutreachDraft: metadata devuelta ----------
@@ -242,10 +304,7 @@ test("generateOutreachDraft: metadata refleja idioma, tipo de destinatario, ubic
       return { content: JSON.stringify(goodResponse(prompt)), tokensUsed: 10 };
     },
   };
-  const result = await generateOutreachDraft({
-    llmProvider: provider,
-    input: baseInput({ recipientType: "person", recipientName: "Maria", recipientTitle: "Operations Manager" }),
-  });
+  const result = await expectGenerated(provider, baseInput({ recipientType: "person", recipientName: "Maria", recipientTitle: "Operations Manager" }));
   assert.equal(result.metadata.language, "en");
   assert.equal(result.metadata.recipientType, "person");
   assert.equal(result.metadata.recipientName, "Maria");

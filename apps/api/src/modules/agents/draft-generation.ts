@@ -6,7 +6,6 @@ import {
   type LLMCompletionResult,
 } from "@ai-staffing-os/agents";
 import { DEFAULT_EMAIL_SIGNATURE, findKnownPlaceholders } from "@ai-staffing-os/shared";
-import { AppError } from "../../core/errors";
 
 const BUSINESS_NAME = "DreiStaff";
 
@@ -105,12 +104,6 @@ export interface DraftMetadata {
   generationReasoningSummary: string;
 }
 
-export interface GeneratedDraft {
-  subject: string;
-  body: string;
-  metadata: DraftMetadata;
-}
-
 function buildAvailableFacts(input: DraftGenerationInput): DraftFact[] {
   const facts: DraftFact[] = [];
   if (input.city || input.state) {
@@ -154,9 +147,24 @@ const HIRING_SIGNAL_GUIDANCE: Record<HiringSignalLevel, string> = {
     "Hiring signal level: NO SIGNAL FOUND. This is a purely exploratory outreach. NEVER mention hiring or vacancies. Ask, in a low-pressure way, whether they ever need temporary, project-based, or seasonal staffing support.",
 };
 
+// MIS-20260802-0002 (hallazgo real de producción): mostrar el id entre
+// corchetes acá ("- [id] label") entrenaba al modelo a devolver también
+// el id ENVUELTO en corchetes dentro de personalizationFactsUsed (ej.
+// "[hiring_signal]" en vez de "hiring_signal"), que nunca matcheaba
+// contra la lista real de ids y abortaba el borrador (y, antes del
+// fix de aislamiento por candidato, la misión entera). Los corchetes acá
+// son solo un separador visual; se recalca explícitamente que la
+// respuesta debe ser el string plano. normalizeFactId (más abajo) además
+// tolera que el modelo igual los incluya -- defensa en profundidad,
+// nunca solo una instrucción de prompt.
 function formatFactsForPrompt(facts: DraftFact[]): string {
   if (facts.length === 0) return "(no additional facts on file beyond company name/location/industry)";
-  return facts.map((f) => `- [${f.id}] ${f.label}`).join("\n");
+  return facts.map((f) => `- id="${f.id}": ${f.label}`).join("\n");
+}
+
+/** Tolera que el modelo devuelva el id envuelto en corchetes/espacios (ver comentario de formatFactsForPrompt) -- nunca acepta un id que no exista en la lista real, solo recupera el formato esperado de uno que sí existe. */
+function normalizeFactId(raw: string): string {
+  return raw.trim().replace(/^\[+/, "").replace(/\]+$/, "").trim();
 }
 
 function buildDraftPrompt(input: DraftGenerationInput, facts: DraftFact[]): string {
@@ -184,7 +192,7 @@ Location: ${[input.city, input.state].filter(Boolean).join(", ") || "unknown"}
 Industry: ${input.industryName}
 ${stepLine}
 
-Available real facts about this company (use AT LEAST 2 of these to personalize the email, and reference the ones you actually used by their [id] in personalizationFactsUsed -- never invent a fact that isn't listed here):
+Available real facts about this company (use AT LEAST 2 of these to personalize the email -- never invent a fact that isn't listed here). Each fact has an id="..." -- in personalizationFactsUsed, return ONLY the bare id string exactly as it appears inside the quotes (e.g. market_area), never wrapped in brackets or quotes, never a value that isn't one of the ids below:
 ${formatFactsForPrompt(facts)}
 
 ${HIRING_SIGNAL_GUIDANCE[input.hiringSignalLevel]}
@@ -211,7 +219,7 @@ End the message EXACTLY with this signature, unmodified and untranslated, and ne
 ${DEFAULT_EMAIL_SIGNATURE}
 
 Respond ONLY with a JSON object of this exact shape:
-{"subject": "<short, specific subject>", "body": "<full email following the structure above, ending with the exact signature>", "personalizationFactsUsed": ["<fact id from the list above>", "..."], "generationReasoningSummary": "<1-2 sentence, human-reviewable explanation of what evidence drove this draft's angle>"}`;
+{"subject": "<short, specific subject>", "body": "<full email following the structure above, ending with the exact signature>", "personalizationFactsUsed": ["<bare fact id from the list above, e.g. market_area -- never bracketed>", "..."], "generationReasoningSummary": "<1-2 sentence, human-reviewable explanation of what evidence drove this draft's angle>"}`;
 }
 
 const draftOutputSchema = z.object({
@@ -254,7 +262,7 @@ function countWords(text: string): number {
 function validateDraftOutput(output: DraftOutput, input: DraftGenerationInput, facts: DraftFact[]): string[] {
   const problems: string[] = [];
   const factIds = new Set(facts.map((f) => f.id));
-  const usedRealFacts = output.personalizationFactsUsed.filter((id) => factIds.has(id));
+  const usedRealFacts = output.personalizationFactsUsed.map(normalizeFactId).filter((id) => factIds.has(id));
   // Mínimo 2 hechos reales cuando la Company los tiene -- pero nunca un
   // piso imposible de cumplir: si genuinamente solo hay 0/1 hecho
   // disponible (Company con muy poca evidencia todavía), exigir 2 solo
@@ -262,7 +270,7 @@ function validateDraftOutput(output: DraftOutput, input: DraftGenerationInput, f
   const requiredFactCount = Math.min(2, facts.length);
   if (usedRealFacts.length < requiredFactCount) {
     problems.push(
-      `personalizationFactsUsed must reference at least ${requiredFactCount} real fact(s) from the provided list (got: ${JSON.stringify(output.personalizationFactsUsed)}).`,
+      `personalizationFactsUsed must reference at least ${requiredFactCount} real fact(s) from the provided list (got: ${JSON.stringify(output.personalizationFactsUsed)}). The ONLY valid bare ids are: ${JSON.stringify(Array.from(factIds))}. Return them exactly as plain strings, never wrapped in brackets.`,
     );
   }
 
@@ -292,7 +300,7 @@ function validateDraftOutput(output: DraftOutput, input: DraftGenerationInput, f
 
 function buildMetadata(input: DraftGenerationInput, facts: DraftFact[], parsed: DraftOutput): DraftMetadata {
   const factLabelById = new Map(facts.map((f) => [f.id, f.label]));
-  const usedFactIds = parsed.personalizationFactsUsed.filter((id) => factLabelById.has(id));
+  const usedFactIds = parsed.personalizationFactsUsed.map(normalizeFactId).filter((id) => factLabelById.has(id));
   return {
     language: input.language,
     personalizationFactsUsed: usedFactIds,
@@ -318,31 +326,64 @@ export interface GenerateOutreachDraftParams {
   input: DraftGenerationInput;
 }
 
+export interface DraftGenerationSkipped {
+  status: "skipped";
+  /** Motivo legible, listo para persistir como draftSkippedReason -- nunca oculta el problema real. */
+  reason: string;
+  attemptsMade: number;
+}
+
+export interface DraftGenerationSucceeded {
+  status: "generated";
+  subject: string;
+  body: string;
+  metadata: DraftMetadata;
+}
+
+export type DraftGenerationOutcome = DraftGenerationSucceeded | DraftGenerationSkipped;
+
 /**
  * Genera un borrador real vía LLM, con hasta 1 reintento cuando la
  * primera respuesta no pasa la validación de contenido (ver
  * validateDraftOutput) -- nunca se acepta un borrador que no personalice
  * con al menos 2 hechos reales, que reviva una plantilla genérica vieja,
  * o que afirme contratación sin señal confirmada.
+ *
+ * NUNCA lanza (hallazgo real MIS-20260802-0002: una excepción acá
+ * escapaba sin aislamiento por candidato dentro de executeDiscoveryPlan
+ * y abortaba la misión completa aunque el problema fuera de UNA sola
+ * empresa). Cuando no se puede producir un borrador válido -- evidencia
+ * insuficiente, respuesta del LLM inválida dos veces, o el propio
+ * proveedor de LLM falla -- se devuelve `{status: "skipped", reason}` y
+ * cada llamador decide cómo continuar (nunca forzando un Draft
+ * inventado, nunca abortando la misión por esto).
  */
-export async function generateOutreachDraft(params: GenerateOutreachDraftParams): Promise<GeneratedDraft> {
+export async function generateOutreachDraft(params: GenerateOutreachDraftParams): Promise<DraftGenerationOutcome> {
   const facts = buildAvailableFacts(params.input);
   const basePrompt = buildDraftPrompt(params.input, facts);
 
   let lastProblems: string[] = ["no attempt made yet"];
+  let attemptsMade = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
+    attemptsMade = attempt + 1;
     const prompt =
       attempt === 0
         ? basePrompt
-        : `${basePrompt}\n\nYour previous attempt was rejected for these reasons -- fix them and answer again with the same JSON shape:\n${lastProblems.map((p) => `- ${p}`).join("\n")}`;
+        : `${basePrompt}\n\nYour previous attempt was rejected for these EXACT reasons -- fix ONLY the problem(s) described below, keep everything else that was already correct, and answer again with the same JSON shape:\n${lastProblems.map((p) => `- ${p}`).join("\n")}`;
 
-    const completion = await params.llmProvider.complete({
-      model: DEFAULT_MODEL,
-      messages: [
-        { role: "system", content: OUTREACH_AGENT_SYSTEM_PROMPT },
-        { role: "user", content: prompt },
-      ],
-    });
+    let completion: LLMCompletionResult;
+    try {
+      completion = await params.llmProvider.complete({
+        model: DEFAULT_MODEL,
+        messages: [
+          { role: "system", content: OUTREACH_AGENT_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+      });
+    } catch (err) {
+      lastProblems = [`LLM provider call failed: ${err instanceof Error ? err.message : String(err)}`];
+      continue;
+    }
     params.usage?.record(completion);
 
     const parsed = tryParseJson(completion.content, draftOutputSchema);
@@ -353,10 +394,14 @@ export async function generateOutreachDraft(params: GenerateOutreachDraftParams)
 
     const problems = validateDraftOutput(parsed, params.input, facts);
     if (problems.length === 0) {
-      return { subject: parsed.subject, body: parsed.body, metadata: buildMetadata(params.input, facts, parsed) };
+      return { status: "generated", subject: parsed.subject, body: parsed.body, metadata: buildMetadata(params.input, facts, parsed) };
     }
     lastProblems = problems;
   }
 
-  throw AppError.internal(`El Outreach Agent no pudo generar un borrador válido tras 2 intentos: ${lastProblems.join(" | ")}`);
+  return {
+    status: "skipped",
+    reason: `No se pudo generar un borrador válido tras ${attemptsMade} intento(s): ${lastProblems.join(" | ")}`,
+    attemptsMade,
+  };
 }

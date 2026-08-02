@@ -90,6 +90,8 @@ export interface ConvertDiscoveredCompanyResult {
   draftBlockedByRestriction: boolean;
   /** F24: DEMO_SEED/DUPLICATE_ACTIVE/CLIENT_OWNER_REVIEW -- null si el gate nunca bloqueó nada (no aplica cuando draftBlockedByRestriction ya es true). */
   draftBlockedByGate: DraftCreationBlockReason | null;
+  /** Motivo real cuando generateOutreachDraft no pudo producir un borrador válido (evidencia insuficiente/respuesta del LLM inválida dos veces) -- null si nunca se intentó o si sí se generó. Nunca se fuerza un Draft inventado ni se aborta la conversión por esto. */
+  draftSkippedReason: string | null;
   approvalRequestId: string | null;
 }
 
@@ -113,6 +115,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
   let draftCreated = false;
   let draftBlockedByRestriction = false;
   let draftBlockedByGate: DraftCreationBlockReason | null = null;
+  let draftSkippedReason: string | null = null;
   let approvalRequestId: string | null = null;
 
   if (decision.createLead) {
@@ -229,64 +232,81 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
                 recentActivitySubjects: [],
               },
             });
-            try {
-              const approval = await scopedDb.approvalRequest.create({
-                data: {
-                  tenantId: ctx.tenantId,
-                  agentTaskId: params.taskId,
-                  companyId: params.company.id,
-                  summary: `Borrador de email para ${params.company.name}`,
-                  proposedAction: {
-                    channel: "EMAIL",
-                    companyId: params.company.id,
-                    leadId,
-                    opportunityId,
-                    contactId: params.bestRealContact?.contactId ?? null,
-                    recipientKind,
-                    to,
-                    subject: draft.subject,
-                    body: draft.body,
-                    draftMetadata: draft.metadata,
-                  },
-                  riskLevel: "MEDIUM",
-                },
-              });
-              draftCreated = true;
-              approvalRequestId = approval.id;
+
+            if (draft.status === "skipped") {
+              // Invariante #6 (endurecimiento del motor, hallazgo real
+              // MIS-20260802-0002): evidencia insuficiente o el LLM no
+              // pudo producir un borrador válido -- nunca se fuerza un
+              // Draft inventado, nunca se aborta la misión por esto. El
+              // Lead/Opportunity ya creados arriba se conservan tal cual;
+              // solo el Draft queda sin crear, con el motivo real auditado.
+              draftSkippedReason = draft.reason;
               await logAuditEvent({
-                action: "outreach.drafted_by_agent",
-                entityType: "approvalRequest",
-                entityId: approval.id,
-                after: { companyId: params.company.id, opportunityId, to },
+                action: "outreach.draft_skipped_insufficient_evidence",
+                entityType: "company",
+                entityId: params.company.id,
+                after: { reason: draft.reason, attemptsMade: draft.attemptsMade },
               });
-              // F25.2 (consolidación del outbox): mismo criterio que
-              // mission-executor.ts/sales-tools.impl.ts. Nunca lanza.
-              await publishEventSafe(
-                buildEventEnvelope({
-                  eventType: "outreach.draft_created.v1",
-                  tenantId: ctx.tenantId,
-                  correlationId: params.taskId,
-                  causationId: null,
-                  actorType: "AGENT",
-                  actorId: ctx.actor?.agentInstanceId ?? "system",
-                  entityType: "approval_request",
-                  entityId: approval.id,
-                  payload: { approvalRequestId: approval.id, companyId: params.company.id, channel: "EMAIL", subjectPreview: draft.subject },
-                  idempotencyKey: buildIdempotencyKey(params.taskId, "outreach.draft_created.v1", approval.id),
-                }),
-              );
-            } catch (err) {
-              // F24 (Fase 2): perdió la carrera contra el índice único parcial.
-              if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-                draftBlockedByGate = "DUPLICATE_ACTIVE";
-                await logAuditEvent({
-                  action: "outreach.draft_blocked_by_gate",
-                  entityType: "company",
-                  entityId: params.company.id,
-                  after: { blockReason: "DUPLICATE_ACTIVE", reason: "Condición de carrera detectada por el índice único de la base de datos." },
+            } else {
+              try {
+                const approval = await scopedDb.approvalRequest.create({
+                  data: {
+                    tenantId: ctx.tenantId,
+                    agentTaskId: params.taskId,
+                    companyId: params.company.id,
+                    summary: `Borrador de email para ${params.company.name}`,
+                    proposedAction: {
+                      channel: "EMAIL",
+                      companyId: params.company.id,
+                      leadId,
+                      opportunityId,
+                      contactId: params.bestRealContact?.contactId ?? null,
+                      recipientKind,
+                      to,
+                      subject: draft.subject,
+                      body: draft.body,
+                      draftMetadata: draft.metadata,
+                    },
+                    riskLevel: "MEDIUM",
+                  },
                 });
-              } else {
-                throw err;
+                draftCreated = true;
+                approvalRequestId = approval.id;
+                await logAuditEvent({
+                  action: "outreach.drafted_by_agent",
+                  entityType: "approvalRequest",
+                  entityId: approval.id,
+                  after: { companyId: params.company.id, opportunityId, to },
+                });
+                // F25.2 (consolidación del outbox): mismo criterio que
+                // mission-executor.ts/sales-tools.impl.ts. Nunca lanza.
+                await publishEventSafe(
+                  buildEventEnvelope({
+                    eventType: "outreach.draft_created.v1",
+                    tenantId: ctx.tenantId,
+                    correlationId: params.taskId,
+                    causationId: null,
+                    actorType: "AGENT",
+                    actorId: ctx.actor?.agentInstanceId ?? "system",
+                    entityType: "approval_request",
+                    entityId: approval.id,
+                    payload: { approvalRequestId: approval.id, companyId: params.company.id, channel: "EMAIL", subjectPreview: draft.subject },
+                    idempotencyKey: buildIdempotencyKey(params.taskId, "outreach.draft_created.v1", approval.id),
+                  }),
+                );
+              } catch (err) {
+                // F24 (Fase 2): perdió la carrera contra el índice único parcial.
+                if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+                  draftBlockedByGate = "DUPLICATE_ACTIVE";
+                  await logAuditEvent({
+                    action: "outreach.draft_blocked_by_gate",
+                    entityType: "company",
+                    entityId: params.company.id,
+                    after: { blockReason: "DUPLICATE_ACTIVE", reason: "Condición de carrera detectada por el índice único de la base de datos." },
+                  });
+                } else {
+                  throw err;
+                }
               }
             }
           }
@@ -311,6 +331,7 @@ export async function convertDiscoveredCompany(params: ConvertDiscoveredCompanyP
     draftCreated,
     draftBlockedByRestriction,
     draftBlockedByGate,
+    draftSkippedReason,
     approvalRequestId,
   };
 }

@@ -99,7 +99,21 @@ export async function computeMissionProgress(missionTaskId: string): Promise<Mis
   // discoveredByAgentTaskId (ambos ya reales, puestos por
   // discovery-conversion.ts) -- nunca estimado, siempre contra la tabla
   // real.
-  const discoverCompaniesTaskIds = children.filter((t) => t.type === "discover_companies" && t.status === "DONE").map((t) => t.id);
+  // Invariante #8 (endurecimiento del motor, hallazgo real
+  // MIS-20260802-0002): ANTES este filtro exigía status==="DONE" --
+  // executeDiscoveryPlan crea Company/Lead/Opportunity/Draft reales UNA
+  // POR UNA dentro de su propio loop (mission-executor.ts), así que un
+  // fallo tardío (ej. en la última empresa del batch) dejaba el AgentTask
+  // en FAILED aunque las empresas anteriores ya se hubieran persistido
+  // de verdad -- este cómputo las ignoraba por completo, reportando "0
+  // empresas/leads/opportunities" pese a que sí existían filas reales en
+  // la base (exactamente lo reportado en MIS-20260802-0002). Se toman
+  // TODOS los discover_companies hijos sin importar su status final --
+  // las tablas reales (Company.discoveredByAgentTaskId/Lead
+  // .createdByAgentTaskId/Opportunity.createdByAgentTaskId) son la única
+  // fuente de verdad; un task id que nunca corrió simplemente no tiene
+  // ninguna fila real asociada, así que no hace falta filtrar acá.
+  const discoverCompaniesTaskIds = children.filter((t) => t.type === "discover_companies").map((t) => t.id);
   // F28 (misión real de Hospitality, 2026-07-29, doble conteo real
   // encontrado en producción): cuando el descubrimiento externo real
   // corre (fallback o dinámico) Y DESPUÉS el loop clásico estático
@@ -279,9 +293,11 @@ export async function computeContactCoverage(missionTaskId: string): Promise<Mis
     .filter((t) => t.type === "select_target_companies" && t.status === "DONE")
     .flatMap((t) => (t.output as { companyIds?: string[] } | null)?.companyIds ?? []);
 
-  const discoverTaskIds = children
-    .filter((t) => t.type === "discover_companies" && t.status === "DONE")
-    .map((t) => t.id);
+  // Invariante #8/#9: mismo criterio que computeMissionProgress arriba --
+  // no filtrar por status="DONE" acá, las Company reales ya persistidas
+  // (discoveredByAgentTaskId) son la fuente de verdad, no el status final
+  // del AgentTask que las creó (ver MIS-20260802-0002).
+  const discoverTaskIds = children.filter((t) => t.type === "discover_companies").map((t) => t.id);
   const discoveredCompanies =
     discoverTaskIds.length > 0
       ? await scopedDb.company.findMany({
