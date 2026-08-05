@@ -58,12 +58,54 @@ export interface ContactChannelResolution {
   value: string | null;
   reason: string;
   isEmailCapable: boolean;
+  // F34: nombre/rol del Contact real elegido -- solo poblado para
+  // VERIFIED_PERSON_EMAIL (los demás tiers no son de una persona
+  // específica). Provee la trazabilidad explícita pedida por la
+  // auditoría ("registra por qué se eligió cada contacto").
+  selectedContactName: string | null;
+  selectedContactRole: string | null;
+}
+
+// F34 (auditoría arquitectónica transversal, hallazgo real: casi 47% de
+// empresas aceptadas sin ningún canal de contacto real, y ningún criterio
+// de PARA CUÁL persona escribir el Draft cuando había varias verificadas
+// -- pickBestEmail (abajo) elegía por largo de local-part, nunca por rol.
+// Orden de prioridad pedido explícitamente: HR/recruiting primero (son
+// quienes realmente compran servicios de staffing), luego operaciones,
+// luego owner/president -- un orden COMERCIAL, no de autoridad jerárquica
+// (Owner pesa más en autoridad, pero HR es el comprador real). Roles sin
+// mapeo explícito (OTHER, null) quedan al final -- nunca se asume que un
+// rol desconocido es más relevante que uno identificado.
+const CONTACT_ROLE_PRIORITY: Record<string, number> = {
+  HR: 1,
+  RECRUITER: 1,
+  TALENT_ACQUISITION: 1,
+  OPERATIONS_MANAGER: 2,
+  PLANT_MANAGER: 2,
+  WAREHOUSE_MANAGER: 2,
+  PROJECT_MANAGER: 2,
+  PURCHASING_MANAGER: 2,
+  DIRECTOR_OF_OPERATIONS: 2,
+  OWNER: 3,
+  GENERAL_MANAGER: 3,
+};
+const UNKNOWN_ROLE_PRIORITY = 4;
+
+function contactRolePriority(decisionRole: string | null | undefined): number {
+  if (!decisionRole) return UNKNOWN_ROLE_PRIORITY;
+  return CONTACT_ROLE_PRIORITY[decisionRole] ?? UNKNOWN_ROLE_PRIORITY;
 }
 
 export interface ContactChannelContactInput {
   email: string | null;
   emailVerificationStatus: string | null;
   linkedinUrl: string | null;
+  // F34: ContactDecisionRole real (HR/RECRUITER/OPERATIONS_MANAGER/
+  // OWNER/...) -- usado ÚNICAMENTE para desempatar CUÁL contacto elegir
+  // cuando hay más de uno disponible en el mismo tier (ver
+  // CONTACT_ROLE_PRIORITY); nunca cambia el tier en sí.
+  decisionRole?: string | null;
+  name?: string | null;
   // F24 (auditoría de producción): Contact.verificationStatus (procedencia
   // del CONTACTO, no de la entregabilidad del email) -- "CONFIRMED"
   // significa que un humano proveyó este contacto explícitamente (ej.
@@ -156,6 +198,25 @@ function pickBestEmail(candidates: string[], opts: { excludeFreeProviders: boole
   return clean.slice().sort((a, b) => localPart(a).length - localPart(b).length || a.localeCompare(b))[0]!;
 }
 
+/**
+ * F34: mismo criterio de limpieza que pickBestEmail (nunca un email
+ * contaminado con teléfono), pero para elegir CUÁL Contact real usar
+ * cuando hay varios verificados para la misma Company -- ordena por
+ * CONTACT_ROLE_PRIORITY primero (HR/recruiting antes que operaciones
+ * antes que owner/president, el orden comercial pedido explícitamente),
+ * y solo usa el largo del local-part/alfabético como desempate final
+ * entre dos contactos del MISMO rol.
+ */
+function pickBestPersonContact(contacts: ContactChannelContactInput[]): ContactChannelContactInput | null {
+  const clean = contacts.filter((c) => c.email && !isPhoneContaminated(c.email));
+  if (clean.length === 0) return null;
+  return clean.slice().sort((a, b) => {
+    const priorityDiff = contactRolePriority(a.decisionRole) - contactRolePriority(b.decisionRole);
+    if (priorityDiff !== 0) return priorityDiff;
+    return localPart(a.email!).length - localPart(b.email!).length || a.email!.localeCompare(b.email!);
+  })[0]!;
+}
+
 export function resolveBestContactChannel(input: ContactChannelInput): ContactChannelResolution {
   // F27 (Internal Acceptance Test): chequeado ANTES que cualquier tier
   // comercial, pero exige AMBOS marcadores a la vez -- source==="INTERNAL_TEST"
@@ -171,21 +232,27 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
       value: internalTestContact.email,
       reason: "Contacto de prueba interna de aceptación (INTERNAL_TEST) -- nunca una verificación comercial real, ver internal-testing/service.ts.",
       isEmailCapable: true,
+      selectedContactName: internalTestContact.name ?? null,
+      selectedContactRole: internalTestContact.decisionRole ?? null,
     };
   }
 
-  const verifiedPersonEmail = pickBestEmail(
-    input.contacts
-      .filter((c) => c.email && (c.emailVerificationStatus === "VERIFIED" || c.verificationStatus === "CONFIRMED"))
-      .map((c) => c.email!),
-    { excludeFreeProviders: false },
+  // F34: entre TODOS los contactos verificados/confirmados, se elige por
+  // rol comercial (HR/recruiting > operaciones > owner/president), nunca
+  // por el largo del email -- antes un "Owner" con un local-part más
+  // corto ganaba sobre un "HR Manager" real disponible para la misma
+  // Company, pese a que HR es a quien realmente hay que escribirle.
+  const bestPersonContact = pickBestPersonContact(
+    input.contacts.filter((c) => c.email && (c.emailVerificationStatus === "VERIFIED" || c.verificationStatus === "CONFIRMED")),
   );
-  if (verifiedPersonEmail) {
+  if (bestPersonContact) {
     return {
       channel: "VERIFIED_PERSON_EMAIL",
-      value: verifiedPersonEmail,
-      reason: "Contacto personal real con email verificado o explícitamente confirmado por un humano -- el canal más confiable disponible.",
+      value: bestPersonContact.email,
+      reason: `Contacto personal real con email verificado o explícitamente confirmado por un humano -- el canal más confiable disponible (rol: ${bestPersonContact.decisionRole ?? "sin categorizar"}, prioridad comercial ${contactRolePriority(bestPersonContact.decisionRole)}/4).`,
       isEmailCapable: true,
+      selectedContactName: bestPersonContact.name ?? null,
+      selectedContactRole: bestPersonContact.decisionRole ?? null,
     };
   }
 
@@ -199,6 +266,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
       value: verifiedOrgEmail,
       reason: "Email organizacional (info@/hr@/careers@...) verificado.",
       isEmailCapable: true,
+      selectedContactName: null,
+      selectedContactRole: null,
     };
   }
 
@@ -212,6 +281,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
       value: websiteOrgEmail,
       reason: "Email organizacional encontrado en el sitio oficial, sin verificación de entregabilidad todavía.",
       isEmailCapable: true,
+      selectedContactName: null,
+      selectedContactRole: null,
     };
   }
 
@@ -221,6 +292,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
       value: input.contactFormUrl,
       reason: "Sin ningún email disponible -- formulario de contacto real encontrado en el sitio oficial.",
       isEmailCapable: false,
+      selectedContactName: null,
+      selectedContactRole: null,
     };
   }
 
@@ -230,6 +303,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
       value: input.careersPageUrl,
       reason: "Sin ningún email ni formulario disponible -- página de careers/jobs real encontrada en el sitio oficial.",
       isEmailCapable: false,
+      selectedContactName: null,
+      selectedContactRole: null,
     };
   }
 
@@ -242,6 +317,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
         ? "Sin email, formulario ni careers page -- LinkedIn real de un contacto encontrado."
         : "Sin email, formulario ni careers page -- LinkedIn corporativo real encontrado en el sitio oficial.",
       isEmailCapable: false,
+      selectedContactName: linkedinContact?.name ?? null,
+      selectedContactRole: linkedinContact?.decisionRole ?? null,
     };
   }
 
@@ -251,6 +328,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
       value: input.companyPhone,
       reason: "Sin email, formulario, careers page ni LinkedIn -- solo queda el teléfono principal de la empresa.",
       isEmailCapable: false,
+      selectedContactName: null,
+      selectedContactRole: null,
     };
   }
 
@@ -258,6 +337,8 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
     channel: "NONE",
     value: null,
     reason: "Ningún canal de contacto real disponible todavía -- requiere investigación manual. La Company sigue siendo válida en el CRM.",
+    selectedContactName: null,
+    selectedContactRole: null,
     isEmailCapable: false,
   };
 }

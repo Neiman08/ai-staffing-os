@@ -248,3 +248,73 @@ test("INTERNAL_TEST_EMAIL nunca se interpreta como una verificación comercial: 
   // Sigue siendo tier 1 real (CONFIRMED), nunca degradado por tener un `source` real -- el chequeo de INTERNAL_TEST_EMAIL es aditivo, nunca interfiere con el resto de la lógica.
   assert.equal(r.channel, "VERIFIED_PERSON_EMAIL");
 });
+
+// ============================================================
+// F34 (auditoría arquitectónica transversal, hallazgo real: casi 47% de
+// empresas aceptadas sin ningún canal de contacto real, y ningún criterio
+// real de A QUIÉN escribirle cuando había varios contactos verificados
+// -- el desempate anterior era por largo de local-part, nunca por rol.
+// Orden pedido explícitamente: HR/recruiting > operaciones > owner/
+// president > sin categorizar.
+// ============================================================
+
+test("regresión real: entre un Owner y un HR Manager, ambos verificados, se elige al HR Manager (orden comercial, no de autoridad jerárquica)", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        { email: "owner@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "OWNER", name: "Pat Owner" },
+        { email: "hr@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "HR", name: "Sam HR" },
+      ],
+    }),
+  );
+  assert.equal(r.channel, "VERIFIED_PERSON_EMAIL");
+  assert.equal(r.value, "hr@acme.com");
+  assert.equal(r.selectedContactName, "Sam HR");
+  assert.equal(r.selectedContactRole, "HR");
+});
+
+test("entre operaciones y owner/president, ambos verificados, se elige operaciones", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        { email: "owner@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "OWNER", name: "Pat Owner" },
+        { email: "ops@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "OPERATIONS_MANAGER", name: "Alex Ops" },
+      ],
+    }),
+  );
+  assert.equal(r.value, "ops@acme.com");
+  assert.equal(r.selectedContactRole, "OPERATIONS_MANAGER");
+});
+
+test("sin ningún HR/operations/owner disponible, un rol sin categorizar (OTHER/null) sigue siendo elegible como último recurso dentro del tier", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "someone@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "OTHER", name: "Someone" }],
+    }),
+  );
+  assert.equal(r.channel, "VERIFIED_PERSON_EMAIL");
+  assert.equal(r.value, "someone@acme.com");
+});
+
+test("recruiter y talent acquisition tienen la misma prioridad que HR (todos 'compradores reales' del servicio)", () => {
+  const r1 = resolveBestContactChannel(
+    baseInput({ contacts: [{ email: "recruiter@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "RECRUITER" }] }),
+  );
+  const r2 = resolveBestContactChannel(
+    baseInput({ contacts: [{ email: "talent@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "TALENT_ACQUISITION" }] }),
+  );
+  assert.equal(r1.channel, "VERIFIED_PERSON_EMAIL");
+  assert.equal(r2.channel, "VERIFIED_PERSON_EMAIL");
+});
+
+test("un email contaminado con teléfono nunca gana aunque su rol tenga mayor prioridad -- limpieza sigue siendo la primera condición", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        { email: "7084033300hr@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "HR", name: "Contaminated HR" },
+        { email: "owner@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "OWNER", name: "Clean Owner" },
+      ],
+    }),
+  );
+  assert.equal(r.value, "owner@acme.com", "el email contaminado nunca debe elegirse, sin importar la prioridad de rol");
+});

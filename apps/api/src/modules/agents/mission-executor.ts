@@ -1560,11 +1560,18 @@ async function runDiscoveryPlanBody(
           // "nunca eliminar canales inferiores" (Fase 4): un canal
           // encontrado en una corrida anterior sigue contando acá.
           const [contactsForChannel, contactPointsForChannel] = await Promise.all([
-            scopedDb.contact.findMany({ where: { companyId: company.id }, select: { email: true, emailVerificationStatus: true, linkedinUrl: true } }),
+            scopedDb.contact.findMany({
+              where: { companyId: company.id },
+              select: { email: true, emailVerificationStatus: true, linkedinUrl: true, decisionRole: true, firstName: true, lastName: true, verificationStatus: true, source: true },
+            }),
             scopedDb.companyContactPoint.findMany({ where: { companyId: company.id }, select: { email: true, verificationStatus: true } }),
           ]);
           const channelResolution = resolveBestContactChannel({
-            contacts: contactsForChannel,
+            // F34: se agrega decisionRole/name -- resolveBestContactChannel
+            // usa decisionRole para elegir ENTRE varios contactos
+            // verificados por prioridad comercial (HR/recruiting >
+            // operaciones > owner/president), nunca por el largo del email.
+            contacts: contactsForChannel.map((c) => ({ ...c, name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null })),
             contactPoints: contactPointsForChannel,
             companyEmail: company.email,
             companyPhone: company.phone,

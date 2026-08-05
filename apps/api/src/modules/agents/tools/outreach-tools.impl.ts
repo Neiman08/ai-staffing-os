@@ -170,7 +170,18 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
         // gastar ningún request al LLM -- nunca se redacta un "borrador
         // de email" para una empresa sin ningún email real.
         const channelResolution = resolveBestContactChannel({
-          contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus, source: c.source })),
+          // F34: decisionRole/name -- resolveBestContactChannel los usa
+          // para elegir ENTRE varios contactos verificados por prioridad
+          // comercial (HR/recruiting > operaciones > owner/president).
+          contacts: company.contacts.map((c) => ({
+            email: c.email,
+            emailVerificationStatus: c.emailVerificationStatus,
+            linkedinUrl: c.linkedinUrl,
+            verificationStatus: c.verificationStatus,
+            source: c.source,
+            decisionRole: c.decisionRole,
+            name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+          })),
           contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
           companyEmail: company.email,
           companyPhone: company.phone,

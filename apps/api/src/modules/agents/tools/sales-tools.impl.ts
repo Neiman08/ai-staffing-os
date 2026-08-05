@@ -438,7 +438,19 @@ Responde ÚNICAMENTE con un JSON de la forma {"adjustment": <número entre -10 y
           const channelForGate =
             input.channel === "EMAIL"
               ? resolveBestContactChannel({
-                  contacts: company.contacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus, source: c.source })),
+                  // F34: decisionRole/name -- resolveBestContactChannel
+                  // los usa para elegir ENTRE varios contactos verificados
+                  // por prioridad comercial (HR/recruiting > operaciones >
+                  // owner/president).
+                  contacts: company.contacts.map((c) => ({
+                    email: c.email,
+                    emailVerificationStatus: c.emailVerificationStatus,
+                    linkedinUrl: c.linkedinUrl,
+                    verificationStatus: c.verificationStatus,
+                    source: c.source,
+                    decisionRole: c.decisionRole,
+                    name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+                  })),
                   contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
                   companyEmail: company.email,
                   companyPhone: company.phone,

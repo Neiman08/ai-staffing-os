@@ -99,7 +99,17 @@ export function createDraftExecutor(llmProvider: LLMProvider = buildLLMProvider(
         const contactableContacts = company.contacts.filter((c) => !c.doNotContact && !c.bouncedAt && !c.unsubscribedAt);
 
         const channelResolution = resolveBestContactChannel({
-          contacts: contactableContacts.map((c) => ({ email: c.email, emailVerificationStatus: c.emailVerificationStatus, linkedinUrl: c.linkedinUrl, verificationStatus: c.verificationStatus })),
+          // F34: decisionRole/name -- resolveBestContactChannel los usa
+          // para elegir ENTRE varios contactos verificados por prioridad
+          // comercial (HR/recruiting > operaciones > owner/president).
+          contacts: contactableContacts.map((c) => ({
+            email: c.email,
+            emailVerificationStatus: c.emailVerificationStatus,
+            linkedinUrl: c.linkedinUrl,
+            verificationStatus: c.verificationStatus,
+            decisionRole: c.decisionRole,
+            name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+          })),
           contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
           companyEmail: company.email,
           companyPhone: company.phone,
