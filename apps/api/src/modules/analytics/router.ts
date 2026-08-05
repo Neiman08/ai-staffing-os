@@ -6,6 +6,7 @@ import * as analyticsService from "./service";
 import * as recruitingService from "./recruiting.service";
 import * as commercialService from "./commercial.service";
 import * as financialService from "./financial.service";
+import * as industryPerformanceService from "./industry-performance.service";
 
 // F11.3: mismo criterio que dashboard/router.ts y reports/router.ts --
 // sin un solo permiso de ruta (el executive dashboard es, por diseño,
@@ -45,6 +46,20 @@ analyticsRouter.get("/analytics/financial", requireInternalIdentity(), async (re
   try {
     const query = analyticsPeriodQuerySchema.parse(req.query);
     res.json(await financialService.getFinancialMetrics(query));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// F34 (auditoría arquitectónica transversal, 2026-08-05): "implementa
+// soporte para priorizar industrias según datos reales... demostrar, no
+// asumir, el rendimiento" -- solo lectura, nunca cambia ninguna regla
+// comercial ni envía nada. `sortBy` opcional (default costPerOpportunity,
+// menor es mejor) -- ver industry-performance.service.ts para las claves válidas.
+analyticsRouter.get("/analytics/industry-performance", requireInternalIdentity(), async (req, res, next) => {
+  try {
+    const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : undefined;
+    res.json(await industryPerformanceService.getIndustryPerformance(sortBy));
   } catch (err) {
     next(err);
   }

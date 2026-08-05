@@ -201,3 +201,32 @@ test("tenancy: el executive dashboard de tenant-titan tiene conteos no negativos
   assert.ok((body.recruiting.fillRate as number) >= 0 && (body.recruiting.fillRate as number) <= 1);
   assert.equal(typeof body.commercial.pipelineValue, "string");
 });
+
+// F34 (auditoría arquitectónica transversal, 2026-08-05): GET
+// /analytics/industry-performance -- solo lectura, agrega datos REALES
+// ya persistidos por misiones reales (nunca inventa una industria ni un
+// número), nunca cambia ninguna regla comercial ni envía nada.
+test("GET /analytics/industry-performance: solo lectura, agrega datos reales por industria sin inventar nada", async () => {
+  const res = await fetch(`${baseUrl}/api/v1/analytics/industry-performance`, { headers: { "x-dev-user": "ceo@titan.dev" } });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    generatedAt: string;
+    sortedBy: string;
+    industries: Array<{ industryName: string; missionCount: number; metrics: Record<string, unknown> }>;
+    missionsWithoutData: number;
+  };
+  assert.equal(body.sortedBy, "costPerOpportunity");
+  assert.ok(Array.isArray(body.industries));
+  assert.ok(body.missionsWithoutData >= 0);
+  for (const entry of body.industries) {
+    assert.ok(entry.industryName.length > 0, "nunca una industria con nombre vacío");
+    assert.ok(entry.missionCount >= 1, "solo industrias con al menos 1 misión real aportando datos");
+  }
+});
+
+test("GET /analytics/industry-performance: ninguna identidad de portal puede alcanzarlo (requireInternalIdentity)", async () => {
+  for (const devUser of ["worker-portal@titan.dev", "candidate-portal@titan.dev", "client-admin@titan.dev", "client-manager@titan.dev"]) {
+    const res = await fetch(`${baseUrl}/api/v1/analytics/industry-performance`, { headers: { "x-dev-user": devUser } });
+    assert.equal(res.status, 403, `${devUser} debería recibir 403`);
+  }
+});
