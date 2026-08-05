@@ -354,10 +354,27 @@ async function runAutoExternalDiscoveryFallback(
   targetJobTitles: string[],
   decisionRoles: string[],
   categoryIds: string[],
+  // F34 (fix real post-producción, hallazgo MIS-20260805-0010, Property
+  // Maintenance -- reproducción exacta de MIS-20260805-0002): cuando esta
+  // misión pidió SOLO términos literales (sin ninguna Industry curada
+  // resuelta), industryTargets queda deliberadamente [] más abajo (nunca
+  // [null], para no reabrir el bug original) -- pero eso significa que el
+  // "loop de siempre" (create_campaign/select_target_companies/
+  // score_company/create_lead/create_opportunity) NUNCA corre para las
+  // Companies que este fallback acaba de descubrir: quedan validadas
+  // (EXACT, email verificado, opportunityRecommendation=CREATE_OPPORTUNITY)
+  // pero sin un solo Lead/Opportunity/Draft real, para siempre. Cuando el
+  // llamador confirma que no hay ninguna Industry curada que vaya a
+  // procesar estas Companies después, este fallback debe convertir la
+  // evidencia él mismo -- mismo mecanismo ya usado por
+  // runDynamicDiscoveryMission (F14), nunca duplicado: cuando SÍ hay una
+  // Industry curada, sigue false, para no crear el mismo Lead dos veces.
+  convertToCommercialActions: boolean,
 ): Promise<{ createdCompanyIds: string[] }> {
   log(missionTaskId, "auto external discovery fallback started", {
     reason: "internal CRM supply insufficient for the requested volume",
     searchQueries: plan.searchQueries.length,
+    convertToCommercialActions,
   });
 
   const report = await executeDiscoveryPlan({
@@ -367,6 +384,7 @@ async function runAutoExternalDiscoveryFallback(
     businessActivities,
     targetJobTitles,
     decisionRoles,
+    convertToCommercialActions,
   });
 
   // F13: hallazgo real durante la validación -- persistAcceptedCandidate
@@ -727,6 +745,12 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
         externalIntent.targetJobTitles,
         externalIntent.decisionRoles,
         categoryIds,
+        // F34: mismo criterio que industryTargets (abajo) -- sin ninguna
+        // Industry curada resuelta, el loop de siempre nunca va a
+        // procesar estas Companies, así que este fallback convierte su
+        // propia evidencia. Con al menos una Industry curada, el loop de
+        // siempre sigue siendo el único que convierte (nunca duplicado).
+        industries.length === 0,
       );
       discoveredCompanyIdsThisMission = fallbackResult.createdCompanyIds;
       await syncMissionOutput(missionTaskId, "RUNNING", { appliedRestrictions: restrictions, restrictionNotes });
