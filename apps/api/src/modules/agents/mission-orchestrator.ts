@@ -459,7 +459,12 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
   // (useExternalDiscovery=false, debajo) sigue exactamente igual que
   // antes de F7.3.
   if (interpreted.useExternalDiscovery) {
-    await runDynamicDiscoveryMission(missionTaskId, interpreted.rawInstruction, interpreted.externalSearchTerms ?? []);
+    await runDynamicDiscoveryMission(
+      missionTaskId,
+      interpreted.rawInstruction,
+      interpreted.externalSearchTerms ?? [],
+      interpreted.missionRestrictions ?? DEFAULT_MISSION_RESTRICTIONS,
+    );
     return;
   }
 
@@ -1123,10 +1128,32 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
  * esta fase es 100% estructurado (discoveryExecution), sin narración de
  * LLM, consistente con que F7.3 tiene prohibido llamar a OpenAI.
  */
-async function runDynamicDiscoveryMission(missionTaskId: string, rawInstruction: string, externalSearchTerms: string[] = []): Promise<void> {
+async function runDynamicDiscoveryMission(
+  missionTaskId: string,
+  rawInstruction: string,
+  externalSearchTerms: string[] = [],
+  // F34 (fix real post-producción, hallazgo MIS-20260805-0014, Hospitality
+  // con requireHiringSignal): `interpretBusinessIntent` calcula sus propias
+  // restrictions con `mergeMissionRestrictions(null, rawInstruction)` --
+  // SOLO el detector determinista de mission-restrictions.ts, sin el
+  // parseo del LLM (interpretDailyDirective) que YA corrió en
+  // launchMission y quedó persistido en missionTask.input.missionRestrictions
+  // (el mismo valor que appliedRestrictions le muestra al usuario). Una
+  // instrucción como "que tengan señales reales de contratación de X" --
+  // que el LLM identifica correctamente como requireHiringSignal=true,
+  // pero que REQUIRE_HIRING_SIGNAL_RE (patrones fijos: "que estén
+  // contratando"/"actively hiring"/etc.) no cubre -- perdía silenciosamente
+  // esa restricción en este camino: la misión mostraba
+  // appliedRestrictions.requireHiringSignal=true al lanzarse, pero la
+  // conversión real corría con requireHiringSignal=false. Mismo patrón que
+  // el pipeline clásico ya usa correctamente más abajo (`interpreted.missionRestrictions
+  // ?? DEFAULT_MISSION_RESTRICTIONS`) -- nunca recalcular cuando ya existe
+  // el valor combinado (LLM ∪ determinista) real de esta misión.
+  missionRestrictions: MissionRestrictions,
+): Promise<void> {
   const intent = interpretBusinessIntent(rawInstruction, externalSearchTerms);
   const plan = buildMissionPlan(intent);
-  const restrictions = intent.restrictions;
+  const restrictions = missionRestrictions;
   const restrictionNotes = buildRestrictionNotes(restrictions);
 
   log(missionTaskId, "dynamic discovery mission started", {
