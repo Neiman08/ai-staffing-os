@@ -86,6 +86,44 @@ test("sin ninguna empresa seleccionada -- nunca marca INDUSTRY_MISMATCH (0 empre
   assert.equal(result.mismatchedCompanyCount, 0);
 });
 
+// F34 (fix real post-producción, hallazgo MIS-20260805-0005, Food
+// Processing, 2026-08-05): Company.tradeKey solo se puebla cuando
+// businessConfidence !== "WEAK" (mission-executor.ts, F19 Fase 1) -- si el
+// llamador (mission-orchestrator.ts::closeMission) pasara ese tradeKey
+// directamente, una misión donde TODAS las empresas coincidieron con el
+// término pedido pero con evidencia débil terminaría con taxonomyKey=null
+// para todas -> INDUSTRY_MISMATCH falso, aunque sí coincidían al momento
+// de la query real. Este test documenta el contrato que el llamador debe
+// cumplir: usar el taxonomyKey REAL de companyValidations (sin gating por
+// confianza), nunca Company.tradeKey directo, para empresas recién
+// descubiertas en ESTA misión.
+test("empresas con evidencia SOLO débil (WEAK, tradeKey nunca poblado) pero que sí coincidieron con el término pedido al momento de la query -- taxonomyKey=null (simulando pasar Company.tradeKey directo) SÍ dispara INDUSTRY_MISMATCH; taxonomyKey='literal:<término>' (el valor real de companyValidations) NO", () => {
+  const asIfCallerUsedGatedTradeKey = evaluateMissionConsistency(
+    baseInput({
+      requestedLiteralTerms: ["procesamiento de alimentos"],
+      selectedCompanies: [
+        { companyId: "c1", taxonomyKey: null },
+        { companyId: "c2", taxonomyKey: null },
+        { companyId: "c3", taxonomyKey: null },
+      ],
+    }),
+  );
+  assert.equal(asIfCallerUsedGatedTradeKey.consistent, false);
+
+  const asIfCallerUsedMatchTimeTaxonomyKey = evaluateMissionConsistency(
+    baseInput({
+      requestedLiteralTerms: ["procesamiento de alimentos"],
+      selectedCompanies: [
+        { companyId: "c1", taxonomyKey: "literal:procesamiento de alimentos" },
+        { companyId: "c2", taxonomyKey: "literal:procesamiento de alimentos" },
+        { companyId: "c3", taxonomyKey: "literal:procesamiento de alimentos" },
+      ],
+    }),
+  );
+  assert.equal(asIfCallerUsedMatchTimeTaxonomyKey.consistent, true);
+  assert.equal(asIfCallerUsedMatchTimeTaxonomyKey.matchedCompanyCount, 3);
+});
+
 test("determinismo: mismo input siempre produce el mismo resultado", () => {
   const input = baseInput({ requestedTaxonomyKeys: ["roofing"], selectedCompanies: [{ companyId: "c1", taxonomyKey: "construction" }] });
   assert.deepEqual(evaluateMissionConsistency(input), evaluateMissionConsistency(input));

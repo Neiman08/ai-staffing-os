@@ -667,5 +667,10 @@ export const missionDetailSchema = missionListItemSchema.extend({
   // oferta real para lo pedido — null en cualquier misión que encontró
   // suficiente oferta interna sin necesitar descubrimiento externo.
   discoveryFallback: discoveryExecutionReportSchema.nullable(),
+  // F34 (auditoría arquitectónica transversal, 2026-08-05): detalle real
+  // de por qué closeMission marcó la misión INCONSISTENT (ver
+  // mission-consistency.ts) -- [] en cualquier misión que pasó el chequeo
+  // o nunca declaró un rubro específico, nunca inventado.
+  consistencyIssues: z.array(z.object({ code: z.string(), detail: z.string() })).default([]),
 });
 export type MissionDetail = z.infer<typeof missionDetailSchema>;

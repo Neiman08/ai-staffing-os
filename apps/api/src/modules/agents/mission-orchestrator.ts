@@ -1464,6 +1464,20 @@ export async function closeMission(missionTaskId: string): Promise<void> {
 
   const consistencyCompanyIds = new Set<string>();
   const discoverTaskIdsForConsistency: string[] = [];
+  // F34 (fix real post-producción, hallazgo MIS-20260805-0005, Food
+  // Processing): Company.tradeKey solo se puebla cuando businessConfidence
+  // !== "WEAK" (ver mission-executor.ts, F19 Fase 1) -- una misión donde
+  // TODAS las empresas seleccionadas coincidieron con el rubro pedido pero
+  // con evidencia débil (ej. "procesamiento de alimentos") terminaba con
+  // tradeKey=null para las 3, y el chequeo de abajo las marcaba
+  // INDUSTRY_MISMATCH aunque sí coincidían al momento de la query real --
+  // confundiendo "evidencia débil" (ya cubierto por BusinessValidationStatus)
+  // con "industria equivocada" (lo que este chequeo debe detectar). Se usa
+  // el taxonomyKey REAL de la validación (discover_companies.output.companyValidations,
+  // sin gating por confianza) como fuente primaria, y Company.tradeKey solo
+  // como fallback para empresas reutilizadas del CRM (select_target_companies,
+  // que nunca pasaron por una validación de ESTA misión).
+  const matchTimeTaxonomyKeyByCompanyId = new Map<string, string>();
   for (const t of childTasksForConsistency) {
     if (t.type === "select_target_companies" && t.output) {
       for (const id of (t.output as { companyIds?: string[] }).companyIds ?? []) consistencyCompanyIds.add(id);
@@ -1471,8 +1485,11 @@ export async function closeMission(missionTaskId: string): Promise<void> {
     if (t.type === "discover_companies") {
       discoverTaskIdsForConsistency.push(t.id);
       if (t.output) {
-        const discoOutput = t.output as { createdCompanyIds?: string[] };
+        const discoOutput = t.output as { createdCompanyIds?: string[]; companyValidations?: Array<{ companyId: string; taxonomyKey: string }> };
         for (const id of discoOutput.createdCompanyIds ?? []) consistencyCompanyIds.add(id);
+        for (const cv of discoOutput.companyValidations ?? []) {
+          if (cv.companyId && cv.taxonomyKey) matchTimeTaxonomyKeyByCompanyId.set(cv.companyId, cv.taxonomyKey);
+        }
       }
     }
   }
@@ -1493,7 +1510,10 @@ export async function closeMission(missionTaskId: string): Promise<void> {
     ? evaluateMissionConsistency({
         requestedTaxonomyKeys: intentForConsistency.specificMatchedTaxonomyKeys,
         requestedLiteralTerms: intentForConsistency.literalCompanyTypeTerms,
-        selectedCompanies: companiesForConsistency.map((c) => ({ companyId: c.id, taxonomyKey: c.tradeKey })),
+        selectedCompanies: companiesForConsistency.map((c) => ({
+          companyId: c.id,
+          taxonomyKey: matchTimeTaxonomyKeyByCompanyId.get(c.id) ?? c.tradeKey,
+        })),
       })
     : { consistent: true, issues: [], matchedCompanyCount: 0, mismatchedCompanyCount: 0 };
 

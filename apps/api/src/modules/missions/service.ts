@@ -203,6 +203,7 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     ceoIntentMeta?: MissionDetail["ceoIntentMeta"];
     discoveryExecution?: MissionDetail["discoveryExecution"];
     discoveryFallback?: MissionDetail["discoveryFallback"];
+    consistencyIssues?: MissionDetail["consistencyIssues"];
   };
   const input = detail.input as { unrecognizedTerms?: string[] };
 
@@ -430,6 +431,9 @@ export async function getMissionDetail(id: string): Promise<MissionDetail> {
     // F13: null en toda misión que encontró suficiente oferta interna sin
     // necesitar el fallback automático de descubrimiento externo.
     discoveryFallback: output.discoveryFallback ?? null,
+    // F34: [] en toda misión que pasó el chequeo de consistencia o nunca
+    // pidió un rubro específico (ver mission-consistency.ts).
+    consistencyIssues: output.consistencyIssues ?? [],
   };
 }
 
