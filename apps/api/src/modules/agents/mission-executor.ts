@@ -31,6 +31,7 @@ import { classifyProviderHttpStatus, getProviderHealth, markProviderStatus } fro
 import { getDataProviderBudgetStatus } from "./data-provider-budget";
 import { enrichCompanyWithOrganizationalEmails, type WebsiteIntelligencePort } from "./company-enrichment";
 import { evaluateHiringSignals, type HiringSignalResult } from "../ceo-intelligence/hiring-signals";
+import { computeCommercialMetrics, type CommercialMetricsResult } from "../ceo-intelligence/commercial-metrics";
 import { buildDecisionRolePlan, type DecisionRolePlan } from "../ceo-intelligence/role-planning";
 import { enrichCompanyWithDecisionContacts, type ContactProviderPort, type HunterContactProviderPort } from "./contact-enrichment";
 import { createPdlMissionBudget } from "./pdl-budget";
@@ -450,6 +451,11 @@ export interface DiscoveryExecutionReport {
   // inventado sin base real.
   queriesSkippedForSaturation: number;
   costAvoidedUsdBySaturation: number;
+  // F34: métricas comerciales reales pedidas explícitamente por la
+  // auditoría (novelty/duplicate/validated-company/contact-coverage/
+  // email-coverage/lead/opportunity/draft rates + costo por etapa) --
+  // ver commercial-metrics.ts.
+  commercialMetrics: CommercialMetricsResult;
 }
 
 interface FinalQuery {
@@ -817,6 +823,28 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companyErrors: [],
     queriesSkippedForSaturation: 0,
     costAvoidedUsdBySaturation: 0,
+    commercialMetrics: computeCommercialMetrics({
+      rawResults: 0,
+      acceptedResults: 0,
+      duplicatesWithinMission: 0,
+      duplicatesAlreadyInCrm: 0,
+      companiesCreated: 0,
+      validatedCompanies: 0,
+      companiesConsidered: 0,
+      companiesWithContactPoint: 0,
+      emailsFound: 0,
+      emailsVerified: 0,
+      leadsCreated: 0,
+      opportunitiesCreated: 0,
+      draftsCreated: 0,
+      emailsSent: null,
+      emailsDelivered: null,
+      hardBounces: null,
+      spamBlocked: null,
+      repliesReceived: null,
+      meetingsBooked: null,
+      costUsd: 0,
+    }),
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -1960,6 +1988,34 @@ async function runDiscoveryPlanBody(
       queriesSkippedForSaturationCount > 0 && executedQueryCosts.length > 0
         ? Number(((executedQueryCosts.reduce((sum, c) => sum + c, 0) / executedQueryCosts.length) * queriesSkippedForSaturationCount).toFixed(4))
         : 0,
+    // F34 (auditoría arquitectónica transversal, 2026-08-05): métricas
+    // comerciales reales pedidas explícitamente por la auditoría --
+    // computadas de los mismos conteos reales de arriba, nunca una
+    // segunda fuente de verdad. sent/delivered/hardBounce/spamBlocked/
+    // reply/meeting quedan null a este nivel (esta misión no cruza
+    // contra EmailMessage todavía) -- nunca 0 fabricado.
+    commercialMetrics: computeCommercialMetrics({
+      rawResults,
+      acceptedResults,
+      duplicatesWithinMission,
+      duplicatesAlreadyInCrm,
+      companiesCreated: createdCompanyIds.length,
+      validatedCompanies: companyValidations.filter((c) => c.businessConfidence !== "WEAK" && c.businessConfidence !== "REJECTED").length,
+      companiesConsidered: createdCompanyIds.length,
+      companiesWithContactPoint: companiesEnrichedTotal,
+      emailsFound: emailsExtractedTotal,
+      emailsVerified: emailsVerifiedTotal,
+      leadsCreated: leadsCreatedTotal,
+      opportunitiesCreated: opportunitiesCreatedTotal,
+      draftsCreated: draftsCreatedTotal,
+      emailsSent: null,
+      emailsDelivered: null,
+      hardBounces: null,
+      spamBlocked: null,
+      repliesReceived: null,
+      meetingsBooked: null,
+      costUsd: totalCostUsd,
+    }),
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,

@@ -306,6 +306,21 @@ test("query ejecutada una sola vez: 1 query planificada -> 1 queryExecution, cue
   assert.equal(report.missionState, "COMPLETED"); // 1 de 1 pedida (target por defecto del fixture)
 });
 
+// F34: commercialMetrics se computa a partir de los MISMOS conteos reales
+// del reporte, nunca una segunda fuente de verdad -- sent/delivered/
+// reply/meeting quedan null a este nivel (nunca 0 fabricado).
+test("commercialMetrics: se computa correctamente a partir de los conteos reales del reporte", async () => {
+  const tenantId = await setupTenant("commercial-metrics");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const report = await run(tenantId, manufacturingPlan(), providers);
+
+  assert.equal(report.commercialMetrics.noveltyRate, 1, "1 aceptado de 1 crudo -> 100% novedad");
+  assert.equal(report.commercialMetrics.validatedCompanyRate, 1, "candidateFixture trae evidencia EXACT -> validada");
+  assert.equal(report.commercialMetrics.replyRate, null, "sin dato real de respuestas a este nivel -- nunca 0 fabricado");
+  assert.equal(report.commercialMetrics.deliveredRate, null);
+  assert.equal(report.commercialMetrics.costPerValidatedCompany, report.costUsd > 0 ? report.costUsd : null);
+});
+
 // ============================================================
 // F34 (auditoría arquitectónica transversal, hallazgo real: 71.9% de
 // discovery duplicado / 48.4% de queries sin ninguna empresa nueva sobre
