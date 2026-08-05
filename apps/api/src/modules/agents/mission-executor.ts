@@ -38,6 +38,7 @@ import { recommendOpportunityAction, type OpportunityRecommendationResult, type 
 import { convertDiscoveredCompany, type ConvertDiscoveredCompanyResult } from "./discovery-conversion";
 import { resolvePositionsToOffer } from "./draft-generation";
 import { UsageAccumulator } from "./usage";
+import { getQuerySaturationMap, recordQueryExecution } from "./query-saturation-memory";
 
 // Mismo patrón exacto que task-executor.ts/draft.executor.ts -- nunca
 // lanza al construirse, solo al llamar .complete() de verdad (F14:
@@ -181,6 +182,11 @@ export interface QueryExecutionRecord {
   // alcanzó) -- siempre manteniendo la industria/sector pedido fijo,
   // nunca ampliando el sector para "completar" el número.
   refinementRound: 1 | 2 | 3;
+  // F34: true cuando esta query nunca se ejecutó porque la memoria de
+  // saturación (query-saturation.ts) la marcó SATURATED para este
+  // tenant/query/estado -- rawResultCount/acceptedCount/etc. quedan en 0
+  // (nunca se inventa un resultado), `error` documenta el motivo real.
+  skippedForSaturation: boolean;
 }
 
 export interface RejectedCandidateRecord {
@@ -431,6 +437,19 @@ export interface DiscoveryExecutionReport {
   // NO abortaron la misión -- ver CompanyErrorRecord. [] cuando nada
   // falló a nivel de candidato individual.
   companyErrors: CompanyErrorRecord[];
+  // F34 (auditoría arquitectónica transversal, hallazgo real: 71.9% de
+  // discovery duplicado / 48.4% de queries sin ninguna empresa nueva
+  // sobre 10 misiones de producción, 2026-08-05): cuántas queries del
+  // plan se omitieron por saturación real (ver query-saturation.ts +
+  // query-saturation-memory.ts) y cuánto costo se evitó no
+  // ejecutándolas -- transparencia explícita pedida por la auditoría
+  // ("El Executive Report debe indicar qué queries se omitieron por
+  // saturación y cuánto costo se evitó"). costAvoidedUsdBySaturation es
+  // una ESTIMACIÓN (costo promedio real de las queries SÍ ejecutadas en
+  // esta misma misión aplicado a las omitidas) -- nunca un número
+  // inventado sin base real.
+  queriesSkippedForSaturation: number;
+  costAvoidedUsdBySaturation: number;
 }
 
 interface FinalQuery {
@@ -796,6 +815,8 @@ export async function executeDiscoveryPlan(params: ExecuteDiscoveryPlanParams): 
     companiesReadyForOrganizationalContact: 0,
     companiesPendingInvestigation: 0,
     companyErrors: [],
+    queriesSkippedForSaturation: 0,
+    costAvoidedUsdBySaturation: 0,
     costUsd: 0,
     durationMs: Date.now() - startedAt,
     stopReason,
@@ -1044,6 +1065,18 @@ async function runDiscoveryPlanBody(
   });
   const acceptedByQueryKey = new Map<string, number>();
 
+  // F34 (auditoría arquitectónica transversal, hallazgo real: 71.9% de
+  // discovery duplicado / 48.4% de queries sin ninguna empresa nueva
+  // sobre 10 misiones de producción, 2026-08-05): un solo batch-read del
+  // historial reciente de TODAS las queries del plan, antes de ejecutar
+  // ninguna -- nunca un query por candidato dentro del loop.
+  const saturationByQueryKey = await getQuerySaturationMap(
+    ctx.tenantId,
+    finalQueries.map((q) => ({ searchTerm: q.searchTerm, state: q.state, taxonomyKey: q.taxonomyKey })),
+  );
+  let queriesSkippedForSaturationCount = 0;
+  const executedQueryCosts: number[] = [];
+
   outer: for (const query of finalQueries) {
     if (createdCompanyIds.length >= requestedCompanyCount) {
       stopReason = "limit_reached";
@@ -1062,6 +1095,44 @@ async function runDiscoveryPlanBody(
       // espacio real para las demás variantes específicas en vez de
       // seguir aceptando más de la misma, nunca ejecuta el request de
       // nuevo para descartarlo (costo real evitado).
+      continue;
+    }
+
+    // F34: memoria de saturación -- una query que en ejecuciones
+    // recientes (mismo tenant/query/estado) devolvió >90% de duplicados
+    // o cero empresas nuevas en 2+ corridas consecutivas se omite acá,
+    // ANTES de gastar un request real contra el proveedor. Nunca se
+    // inventa un resultado para la query omitida -- queda registrada con
+    // rawResultCount=0 y `error` explicando el motivo real, visible en
+    // el Executive Report (queriesSkippedForSaturation/costAvoidedUsdBySaturation).
+    const saturation = saturationByQueryKey.get(queryKey);
+    if (saturation?.shouldSkip) {
+      queriesSkippedForSaturationCount += 1;
+      queryExecutions.push({
+        query: query.searchTerm,
+        city: query.city,
+        state: query.state,
+        taxonomyKey: query.taxonomyKey,
+        crmIndustryBucket: query.crmIndustryBucket,
+        origin: null,
+        provider: null,
+        executedAt: new Date().toISOString(),
+        rawResultCount: 0,
+        acceptedCount: 0,
+        queryCap,
+        refinementRound: query.refinementRound,
+        rejectedCount: 0,
+        duplicateCount: 0,
+        error: saturation.reason,
+        skippedForSaturation: true,
+      });
+      logger.info("mission_executor_query_skipped_saturation", {
+        module: "mission-executor",
+        missionTaskId: params.missionTaskId,
+        query: query.searchTerm,
+        taxonomyKey: query.taxonomyKey,
+        reason: saturation.reason,
+      });
       continue;
     }
 
@@ -1101,6 +1172,7 @@ async function runDiscoveryPlanBody(
         rejectedCount: 0,
         duplicateCount: 0,
         error: message,
+        skippedForSaturation: false,
       });
       logger.error("mission_executor_query_failed", {
         module: "mission-executor",
@@ -1114,6 +1186,7 @@ async function runDiscoveryPlanBody(
     const { result, origin, provider, omittedNote } = queryResult;
     if (omittedNote) providersOmitted.add(omittedNote);
     if (result.costUsd > 0) totalCostUsd += result.costUsd;
+    executedQueryCosts.push(result.costUsd);
     if (provider) providersUsed.add(provider);
     if (result.cancelled) {
       cancelled = true;
@@ -1136,6 +1209,7 @@ async function runDiscoveryPlanBody(
       rejectedCount: 0,
       duplicateCount: 0,
       error: result.candidates.length === 0 && result.patternsFailed.length > 0 ? result.patternsFailed.join("; ") : null,
+      skippedForSaturation: false,
     };
     rawResults += result.candidates.length;
 
@@ -1715,6 +1789,34 @@ async function runDiscoveryPlanBody(
     }
 
     queryExecutions.push(record);
+    // F34: append-only, nunca bloquea el loop de discovery por un fallo
+    // de escritura de la memoria de saturación -- un error acá nunca
+    // debe abortar (ni siquiera degradar) el descubrimiento real de esta
+    // misión, solo significa que la PRÓXIMA misión no tendrá este
+    // historial disponible (se degrada a "sin datos" -> FRESH, nunca a
+    // un error visible al usuario).
+    try {
+      await recordQueryExecution(ctx.tenantId, {
+        missionTaskId: params.missionTaskId,
+        searchTerm: record.query,
+        taxonomyKey: record.taxonomyKey,
+        crmIndustryBucket: record.crmIndustryBucket,
+        state: record.state,
+        provider: record.provider,
+        rawResultCount: record.rawResultCount,
+        acceptedCount: record.acceptedCount,
+        duplicateCount: record.duplicateCount,
+        rejectedCount: record.rejectedCount,
+        costUsd: result.costUsd,
+      });
+    } catch (err) {
+      logger.error("mission_executor_query_saturation_memory_write_failed", {
+        module: "mission-executor",
+        missionTaskId: params.missionTaskId,
+        query: record.query,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (cancelled) break outer;
   }
 
@@ -1813,6 +1915,16 @@ async function runDiscoveryPlanBody(
     companiesReadyForOrganizationalContact: companiesReadyForOrganizationalContactTotal,
     companiesPendingInvestigation: companiesPendingInvestigationTotal,
     companyErrors,
+    queriesSkippedForSaturation: queriesSkippedForSaturationCount,
+    // F34: estimación basada en el costo PROMEDIO real de las queries que
+    // SÍ se ejecutaron en esta misma misión (nunca un número inventado)
+    // -- 0 cuando no se omitió ninguna, o cuando ninguna query real
+    // corrió todavía para tener una base de costo (caso raro: todo el
+    // plan estaba saturado).
+    costAvoidedUsdBySaturation:
+      queriesSkippedForSaturationCount > 0 && executedQueryCosts.length > 0
+        ? Number(((executedQueryCosts.reduce((sum, c) => sum + c, 0) / executedQueryCosts.length) * queriesSkippedForSaturationCount).toFixed(4))
+        : 0,
     costUsd: totalCostUsd,
     durationMs: Date.now() - startedAt,
     stopReason,

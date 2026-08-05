@@ -142,12 +142,6 @@ const CAPABILITY_TERMS = [
   "senales de crecimiento",
 ];
 
-const CLOSED_NON_INDUSTRY_VOCAB = new Set(
-  [...TAXONOMY_ROLE_VOCAB, ...EXTRA_ROLE_TERMS, ...CRM_OBJECT_TERMS, ...ACTION_TERMS, ...CAPABILITY_TERMS].map((t) =>
-    normalizeText(t),
-  ),
-);
-
 export type NonIndustryTermCategory = "role" | "crm_object" | "action" | "capability";
 
 /**
@@ -166,29 +160,123 @@ export function singularizeForComparison(term: string): string {
   return normalized;
 }
 
+// F34 (auditoría arquitectónica transversal, hallazgo real
+// MIS-20260805-0002, 2026-08-05): "property maintenance", "apartment
+// maintenance", "facility maintenance" y "building maintenance" -- 4
+// tipos de empresa que el usuario pidió explícitamente, EXACTAMENTE en
+// una cláusula "empresas nuevas de X" -- terminaban descartados por
+// completo por este módulo, porque "Maintenance" (jobTitle suelto de la
+// entrada de Hospitality en taxonomy.ts, agregado para hiring signals,
+// nunca pensado como vocabulario de exclusión de tipos de empresa)
+// aparecía como SUBSTRING de cada uno de los 4 términos -- la
+// comparación bidireccional `containsWord` de abajo (versión anterior)
+// clasificaba "contiene la palabra 'maintenance' en cualquier lugar"
+// como "es un rol", sin importar que el resto del término ("property",
+// "apartment", "facility", "building") fuera vocabulario de negocio
+// real y nunca apareciera en ningún rol/objeto/acción conocido. Esto
+// dejó literalCompanyTypeTerms=[], searchTerms=[], plannedSteps sin
+// discover_companies -- la misión completa nunca ejecutó descubrimiento
+// real y select_target_companies terminó reutilizando en silencio 20
+// empresas de industrias completamente ajenas (ver mission-orchestrator.ts,
+// industryTargets=[null] cuando industries.length===0 &&
+// searchQueries.length===0).
+//
+// Fix estructural (no una lista de palabras nueva): un término deja de
+// clasificarse como rol/objeto/acción/capacidad por CONTENER una palabra
+// conocida -- ahora debe estar COMPUESTO ÍNTEGRAMENTE por palabras que
+// pertenecen a UN MISMO término conocido (candidateWords ⊆ knownWords de
+// ALGÚN término de la lista, nunca la unión de todos). "property
+// maintenance" ({property, maintenance}) nunca es subconjunto de
+// {maintenance} solo -- "property" no es vocabulario de rol/acción/
+// objeto/capacidad conocido bajo ninguna entrada, así que el término
+// completo sobrevive como candidato real a tipo de empresa. "Quality
+// Inspectors" ({quality, inspector}) SÍ es subconjunto del jobTitle real
+// "Quality Control Inspector" ({quality, control, inspector}) -- sigue
+// clasificándose como rol correctamente, sin agregar ninguna palabra
+// nueva al vocabulario cerrado.
+export function tokenizeToWords(text: string): string[] {
+  return normalizeText(text)
+    .split(/[^a-z0-9]+/i)
+    .map((w) => w.trim())
+    .filter((w) => w.length > 0)
+    .map((w) => singularizeForComparison(w));
+}
+
+/**
+ * True si TODAS las palabras de `term` (normalizadas, singularizadas)
+ * están contenidas en el conjunto de palabras de ALGÚN término único de
+ * `knownTerms` -- nunca en la unión de todos, para que dos términos
+ * conocidos distintos ("Property Manager" + "Maintenance") nunca puedan
+ * combinarse para "cubrir" un tercer término real no relacionado
+ * ("Property Maintenance"). Candidato vacío nunca matchea.
+ */
+/**
+ * True si TODAS las palabras de `term` (normalizadas, singularizadas)
+ * están contenidas en el conjunto de palabras de ALGÚN término único de
+ * `knownTerms` -- nunca en la unión de todos, para que dos términos
+ * conocidos distintos ("Property Manager" + "Maintenance") nunca puedan
+ * combinarse para "cubrir" un tercer término real no relacionado
+ * ("Property Maintenance"). Candidato vacío nunca matchea.
+ *
+ * Deliberadamente de UNA sola dirección (candidato ⊆ conocido, nunca al
+ * revés) -- usado tanto para "¿term es un rol/objeto/acción/capacidad
+ * conocida?" (classifyNonIndustryTerm) como para cruces entre campos de
+ * una misma misión (ej. "¿este candidato a tipo de empresa es en
+ * realidad el mismo puesto/decisor que esta misión ya nombró en su
+ * propia cláusula de contratación/contacto?", ver intent-interpreter.ts
+ * F34). La dirección inversa (conocido ⊆ candidato) reintroduciría el
+ * mismo bug real que este módulo corrige: "property maintenance"
+ * ({property, maintenance}) nunca debe matchear contra un puesto
+ * "Maintenance" suelto ({maintenance}) solo porque {maintenance} ⊆
+ * {property, maintenance} -- el candidato agrega una palabra propia
+ * ("property") que el puesto no tiene, así que es un concepto distinto,
+ * sin importar que el puesto sea un subconjunto literal del candidato.
+ */
+export function isFullyComposedOfKnownWords(term: string, knownTerms: Iterable<string>): boolean {
+  const candidateWords = tokenizeToWords(term);
+  if (candidateWords.length === 0) return false;
+  for (const known of knownTerms) {
+    const knownWords = new Set(tokenizeToWords(known));
+    if (knownWords.size === 0) continue;
+    if (candidateWords.every((w) => knownWords.has(w))) return true;
+  }
+  return false;
+}
+
 /**
  * True si `term` es un rol/objeto/acción/capacidad conocida -- nunca
  * una industria, sin importar cuán desconocida sea la industria real.
- * Comparación bidireccional y tolerante a plural simple, mismo criterio
- * que el resto de este módulo (ver singularizeForComparison).
+ * Ver isFullyComposedOfKnownWords -- composición completa de palabras
+ * contra UN término conocido, nunca substring parcial suelto.
  */
 export function isKnownNonIndustryTerm(term: string): boolean {
   const normalized = normalizeText(term.trim());
   if (!normalized) return true; // string vacío nunca es una industria real
-  const singular = singularizeForComparison(term);
+  return classifyNonIndustryTerm(term) !== null;
+}
 
-  for (const known of CLOSED_NON_INDUSTRY_VOCAB) {
-    const knownSingular = singularizeForComparison(known);
-    if (
-      normalized === known ||
-      singular === knownSingular ||
-      containsWord(normalized, known) ||
-      containsWord(known, normalized)
-    ) {
-      return true;
-    }
-  }
-  return false;
+// F34: comparación bidireccional clásica (substring con límite de
+// palabra, en cualquier dirección) -- SOLO para capability/crm_object/
+// action. Estas 3 categorías son frases de producto/pipeline de bajo
+// riesgo de colisión real contra un nombre de negocio genuino (ningún
+// candidato real a tipo de empresa se llama "Contact Intelligence" o
+// "señales de contratación") y, a diferencia de los roles humanos,
+// necesitan reconocer construcciones elípticas reales del español
+// ("señales de contratación O crecimiento" == "señales de contratación"
+// + "señales de crecimiento" con el sujeto compartido elidido) que la
+// composición estricta de palabras (ver isFullyComposedOfKnownWords) no
+// puede cubrir sin arriesgar exactamente el bug que esa función corrige
+// para roles (dos términos DISTINTOS combinándose para cubrir un
+// tercero no relacionado). El vocabulario de roles (`role`, ver abajo)
+// es el único que usa la composición estricta -- ahí SÍ vive el riesgo
+// real de colisión (F34, "property maintenance" vs. jobTitle suelto
+// "Maintenance").
+function matchesAnyBidirectional(term: string, list: string[]): boolean {
+  const normalized = normalizeText(term.trim());
+  return list.some((known) => {
+    const nw = normalizeText(known);
+    return normalized === nw || containsWord(normalized, nw) || containsWord(nw, normalized);
+  });
 }
 
 /**
@@ -199,19 +287,18 @@ export function isKnownNonIndustryTerm(term: string): boolean {
 export function classifyNonIndustryTerm(term: string): NonIndustryTermCategory | null {
   const normalized = normalizeText(term.trim());
   if (!normalized) return null;
-  const matchesAny = (list: string[]) => list.some((w) => {
-    const nw = normalizeText(w);
-    return normalized === nw || containsWord(normalized, nw) || containsWord(nw, normalized);
-  });
   // Capacidades primero -- son frases más específicas (ej. "Contact
   // Intelligence") que de otro modo matchearían por substring contra un
   // objeto del CRM más genérico ("contact"). Precisión sobre recall acá
   // no importa para el uso real (ambas categorías excluyen igual de una
   // industria desconocida), pero un rótulo más específico es más útil
   // para debugging/logs.
-  if (matchesAny(CAPABILITY_TERMS)) return "capability";
-  if (matchesAny([...TAXONOMY_ROLE_VOCAB, ...EXTRA_ROLE_TERMS])) return "role";
-  if (matchesAny(CRM_OBJECT_TERMS)) return "crm_object";
-  if (matchesAny(ACTION_TERMS)) return "action";
+  if (matchesAnyBidirectional(term, CAPABILITY_TERMS)) return "capability";
+  // F34: única categoría con composición ESTRICTA (candidato compuesto
+  // ÍNTEGRAMENTE por las palabras de UN rol conocido) -- ver el
+  // comentario de diseño en isFullyComposedOfKnownWords.
+  if (isFullyComposedOfKnownWords(term, [...TAXONOMY_ROLE_VOCAB, ...EXTRA_ROLE_TERMS])) return "role";
+  if (matchesAnyBidirectional(term, CRM_OBJECT_TERMS)) return "crm_object";
+  if (matchesAnyBidirectional(term, ACTION_TERMS)) return "action";
   return null;
 }

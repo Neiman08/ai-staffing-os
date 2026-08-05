@@ -63,7 +63,7 @@ import { normalizeText, containsWord } from "./text-normalize";
  *     misión, o coincide con negativeKeywords de la taxonomía).
  */
 
-export const BUSINESS_VALIDATION_VERSION = 2;
+export const BUSINESS_VALIDATION_VERSION = 3;
 
 export const businessValidationConfidenceLevels = [
   "EXACT",
@@ -73,6 +73,42 @@ export const businessValidationConfidenceLevels = [
   "REJECTED",
 ] as const;
 export type BusinessValidationConfidenceLevel = (typeof businessValidationConfidenceLevels)[number];
+
+// F34 (auditoría arquitectónica transversal, 2026-08-05): `accepted:
+// boolean` históricamente era SIEMPRE `true` salvo en los pocos caminos
+// que ya devolvían buildEmptyResult -- un candidato WEAK (confianza
+// mínima, `matchedEvidence` puede venir vacío) igual salía
+// `accepted:true`, un nombre que sugiere "identidad validada" cuando en
+// realidad solo significa "no fue rechazado por una señal estructural
+// negativa". `status` es la fuente de verdad explícita y honesta que
+// reemplaza esa ambigüedad -- `accepted` se mantiene (comportamiento SIN
+// CAMBIOS: mission-executor.ts sigue leyéndolo para decidir si crea la
+// Company) pero ahora se DERIVA de `status`, nunca al revés.
+//   - VALIDATED: evidencia real y directa de identidad (EXACT/STRONG) --
+//     candidato para Company.commercialStatus=COMMERCIAL_VALIDATED.
+//   - PROBABLE: solo coincide con las actividades de negocio declaradas
+//     en la instrucción (APPROXIMATE) -- igual COMMERCIAL_VALIDATED
+//     (evidencia real, aunque indirecta), ver deriveCommercialStatus.
+//   - INSUFFICIENT_EVIDENCE: ninguna señal positiva coincidió (WEAK) --
+//     se sigue persistiendo como Company (decisión de producto explícita:
+//     visible para investigación humana), pero SIEMPRE
+//     commercialStatus=DISCOVERY_CANDIDATE, nunca Lead/Opportunity/Draft
+//     (ver conversion-policy.ts deriveCommercialStatus/evaluateBusinessIdentityGate).
+//   - MISMATCH: hay evidencia de que el candidato es un tipo de negocio
+//     DISTINTO al pedido (negativeKeywords, o bucket genérico sin
+//     evidencia del trade específico pedido) -- nunca se persiste como
+//     Company.
+//   - REJECTED: fallo estructural (sin nombre, taxonomyKey desconocida,
+//     fuera de la geografía pedida, o coincide con una exclusión
+//     explícita de la misión) -- nunca se persiste como Company.
+export const businessValidationStatuses = ["VALIDATED", "PROBABLE", "INSUFFICIENT_EVIDENCE", "MISMATCH", "REJECTED"] as const;
+export type BusinessValidationStatus = (typeof businessValidationStatuses)[number];
+
+function statusForConfidence(confidence: BusinessValidationConfidenceLevel): Extract<BusinessValidationStatus, "VALIDATED" | "PROBABLE" | "INSUFFICIENT_EVIDENCE"> {
+  if (confidence === "EXACT" || confidence === "STRONG") return "VALIDATED";
+  if (confidence === "APPROXIMATE") return "PROBABLE";
+  return "INSUFFICIENT_EVIDENCE";
+}
 
 // Puntaje numérico espejo de cada nivel -- solo para ordenar/mostrar en
 // UI, la decisión real (accepted/confidence) siempre sale del nivel, no
@@ -134,6 +170,7 @@ export interface BusinessValidationInput {
 
 export interface BusinessValidationResult {
   accepted: boolean;
+  status: BusinessValidationStatus;
   confidence: BusinessValidationConfidenceLevel;
   confidenceScore: number;
   detectedBusinessType: string | null;
@@ -201,14 +238,15 @@ export function matchesMissionExclusion(candidateName: string, missionExclusions
 }
 
 function buildEmptyResult(
-  confidence: BusinessValidationConfidenceLevel,
+  status: Extract<BusinessValidationStatus, "REJECTED" | "MISMATCH">,
   rejectionReasons: string[],
   warnings: string[] = [],
 ): BusinessValidationResult {
   return {
     accepted: false,
-    confidence,
-    confidenceScore: CONFIDENCE_SCORE_BY_LEVEL[confidence],
+    status,
+    confidence: "REJECTED",
+    confidenceScore: CONFIDENCE_SCORE_BY_LEVEL.REJECTED,
     detectedBusinessType: null,
     detectedSector: null,
     matchedEvidence: [],
@@ -287,6 +325,7 @@ function validateLiteralCompanyType(input: BusinessValidationInput, domain: stri
 
   return {
     accepted: true,
+    status: statusForConfidence(confidence),
     confidence,
     confidenceScore: CONFIDENCE_SCORE_BY_LEVEL[confidence],
     detectedBusinessType: literalTerm,
@@ -347,7 +386,10 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
   const negativeDescriptionMatches = matchPhrasesInText(input.description, nonNullEntry.negativeKeywords);
   const allNegativeMatches = [...new Set([...negativeNameMatches, ...negativeDomainMatches, ...negativeDescriptionMatches])];
   if (allNegativeMatches.length > 0) {
-    return buildEmptyResult("REJECTED", [
+    // MISMATCH, no REJECTED estructural -- hay evidencia POSITIVA de que
+    // el candidato es un tipo de negocio distinto al pedido (ver F34,
+    // BusinessValidationStatus arriba), no un fallo de forma.
+    return buildEmptyResult("MISMATCH", [
       `Evidencia negativa para "${nonNullEntry.label}": coincide con ${allNegativeMatches.map((m) => `"${m}"`).join(", ")}.`,
     ]);
   }
@@ -390,7 +432,9 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
     );
     if (!hasSpecificTradeEvidence && !hasLiteralTermEvidence) {
       const requestedLabels = [...specificEntries.map((e) => e.label), ...input.missionLiteralTerms];
-      return buildEmptyResult("REJECTED", [
+      // MISMATCH -- el candidato pertenece al bucket amplio (evidencia
+      // real de ESO), pero no al trade específico pedido (ver F34).
+      return buildEmptyResult("MISMATCH", [
         `Encontrada vía una query genérica ("${nonNullEntry.label}"), pero la misión pidió específicamente: ${requestedLabels.join(", ")} -- sin ninguna evidencia real de esos trades (nombre, categoría de Google Places, o descripción del sitio).`,
       ]);
     }
@@ -435,6 +479,7 @@ export function validateBusinessCandidate(input: BusinessValidationInput): Busin
 
   return {
     accepted: true,
+    status: statusForConfidence(confidence),
     confidence,
     confidenceScore: CONFIDENCE_SCORE_BY_LEVEL[confidence],
     detectedBusinessType: nonNullEntry.companyTypes[0] ?? null,

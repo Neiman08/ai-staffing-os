@@ -71,6 +71,7 @@ after(async () => {
   }
   await prisma.agentTask.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
   if (createdTenantIds.length) {
+    await prisma.discoveryQueryExecution.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.agentInstance.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
   }
@@ -303,6 +304,94 @@ test("query ejecutada una sola vez: 1 query planificada -> 1 queryExecution, cue
   assert.equal(report.acceptedResults, 1);
   assert.equal(report.companiesCreated, 1);
   assert.equal(report.missionState, "COMPLETED"); // 1 de 1 pedida (target por defecto del fixture)
+});
+
+// ============================================================
+// F34 (auditoría arquitectónica transversal, hallazgo real: 71.9% de
+// discovery duplicado / 48.4% de queries sin ninguna empresa nueva sobre
+// 10 misiones de producción, 2026-08-05): memoria de saturación de
+// queries -- estos tests reproducen el escenario real (misma query
+// repetida entre misiones del mismo tenant, sin resultados nuevos) y
+// prueban tanto la persistencia (DiscoveryQueryExecution) como el skip
+// real (nunca se llama al proveedor fake para una query saturada --
+// prueba costo evitado de verdad, no solo el conteo del reporte).
+// ============================================================
+
+test("F34: cada query ejecutada persiste una fila real en DiscoveryQueryExecution (tenantId/query/taxonomyKey/estado/counts correctos)", async () => {
+  const tenantId = await setupTenant("query-saturation-persist");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  await run(tenantId, manufacturingPlan(), providers);
+
+  const rows = await prisma.discoveryQueryExecution.findMany({ where: { tenantId } });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.normalizedQuery, "manufacturing company");
+  assert.equal(rows[0]!.taxonomyKey, "manufacturing");
+  assert.equal(rows[0]!.state, "IL");
+  assert.equal(rows[0]!.rawResultCount, 1);
+  assert.equal(rows[0]!.acceptedCount, 1);
+});
+
+test("F34 regresión real: una query con >90% de duplicados en su historial reciente (mismo tenant) se omite -- el proveedor NUNCA se llama, cero costo real", async () => {
+  const tenantId = await setupTenant("query-saturation-skip");
+  // Historial real de 2 ejecuciones previas de la MISMA query real
+  // (normalizedQuery/state/taxonomyKey exactos) -- 40 resultados crudos,
+  // 1 solo aceptado -> ratio de novedad 2.5%, muy por debajo del umbral
+  // de saturación (10%).
+  await prisma.discoveryQueryExecution.createMany({
+    data: [
+      {
+        tenantId,
+        normalizedQuery: "manufacturing company",
+        rawQuery: "manufacturing company",
+        taxonomyKey: "manufacturing",
+        state: "IL",
+        provider: "Google Places",
+        rawResultCount: 20,
+        acceptedCount: 1,
+        duplicateCount: 19,
+        rejectedCount: 0,
+      },
+      {
+        tenantId,
+        normalizedQuery: "manufacturing company",
+        rawQuery: "manufacturing company",
+        taxonomyKey: "manufacturing",
+        state: "IL",
+        provider: "Google Places",
+        rawResultCount: 20,
+        acceptedCount: 0,
+        duplicateCount: 20,
+        rejectedCount: 0,
+      },
+    ],
+  });
+
+  let providerCalled = false;
+  const providers = fakeProviders({
+    searchGooglePlaces: async () => {
+      providerCalled = true;
+      return googleResult([candidateFixture()]);
+    },
+  });
+  const report = await run(tenantId, manufacturingPlan(), providers);
+
+  assert.equal(providerCalled, false, "el proveedor real (fake en el test) nunca debe llamarse para una query saturada -- costo evitado de verdad");
+  assert.equal(report.queriesSkippedForSaturation, 1);
+  assert.equal(report.queryExecutions.length, 1);
+  assert.equal(report.queryExecutions[0]!.skippedForSaturation, true);
+  assert.equal(report.queryExecutions[0]!.rawResultCount, 0, "nunca se inventa un resultado para una query que no corrió");
+  assert.match(report.queryExecutions[0]!.error ?? "", /[Ss]aturad/);
+  assert.equal(report.missionState, "NO_RESULTS", "la única query del plan estaba saturada y se omitió -- 0 empresas encontradas, nunca COMPLETED");
+});
+
+test("F34: una query SIN historial de saturación (query nueva) se ejecuta normalmente -- el fallback FRESH nunca bloquea discovery real", async () => {
+  const tenantId = await setupTenant("query-saturation-fresh");
+  const providers = fakeProviders({ searchGooglePlaces: async () => googleResult([candidateFixture()]) });
+  const report = await run(tenantId, manufacturingPlan(), providers);
+
+  assert.equal(report.queriesSkippedForSaturation, 0);
+  assert.equal(report.queryExecutions[0]!.skippedForSaturation, false);
+  assert.equal(report.companiesCreated, 1);
 });
 
 // F28 (aislamiento entre misiones, hallazgo real 2026-07-27): documenta

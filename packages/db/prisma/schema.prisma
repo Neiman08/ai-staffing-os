@@ -2457,6 +2457,41 @@ model HunterDomainSearchCache {
   @@index([tenantId, queriedAt])
 }
 
+// F34 (auditoría arquitectónica transversal, 2026-08-05): memoria
+// persistente por tenant de cada query de discovery REALMENTE ejecutada
+// -- hallazgo real de la auditoría de las últimas 10 misiones: 71.9% de
+// los resultados de discovery ya existían en el CRM (800/1113 duplicados)
+// y 48.4% de las queries no aceptó ni una empresa nueva, sin que el
+// sistema recordara nada de una misión a la siguiente. Append-only por
+// diseño (nunca se actualiza una fila existente, nunca se borra) -- cada
+// ejecución real queda como su propio registro histórico, auditable; el
+// scoring de saturación (query-saturation.ts, ceo-intelligence/, puro y
+// determinista) agrega las filas recientes de una ventana TTL en tiempo
+// de lectura, nunca en escritura.
+model DiscoveryQueryExecution {
+  id                String   @id @default(cuid())
+  tenantId          String
+  missionTaskId     String?
+  // Clave real de agrupación -- searchTerm normalizado (minúsculas, sin
+  // espacios extra), nunca el string crudo (que puede variar en
+  // mayúsculas/espacios entre ejecuciones del mismo query real).
+  normalizedQuery   String
+  rawQuery          String
+  taxonomyKey       String?
+  crmIndustryBucket String?
+  state             String?
+  provider          String
+  rawResultCount    Int
+  acceptedCount     Int
+  duplicateCount    Int
+  rejectedCount     Int
+  costUsd           Decimal? @db.Decimal(10, 4)
+  executedAt        DateTime @default(now())
+
+  @@index([tenantId, normalizedQuery, state, executedAt])
+  @@index([tenantId, taxonomyKey, state, executedAt])
+}
+
 // ================= AUDITORÍA, EVENTOS, NOTIFICACIONES =================
 
 model AuditLog {

@@ -17,6 +17,13 @@ function interpret(rawInstruction: string) {
   return result;
 }
 
+function interpret2(rawInstruction: string, modelProposedTerms: string[]) {
+  const result = interpretBusinessIntent(rawInstruction, modelProposedTerms);
+  const parsed = structuredIntentSchema.safeParse(result);
+  assert.ok(parsed.success, `StructuredIntent inválido para "${rawInstruction}": ${JSON.stringify(parsed.error?.format())}`);
+  return result;
+}
+
 test("hoteles: 'Busca hoteles que necesiten housekeeping.'", () => {
   const intent = interpret("Busca hoteles que necesiten housekeeping.");
   assert.ok(intent.companyTypes.includes("hotel"));
@@ -574,4 +581,111 @@ test("guardrail F33 (bug real, ya corregido): instrucción sin NINGÚN tipo de e
   assert.equal(intent.literalCompanyTypeTerms.length, 0);
   assert.equal(intent.objective.type, "custom", "sin ningún tipo de empresa/industria/término literal, el objetivo honesto es 'custom', nunca 'find_companies' sin plan real");
   assert.deepEqual(intent.plannedSteps, []);
+});
+
+// ============================================================
+// F34 (auditoría arquitectónica transversal, hallazgo real
+// MIS-20260805-0002, 2026-08-05): "discovery fantasma" -- una
+// instrucción real de producción que pedía 4 tipos de empresa
+// explícitos ("property maintenance, apartment maintenance, facility
+// maintenance y building maintenance") terminó con literalCompanyTypeTerms=[],
+// searchTerms=[], plannedSteps SIN discover_companies -- la misión
+// nunca ejecutó descubrimiento real y select_target_companies reutilizó
+// en silencio 20 empresas de industrias completamente ajenas (janitorial/
+// landscaping/manufacturing), porque "Maintenance" (jobTitle suelto de
+// la entrada de Hospitality en taxonomy.ts, agregado para hiring
+// signals) aparecía como SUBSTRING de los 4 términos bajo la comparación
+// bidireccional anterior de classifyNonIndustryTerm. Fix: composición
+// completa de palabras (ver semantic-normalization.ts) -- "property"/
+// "apartment"/"facility"/"building" no son vocabulario de rol/acción/
+// objeto/capacidad conocido, así que el término completo sobrevive.
+// Estos tests reproducen la instrucción real EXACTA de MIS-20260805-0002
+// -- fallan sin el fix (literalCompanyTypeTerms=[], discover_companies
+// ausente) y pasan con él.
+// ============================================================
+
+const REAL_PROPERTY_MAINTENANCE_INSTRUCTION =
+  "Busca hasta 20 empresas nuevas de property maintenance, apartment maintenance, facility maintenance y building maintenance en Illinois que puedan necesitar servicios de staffing. Prioriza empresas con señales actuales o recurrentes de contratación de Maintenance Technicians, Handymen, HVAC Helpers, Groundskeepers, Painters, Porters, Cleaning Staff y Supervisors. Verifica que operen realmente en Illinois, identifica al Owner, Operations Manager, Property Manager, HR Manager o Recruiter, busca y verifica emails personales y organizacionales válidos, enriquece la información y crea Company, Contact, Lead y Opportunity cuando corresponda. Genera Email Draft únicamente cuando exista un email verificado. Excluye empresas existentes en el CRM, agencias de staffing, empresas cerradas y oficinas virtuales. Entrega un Executive Report completo.";
+
+test("regresión CRÍTICA MIS-20260805-0002: property/apartment/facility/building maintenance sobreviven como literalCompanyTypeTerms (discovery fantasma)", () => {
+  const intent = interpret(REAL_PROPERTY_MAINTENANCE_INSTRUCTION);
+  assert.deepEqual(
+    new Set(intent.literalCompanyTypeTerms),
+    new Set(["property maintenance", "apartment maintenance", "facility maintenance", "building maintenance"]),
+    `literalCompanyTypeTerms debería tener los 4 términos pedidos explícitamente, tuvo: ${JSON.stringify(intent.literalCompanyTypeTerms)}`,
+  );
+  assert.ok(intent.searchTerms.length >= 4, "searchTerms debe construirse a partir de los términos literales");
+  assert.equal(intent.objective.type, "find_companies");
+  assert.ok(
+    intent.plannedSteps.includes("discover_companies"),
+    `discover_companies debe estar en plannedSteps -- sin esto la misión nunca ejecuta descubrimiento real (plannedSteps: ${JSON.stringify(intent.plannedSteps)})`,
+  );
+});
+
+test("regresión MIS-20260805-0002: los cargos operativos de la cláusula de contratación nunca se pierden como targetJobTitles, y nunca contaminan literalCompanyTypeTerms", () => {
+  const intent = interpret(REAL_PROPERTY_MAINTENANCE_INSTRUCTION);
+  for (const jobTitle of ["Handymen", "HVAC Helpers", "Groundskeepers", "Painters", "Porters", "Supervisors"]) {
+    assert.ok(
+      intent.targetJobTitles.some((t) => t.toLowerCase() === jobTitle.toLowerCase()),
+      `"${jobTitle}" debería quedar en targetJobTitles (extracción contextual de la cláusula de contratación)`,
+    );
+    assert.ok(
+      !intent.literalCompanyTypeTerms.some((t) => t.toLowerCase() === jobTitle.toLowerCase()),
+      `"${jobTitle}" nunca debe aparecer en literalCompanyTypeTerms`,
+    );
+  }
+  assert.ok(intent.decisionRoles.includes("Property Manager"), "Property Manager debe quedar en decisionRoles (cláusula de contacto)");
+  // Ningún decisionRole extraído contextualmente puede ser basura (verbo
+  // de la cláusula siguiente, "busca"/"crea Company", etc.) -- guardrail
+  // contra el bug de sobre-captura (DECISION_ROLE_CONTEXT_TRIGGER_RE sin
+  // corte en minúscula).
+  for (const role of intent.decisionRoles) {
+    assert.ok(/^[A-ZÀ-Ÿ]/.test(role), `decisionRole "${role}" no parece un rol real (no empieza en mayúscula) -- posible sobre-captura de la cláusula siguiente`);
+  }
+});
+
+// F34: cargos operativos explícitamente pedidos por la auditoría --
+// cada uno debe quedar excluido de literalCompanyTypeTerms cuando la
+// MISMA instrucción los nombra en su cláusula de contratación, sin
+// importar que ninguno esté en ningún vocabulario estático curado
+// (taxonomy.ts / EXTRA_ROLE_TERMS) -- prueba la generalidad del
+// mecanismo (cross-check estructural, no una lista de palabras).
+const OPERATIONAL_JOB_TITLES = [
+  "Supervisors",
+  "Packers",
+  "Breakfast Attendants",
+  "Quality Inspectors",
+  "Painters",
+  "Porters",
+  "Handymen",
+  "HVAC Helpers",
+  "Assemblers",
+  "Welders",
+  "CNC Machinists",
+];
+for (const jobTitle of OPERATIONAL_JOB_TITLES) {
+  test(`F34: "${jobTitle}" nombrado en la cláusula de contratación nunca se convierte en literalCompanyTypeTerm, ni siquiera si un LLM upstream lo propone como externalSearchTerm`, () => {
+    const instruction = `Busca hasta 20 empresas nuevas de metal fabrication en Illinois que puedan necesitar servicios de staffing. Prioriza empresas con señales actuales o recurrentes de contratación de ${jobTitle} y otros roles operativos. Verifica que operen realmente en Illinois, identifica al Owner o HR Manager. Entrega un Executive Report completo.`;
+    // Simula el LLM upstream (interpretDailyDirective) alucinando el
+    // mismo cargo como si fuera un sector -- el bug real observado en
+    // producción (taxonomyKey="literal:Packers", "literal:Supervisors",
+    // "literal:Quality Inspectors", "literal:Breakfast Attendants").
+    const intent = interpret2(instruction, [jobTitle]);
+    assert.ok(
+      !intent.literalCompanyTypeTerms.some((t) => t.toLowerCase() === jobTitle.toLowerCase()),
+      `"${jobTitle}" no debe sobrevivir en literalCompanyTypeTerms (modelProposedTerms lo propuso, pero la misión ya lo nombró como puesto): ${JSON.stringify(intent.literalCompanyTypeTerms)}`,
+    );
+    assert.ok(
+      intent.targetJobTitles.some((t) => t.toLowerCase() === jobTitle.toLowerCase()),
+      `"${jobTitle}" debe quedar registrado en targetJobTitles`,
+    );
+  });
+}
+
+test("F34: un tipo de empresa real que CONTIENE una palabra de rol como modificador nunca se excluye por eso -- 'commercial and residential roofing' sigue siendo un tipo de empresa real", () => {
+  const intent = interpret(
+    "Busca hasta 20 empresas nuevas de commercial and residential roofing en Illinois que puedan necesitar servicios de staffing. Identifica al Owner. Entrega un Executive Report completo.",
+  );
+  assert.ok(intent.matchedTaxonomyKeys.includes("roofing"), "roofing debe reconocerse vía taxonomía");
+  assert.ok(intent.companyTypes.length > 0, "companyTypes no debe quedar vacío para un trade real y reconocido");
 });

@@ -5,7 +5,7 @@ import { BUSINESS_TAXONOMY } from "./taxonomy";
 import { detectCitiesAndStates, SUPPORTED_STATE_CODES } from "./geo";
 import { containsWord, normalizeText } from "./text-normalize";
 import { detectCriticalInfrastructureClients } from "./critical-infrastructure-clients";
-import { classifyNonIndustryTerm } from "./semantic-normalization";
+import { classifyNonIndustryTerm, isFullyComposedOfKnownWords } from "./semantic-normalization";
 
 // F32 (auditoría arquitectónica, hallazgo real MIS-20260731-0002/0003,
 // 2026-07-31 -- ver docs de la investigación): "HVAC, refrigeración
@@ -59,6 +59,89 @@ import { classifyNonIndustryTerm } from "./semantic-normalization";
 const COMPANY_TYPE_TRIGGER_RE =
   /\b(?:dedicad[oa]s?\s+a|empresas?(?:\s+\S+){0,3}?\s+de|compa[nñ][ií]as?(?:\s+\S+){0,3}?\s+de|negocios?(?:\s+\S+){0,3}?\s+de|del\s+rubro\s+de|del\s+sector\s+de|companies?(?:\s+\S+){0,3}?\s+(?:specializing\s+in|in\s+the\s+field\s+of|that\s+do|dedicated\s+to|of)|in\s+the\s+(?:field|sector|industry)\s+of)\b\s*:?\s*([^.;]+?)(?=\s+\b(?:que|that|which|quienes)\b|[.;]|$)/gi;
 
+// F34 (auditoría arquitectónica transversal, hallazgo real ~28% de
+// companyValidations sobre 10 misiones de producción, 2026-08-05):
+// "Supervisors", "Packers", "Breakfast Attendants", "Quality Inspectors"
+// terminaban como literalCompanyTypeTerm (taxonomyKey="literal:Packers",
+// etc.) -- candidatos reales a Company que nunca debieron existir, ya
+// que son cargos operativos, no rubros de negocio. La causa real: el LLM
+// upstream (interpretDailyDirective) a veces confunde la cláusula "señales
+// de contratación de X, Y, Z" (una LISTA de puestos que la misión quiere
+// usar como señal de hiring, gramaticalmente indistinguible en superficie
+// de una lista de sectores) con "sectores/trades nombrados explícitamente"
+// y los agrega a externalSearchTerms -- y ninguna lista estática de
+// palabras conocidas puede cubrir cada cargo humano que exista en el
+// mercado. La solución estructural: reconocer la MISMA cláusula
+// gramatical que ya usa la propia instrucción para marcar esos términos
+// como puestos ("contratación de X", "hiring for X", "que estén
+// contratando X", "vacantes/posiciones de X") -- exactamente como
+// COMPANY_TYPE_TRIGGER_RE reconoce "empresas de X" -- y usar ESOS
+// términos, extraídos de ESTA misión en particular, para excluir
+// cualquier candidato coincidente de literalCompanyTypeTerms. Nunca una
+// lista cerrada de cargos: cualquier cargo que la propia instrucción
+// mencione en esa cláusula queda cubierto, sin importar si es "Welder",
+// "CNC Machinist" o un cargo que todavía no existe en ningún taxonomy.ts.
+const HIRING_CONTEXT_TRIGGER_RE =
+  /\b(?:contrataci[oó]n\s+de|(?:est[eé]n|esten)\s+contratando(?:\s+a)?|contratando\s+a|vacantes\s+de|puestos\s+de|posiciones\s+de|hiring\s+for|now\s+hiring|open\s+positions?\s+for|positions?\s+for|job\s+titles?\s*:)\b\s*:?\s*([^.;]+?)(?=\s+\b(?:que|that|which|quienes)\b|[.;]|$)/gi;
+
+// F34: misma idea que HIRING_CONTEXT_TRIGGER_RE, pero para la cláusula
+// que nombra a quién CONTACTAR ("identifica al Owner, HR Manager...") --
+// un decisor mencionado acá nunca debe poder colarse como tipo de
+// empresa literal por la misma razón de arriba. A diferencia de las
+// otras dos cláusulas (que en las instrucciones reales SIEMPRE terminan
+// en punto), esta suele seguir en la MISMA oración con más verbos de
+// acción ("...HR Manager o Recruiter, busca y verifica emails...") -- el
+// corte real se resuelve en extractClauseTerms (stopAtFirstLowercaseSegment),
+// no acá: un lookahead de regex bajo el flag /i no puede distinguir
+// mayúscula de minúscula (case-fold), así que la distinción se hace en
+// JS plano después de dividir por SPLIT_LIST_RE.
+const DECISION_ROLE_CONTEXT_TRIGGER_RE =
+  /\b(?:identifica\s+al?|identificar\s+al?|contacta\s+al?|contact\s+the|identify\s+the)\b\s*:?\s*([^.;]+?)(?=\s+\b(?:que|that|which|quienes)\b|[.;]|$)/gi;
+
+/**
+ * Extrae los términos de una cláusula gramatical disparada por
+ * `triggerRe` (mismo criterio que COMPANY_TYPE_TRIGGER_RE: cláusula
+ * completa hasta el final de la oración, recorte de calificador
+ * geográfico final, división por SPLIT_LIST_RE). Reutilizado tanto para
+ * "tipo de empresa" como para "puesto/cargo" y "decisor" -- la única
+ * diferencia entre los tres es el regex disparador.
+ *
+ * F34: `stopAtFirstLowercaseSegment` -- la cláusula de decisores
+ * ("identifica al X, Y, Z") no siempre termina en punto en instrucciones
+ * reales, sino que sigue en la misma oración con más verbos de acción en
+ * minúscula ("...HR Manager o Recruiter, busca y verifica..."). Los
+ * roles reales de esa cláusula SIEMPRE aparecen en Title Case en las
+ * instrucciones reales -- el primer segmento (tras dividir por
+ * SPLIT_LIST_RE) que empieza en minúscula es, por construcción, el
+ * comienzo de la siguiente cláusula verbal, nunca un decisor real, así
+ * que se corta ahí (y todo lo posterior se descarta). Nunca se aplica a
+ * COMPANY_TYPE_TRIGGER_RE/HIRING_CONTEXT_TRIGGER_RE -- sus términos
+ * reales SÍ empiezan en minúscula habitualmente (ej. "property
+ * maintenance").
+ */
+function extractClauseTerms(
+  positiveText: string,
+  triggerRe: RegExp,
+  detectedCities: string[],
+  detectedStateCodes: string[],
+  options?: { stopAtFirstLowercaseSegment?: boolean },
+): string[] {
+  const candidates = new Set<string>();
+  for (const match of positiveText.matchAll(triggerRe)) {
+    const clause = match[1] ?? "";
+    const clauseWithoutLocation = trimTrailingLocation(clause.trim(), detectedCities, detectedStateCodes);
+    const segments = clauseWithoutLocation
+      .split(SPLIT_LIST_RE)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    for (const term of segments) {
+      if (options?.stopAtFirstLowercaseSegment && /^[a-zà-ÿ]/.test(term)) break;
+      candidates.add(term);
+    }
+  }
+  return Array.from(candidates);
+}
+
 /**
  * F32: extrae candidatos a "tipo de empresa" que el usuario nombró
  * explícitamente pero que NINGUNA entrada de BUSINESS_TAXONOMY reconoce
@@ -100,31 +183,33 @@ function extractLiteralCompanyTypeTerms(
   modelProposedTerms: string[],
   detectedCities: string[],
   detectedStateCodes: string[],
+  // F34: puestos/decisores detectados para ESTA MISMA misión vía
+  // HIRING_CONTEXT_TRIGGER_RE/DECISION_ROLE_CONTEXT_TRIGGER_RE (ver
+  // interpretBusinessIntent) -- invariante estructural: un término que
+  // la propia instrucción ya usó como puesto/decisor en su propia
+  // cláusula de contratación/contacto nunca puede convertirse también en
+  // tipo de empresa, sin importar si aparece o no en ningún vocabulario
+  // estático (taxonomy.ts, EXTRA_ROLE_TERMS).
+  contextualExclusionTerms: string[],
 ): string[] {
+  // F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): el recorte
+  // geográfico DEBE aplicarse ANTES de dividir por SPLIT_LIST_RE, nunca
+  // después -- "...comerciales en Decatur, Illinois" tiene una coma
+  // entre la ciudad y el estado, así que dividir primero separaba
+  // "Illinois" como su PROPIO candidato (nunca coincidía con el patrón
+  // "en/in <lugar>" de trimTrailingLocation, que exige la preposición
+  // justo antes -- una "Illinois" suelta sin "en" delante quedaba
+  // intacta) -- terminaba como un literalCompanyTypeTerm real,
+  // generando una query real sin sentido ("Illinois in Decatur,
+  // Illinois"). extractClauseTerms ya recorta la cláusula COMPLETA antes
+  // de dividir, mismo criterio.
   const candidates = new Set<string>();
   for (const term of modelProposedTerms) {
     const trimmed = term.trim();
     if (trimmed) candidates.add(trimmed);
   }
-  for (const match of positiveText.matchAll(COMPANY_TYPE_TRIGGER_RE)) {
-    const clause = match[1] ?? "";
-    // F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): el recorte
-    // geográfico DEBE aplicarse ANTES de dividir por SPLIT_LIST_RE, nunca
-    // después -- "...comerciales en Decatur, Illinois" tiene una coma
-    // entre la ciudad y el estado, así que dividir primero separaba
-    // "Illinois" como su PROPIO candidato (nunca coincidía con el patrón
-    // "en/in <lugar>" de trimTrailingLocation, que exige la preposición
-    // justo antes -- una "Illinois" suelta sin "en" delante quedaba
-    // intacta) -- terminaba como un literalCompanyTypeTerm real,
-    // generando una query real sin sentido ("Illinois in Decatur,
-    // Illinois"). Recortar la cláusula COMPLETA primero (el calificador
-    // geográfico siempre es lo último de la frase) deja limpio lo que
-    // sea que SPLIT_LIST_RE divida después.
-    const clauseWithoutLocation = trimTrailingLocation(clause.trim(), detectedCities, detectedStateCodes);
-    for (const term of clauseWithoutLocation.split(SPLIT_LIST_RE)) {
-      const trimmed = term.trim();
-      if (trimmed) candidates.add(trimmed);
-    }
+  for (const term of extractClauseTerms(positiveText, COMPANY_TYPE_TRIGGER_RE, detectedCities, detectedStateCodes)) {
+    candidates.add(term);
   }
 
   const normalizedMatchedSynonyms = matchedEntries.flatMap((entry) => entry.synonyms.map((syn) => normalizeText(syn)));
@@ -135,7 +220,19 @@ function extractLiteralCompanyTypeTerms(
     const alreadyCoveredByTaxonomy = normalizedMatchedSynonyms.some(
       (syn) => containsWord(normalizedTerm, syn) || containsWord(syn, normalizedTerm),
     );
-    return !alreadyCoveredByTaxonomy;
+    if (alreadyCoveredByTaxonomy) return false;
+    // F34: mismo criterio de "compuesto íntegramente por palabras de UN
+    // término conocido" que classifyNonIndustryTerm (isFullyComposedOfKnownWords)
+    // -- un candidato que agrega palabras propias (ej. "facility
+    // maintenance" vs. puesto "Maintenance") nunca queda excluido solo
+    // por superposición parcial; pero si el candidato ES (o es un
+    // subconjunto completo de palabras de) un puesto/decisor que ESTA
+    // misión ya nombró en su propia cláusula de contratación/contacto,
+    // se excluye -- invariante estructural: un término nunca puede ser
+    // targetJobTitle/decisionRole Y literalCompanyTypeTerm en la misma
+    // misión.
+    if (isFullyComposedOfKnownWords(term, contextualExclusionTerms)) return false;
+    return true;
   });
 }
 
@@ -355,21 +452,7 @@ export function interpretBusinessIntent(rawInstruction: string, modelProposedTer
   );
   const businessActivities = Array.from(new Set(matchedEntries.map((e) => e.label)));
 
-  // F32 (hallazgo real, MIS-20260731-0002/0003, 2026-07-31): "tipos de
-  // empresa" que el usuario nombró explícitamente pero que
-  // BUSINESS_TAXONOMY no reconoce todavía -- nunca se pierden. Ver
-  // extractLiteralCompanyTypeTerms para el algoritmo completo (prioriza
-  // modelProposedTerms, respaldo determinista vía COMPANY_TYPE_TRIGGER_RE).
-  // F32 (hallazgo real, MIS-20260731-0011, 2026-07-31): calculado ACÁ
-  // (antes estaba después de literalCompanyTypeTerms) -- se necesita ya
-  // para recortar un calificador geográfico final de cada término
-  // literal extraído (ver trimTrailingLocation).
   const { cities: preferredCities, states } = detectCitiesAndStates(rawInstruction);
-  const literalCompanyTypeTerms = extractLiteralCompanyTypeTerms(positiveText, matchedEntries, modelProposedTerms, preferredCities, states);
-
-  const searchTerms = Array.from(
-    new Set([...matchedEntries.flatMap((e) => e.googleSearchPhrases), ...literalCompanyTypeTerms]),
-  );
 
   // Titulos/roles literales -- se buscan en TODO el vocabulario de la
   // taxonomia (no solo el de las entradas ya matcheadas), porque una
@@ -382,9 +465,49 @@ export function interpretBusinessIntent(rawInstruction: string, modelProposedTer
   const literalJobTitles = allJobTitles.filter((title) => containsWord(normalizedPositive, normalizeText(title)));
   const literalDecisionRoles = allDecisionMakers.filter((role) => containsWord(normalizedPositive, normalizeText(role)));
 
-  const targetJobTitles = Array.from(new Set(literalJobTitles));
+  // F34 (auditoría arquitectónica transversal, 2026-08-05): además del
+  // vocabulario curado de BUSINESS_TAXONOMY (arriba), cualquier término
+  // que la PROPIA instrucción nombró en su cláusula gramatical de
+  // contratación ("señales de contratación de X, Y, Z") o de contacto
+  // ("identifica al X, Y, Z") es, por construcción, un puesto/decisor
+  // real para ESTA misión -- sin importar si algún día se cura en
+  // taxonomy.ts. Ver el comentario de HIRING_CONTEXT_TRIGGER_RE arriba
+  // para el hallazgo real que motivó esto (cargos como "Supervisors"/
+  // "Packers"/"Breakfast Attendants"/"Quality Inspectors" terminando
+  // como candidatos reales a tipo de empresa).
+  const contextualJobTitles = extractClauseTerms(positiveText, HIRING_CONTEXT_TRIGGER_RE, preferredCities, states);
+  const contextualDecisionRoles = extractClauseTerms(positiveText, DECISION_ROLE_CONTEXT_TRIGGER_RE, preferredCities, states, {
+    stopAtFirstLowercaseSegment: true,
+  });
+
+  // F32 (hallazgo real, MIS-20260731-0002/0003, 2026-07-31): "tipos de
+  // empresa" que el usuario nombró explícitamente pero que
+  // BUSINESS_TAXONOMY no reconoce todavía -- nunca se pierden. Ver
+  // extractLiteralCompanyTypeTerms para el algoritmo completo (prioriza
+  // modelProposedTerms, respaldo determinista vía COMPANY_TYPE_TRIGGER_RE).
+  // F34: se excluyen acá, dentro de la MISMA llamada, cualquier término
+  // que esta misión ya nombró como puesto/decisor (contextualJobTitles/
+  // contextualDecisionRoles/literalJobTitles/literalDecisionRoles) --
+  // invariante estructural, nunca un término puede ser ambas cosas en la
+  // misma misión.
+  const literalCompanyTypeTerms = extractLiteralCompanyTypeTerms(
+    positiveText,
+    matchedEntries,
+    modelProposedTerms,
+    preferredCities,
+    states,
+    [...literalJobTitles, ...literalDecisionRoles, ...contextualJobTitles, ...contextualDecisionRoles],
+  );
+
+  const searchTerms = Array.from(
+    new Set([...matchedEntries.flatMap((e) => e.googleSearchPhrases), ...literalCompanyTypeTerms]),
+  );
+
+  const targetJobTitles = Array.from(new Set([...literalJobTitles, ...contextualJobTitles]));
   const hiringSignals = Array.from(new Set([...targetJobTitles, ...matchedEntries.flatMap((e) => e.jobTitles)]));
-  const decisionRoles = Array.from(new Set([...literalDecisionRoles, ...matchedEntries.flatMap((e) => e.decisionMakers)]));
+  const decisionRoles = Array.from(
+    new Set([...literalDecisionRoles, ...contextualDecisionRoles, ...matchedEntries.flatMap((e) => e.decisionMakers)]),
+  );
 
   const providersRequested = detectProvidersRequested(rawInstruction);
   // F15: clientes de infraestructura crítica mencionados literalmente

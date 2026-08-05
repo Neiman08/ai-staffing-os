@@ -361,7 +361,9 @@ test("misma entrada siempre produce el mismo resultado (determinista)", () => {
 
 test("validationVersion siempre presente y estable", () => {
   const result = validateBusinessCandidate(baseInput({ candidateName: "Acme Manufacturing Co.", taxonomyKey: "manufacturing" }));
-  assert.equal(result.validationVersion, 2);
+  // F34: bump a 3 -- se agregó el campo `status` (BusinessValidationStatus)
+  // al contrato, ver comentario de diseño en business-validation.ts.
+  assert.equal(result.validationVersion, 3);
 });
 
 test("missingEvidence queda vacío para EXACT, poblado con entry.validations para niveles menores", () => {
@@ -685,4 +687,93 @@ test("cruce anti-contaminación con missionLiteralTerms: candidato genérico de 
     }),
   );
   assert.equal(result.accepted, true);
+});
+
+// ============================================================
+// F34 (auditoría arquitectónica transversal, 2026-08-05): `status`
+// (BusinessValidationStatus) reemplaza la ambigüedad de `accepted:
+// boolean` (que era SIEMPRE true fuera de los rechazos estructurales,
+// incluso para WEAK/evidencia vacía) por un estado explícito y honesto.
+// `accepted` se mantiene sin cambios de comportamiento (mission-executor.ts
+// sigue leyéndolo), pero ahora SIEMPRE se deriva de `status`.
+// ============================================================
+
+test("status=VALIDATED para confianza EXACT/STRONG -- evidencia directa de identidad", () => {
+  const exact = validateBusinessCandidate(baseInput({ candidateName: "Acme Manufacturing Co.", taxonomyKey: "manufacturing" }));
+  assert.equal(exact.confidence, "EXACT");
+  assert.equal(exact.status, "VALIDATED");
+  assert.equal(exact.accepted, true);
+
+  const strong = validateBusinessCandidate(
+    baseInput({ candidateName: "Acme Co.", website: "https://acmemanufacturing.com", taxonomyKey: "manufacturing" }),
+  );
+  assert.equal(strong.confidence, "STRONG");
+  assert.equal(strong.status, "VALIDATED");
+  assert.equal(strong.accepted, true);
+});
+
+test("status=PROBABLE para confianza APPROXIMATE -- solo coincide con businessActivities de la instrucción", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "Acme Co.", taxonomyKey: "manufacturing", businessActivities: ["manufacturing"] }),
+  );
+  assert.equal(result.confidence, "APPROXIMATE");
+  assert.equal(result.status, "PROBABLE");
+  assert.equal(result.accepted, true);
+});
+
+test("status=INSUFFICIENT_EVIDENCE para confianza WEAK -- sin ninguna señal positiva, pero sigue persistiéndose (DISCOVERY_CANDIDATE, decisión de producto)", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "Acme Co.", taxonomyKey: "manufacturing" }));
+  assert.equal(result.confidence, "WEAK");
+  assert.equal(result.status, "INSUFFICIENT_EVIDENCE");
+  assert.equal(result.matchedEvidence.length, 0);
+  // Invariante explícita: WEAK jamás bloquea la creación de la Company
+  // (accepted sigue true) -- lo que sí bloquea es la conversión a Lead/
+  // Opportunity/Draft, resuelto aguas abajo por
+  // conversion-policy.ts::deriveCommercialStatus (WEAK -> DISCOVERY_CANDIDATE).
+  assert.equal(result.accepted, true);
+});
+
+test("status=MISMATCH para evidencia negativa (negativeKeywords) -- nunca persiste como Company", () => {
+  const result = validateBusinessCandidate(baseInput({ candidateName: "ABC Property Management", taxonomyKey: "hospitality" }));
+  assert.equal(result.status, "MISMATCH");
+  assert.equal(result.accepted, false);
+});
+
+test("status=MISMATCH para bucket genérico sin evidencia del trade específico pedido -- nunca persiste como Company", () => {
+  const result = validateBusinessCandidate(
+    baseInput({ candidateName: "IRPINO Construction", taxonomyKey: "construction", missionLiteralTerms: ["low voltage contractor"] }),
+  );
+  assert.equal(result.status, "MISMATCH");
+  assert.equal(result.accepted, false);
+});
+
+test("status=REJECTED para fallos estructurales (sin nombre, taxonomyKey desconocida, geografía, exclusión de misión) -- nunca MISMATCH", () => {
+  assert.equal(validateBusinessCandidate(baseInput({ candidateName: null, taxonomyKey: "manufacturing" })).status, "REJECTED");
+  assert.equal(validateBusinessCandidate(baseInput({ candidateName: "Acme Co.", taxonomyKey: "no_existe" })).status, "REJECTED");
+  assert.equal(
+    validateBusinessCandidate(
+      baseInput({ candidateName: "Acme Manufacturing", taxonomyKey: "manufacturing", state: "CA", allowedStates: ["IL"] }),
+    ).status,
+    "REJECTED",
+  );
+  assert.equal(
+    validateBusinessCandidate(
+      baseInput({ candidateName: "Acme Manufacturing", taxonomyKey: "manufacturing", missionExclusions: ["Acme"] }),
+    ).status,
+    "REJECTED",
+  );
+});
+
+test("status=REJECTED implica siempre accepted=false, y viceversa MISMATCH también implica accepted=false -- solo VALIDATED/PROBABLE/INSUFFICIENT_EVIDENCE dan accepted=true", () => {
+  const REJECTING_STATUSES = new Set(["REJECTED", "MISMATCH"]);
+  const samples: BusinessValidationInput[] = [
+    baseInput({ candidateName: null, taxonomyKey: "manufacturing" }),
+    baseInput({ candidateName: "ABC Property Management", taxonomyKey: "hospitality" }),
+    baseInput({ candidateName: "Acme Manufacturing Co.", taxonomyKey: "manufacturing" }),
+    baseInput({ candidateName: "Acme Co.", taxonomyKey: "manufacturing" }),
+  ];
+  for (const input of samples) {
+    const result = validateBusinessCandidate(input);
+    assert.equal(result.accepted, !REJECTING_STATUSES.has(result.status), `accepted debe derivarse de status para ${JSON.stringify(input)} (status=${result.status}, accepted=${result.accepted})`);
+  }
 });

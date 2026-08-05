@@ -58,3 +58,49 @@ test("cero llamadas externas: funciones puras y deterministas", () => {
   assert.equal(classifyNonIndustryTerm("HR"), classifyNonIndustryTerm("HR"));
   assert.equal(isKnownNonIndustryTerm("Owner"), true);
 });
+
+// ============================================================
+// F34 (auditoría arquitectónica transversal, hallazgo real
+// MIS-20260805-0002, 2026-08-05): "property maintenance"/"apartment
+// maintenance"/"facility maintenance"/"building maintenance" -- 4 tipos
+// de empresa pedidos explícitamente en una misión real -- se
+// clasificaban como "role" (¡falso positivo!) solo porque "Maintenance"
+// (jobTitle suelto de Hospitality en taxonomy.ts, pensado para hiring
+// signals, nunca para exclusión de tipos de empresa) aparecía como
+// SUBSTRING de cada término bajo la comparación bidireccional anterior.
+// Esto vació literalCompanyTypeTerms/searchTerms/plannedSteps por
+// completo -- la misión nunca ejecutó discover_companies y
+// select_target_companies reutilizó en silencio 20 empresas de
+// industrias ajenas. Fix: un candidato multi-palabra solo se clasifica
+// como rol/objeto/acción/capacidad si TODAS sus palabras pertenecen al
+// conjunto de palabras de UN MISMO término conocido (composición
+// completa) -- nunca por compartir una sola palabra con un término más
+// corto. Estos tests fallan sin el fix y pasan con él.
+// ============================================================
+test("regresión CRÍTICA MIS-20260805-0002: un tipo de empresa que agrega una palabra propia a un puesto conocido NUNCA se clasifica como rol", () => {
+  for (const term of ["property maintenance", "apartment maintenance", "facility maintenance", "building maintenance"]) {
+    assert.equal(
+      classifyNonIndustryTerm(term),
+      null,
+      `"${term}" es un tipo de empresa real (contiene "maintenance", un jobTitle suelto de Hospitality, pero agrega una palabra propia real) -- nunca debería clasificarse como rol`,
+    );
+    assert.ok(!isKnownNonIndustryTerm(term), `"${term}" no debería marcarse como término no-industria conocido`);
+  }
+});
+
+test("F34: un candidato SÍ se clasifica como rol cuando está compuesto ÍNTEGRAMENTE por las palabras de un jobTitle real de la taxonomía (ninguna palabra nueva agregada al vocabulario)", () => {
+  // "Quality Control Inspector" es un jobTitle real de manufacturing en
+  // taxonomy.ts -- "Quality Inspectors" (mismo concepto, sin "Control",
+  // pluralizado) debe seguir clasificándose como rol: ninguna de sus
+  // palabras ("quality", "inspector") es ajena al jobTitle conocido.
+  assert.equal(classifyNonIndustryTerm("Quality Inspectors"), "role");
+  assert.equal(classifyNonIndustryTerm("Quality Inspector"), "role");
+});
+
+test("F34: dos términos conocidos DISTINTOS nunca se combinan para cubrir un tercer término real no relacionado", () => {
+  // "Office Manager" (EXTRA_ROLE_TERMS) y "Maintenance" (jobTitle) son
+  // dos entradas conocidas DISTINTAS -- "Office Maintenance" nunca debe
+  // clasificarse como rol solo porque cada una de sus palabras aparece
+  // en ALGÚN término conocido distinto (unión ilegítima entre términos).
+  assert.equal(classifyNonIndustryTerm("Office Maintenance"), null);
+});
