@@ -119,6 +119,19 @@ const DECISION_ROLE_CONTEXT_TRIGGER_RE =
  * reales SÍ empiezan en minúscula habitualmente (ej. "property
  * maintenance").
  */
+// F34 (fix real post-producción, hallazgo MIS-20260805-0008, roofing
+// "(techado comercial y residencial)"): un paréntesis aclaratorio dentro
+// de la cláusula queda partido por SPLIT_LIST_RE en dos segmentos con un
+// paréntesis suelto pegado ("...comercial" / "residencial)") -- ese
+// segundo segmento sobrevivía como literalCompanyTypeTerm literal
+// ("residencial)"), generando una query externa real sin sentido y un
+// candidato basura ("Residencia", WEAK). Un paréntesis nunca es parte de
+// un término real de empresa/puesto/decisor, así que se remueve como
+// puntuación (nunca como palabra conocida) antes de aceptar el segmento.
+function stripParenthetical(term: string): string {
+  return term.replace(/[()]/g, "").trim();
+}
+
 function extractClauseTerms(
   positiveText: string,
   triggerRe: RegExp,
@@ -132,7 +145,7 @@ function extractClauseTerms(
     const clauseWithoutLocation = trimTrailingLocation(clause.trim(), detectedCities, detectedStateCodes);
     const segments = clauseWithoutLocation
       .split(SPLIT_LIST_RE)
-      .map((t) => t.trim())
+      .map((t) => stripParenthetical(t))
       .filter((t) => t.length > 0);
     for (const term of segments) {
       if (options?.stopAtFirstLowercaseSegment && /^[a-zà-ÿ]/.test(term)) break;

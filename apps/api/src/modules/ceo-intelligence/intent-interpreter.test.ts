@@ -689,3 +689,21 @@ test("F34: un tipo de empresa real que CONTIENE una palabra de rol como modifica
   assert.ok(intent.matchedTaxonomyKeys.includes("roofing"), "roofing debe reconocerse vía taxonomía");
   assert.ok(intent.companyTypes.length > 0, "companyTypes no debe quedar vacío para un trade real y reconocido");
 });
+
+// F34 (fix real post-producción, hallazgo MIS-20260805-0008, 2026-08-05):
+// un paréntesis aclaratorio dentro de la cláusula ("roofing (techado
+// comercial y residencial)") quedaba partido por SPLIT_LIST_RE en dos
+// segmentos con un paréntesis suelto pegado -- "residencial)" sobrevivía
+// como literalCompanyTypeTerm literal, generando una query externa real
+// sin sentido y un candidato basura ("Residencia", WEAK confidence) en
+// producción. Reproduce la instrucción real exacta.
+test("regresión real MIS-20260805-0008: un paréntesis aclaratorio dentro de la cláusula nunca deja un paréntesis suelto pegado a un literalCompanyTypeTerm", () => {
+  const intent = interpret(
+    "Busca hasta 5 empresas nuevas de roofing (techado comercial y residencial) en Illinois que probablemente necesiten personal temporal, y crea drafts de outreach para los contactos que encuentres. No envíes ningún email todavía.",
+  );
+  for (const term of intent.literalCompanyTypeTerms) {
+    assert.ok(!term.includes("("), `literalCompanyTypeTerm "${term}" nunca debe contener un paréntesis suelto`);
+    assert.ok(!term.includes(")"), `literalCompanyTypeTerm "${term}" nunca debe contener un paréntesis suelto`);
+  }
+  assert.ok(intent.matchedTaxonomyKeys.includes("roofing"), "roofing debe reconocerse vía taxonomía pese al paréntesis aclaratorio");
+});
