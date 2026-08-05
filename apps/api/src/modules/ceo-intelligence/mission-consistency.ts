@@ -16,6 +16,20 @@
  *
  * Puro y determinista, sin Prisma/fetch/LLM -- el llamador (mission-orchestrator.ts)
  * ya resolvió el estado real de la misión y las Companies seleccionadas.
+ *
+ * F34 (nota de diseño, decisión tomada tras una regresión real detectada
+ * por CI): este módulo tuvo brevemente un segundo chequeo
+ * (DISCOVERY_PLANNED_BUT_NEVER_EXECUTED, "el plan pedía queries de
+ * descubrimiento pero 0 se ejecutaron") -- se REVIRTIÓ deliberadamente
+ * después de reproducir localmente un falso positivo real: cuando la
+ * instrucción prohíbe explícitamente crear campañas (allowCampaignCreation=false),
+ * mission-orchestrator.ts resuelve las Companies a procesar con una
+ * consulta directa (sin pasar por select_target_companies NI por
+ * discover_companies, ver el comentario de diseño ahí) -- un camino
+ * legítimo y preexistente donde "0 queries ejecutadas" nunca fue un bug.
+ * El chequeo de industria (INDUSTRY_MISMATCH, abajo) sigue cubriendo
+ * exactamente el caso real que motivó esta auditoría, sin ese riesgo de
+ * falso positivo -- solo evalúa Companies que SÍ se seleccionaron.
  */
 
 export interface MissionConsistencyCompany {
@@ -29,15 +43,11 @@ export interface MissionConsistencyInput {
   requestedTaxonomyKeys: string[];
   // StructuredIntent.literalCompanyTypeTerms -- tipos de empresa pedidos explícitamente pero sin entrada curada.
   requestedLiteralTerms: string[];
-  // true si la misión planificó descubrimiento real (plannedSteps incluía discover_companies).
-  discoveryWasPlanned: boolean;
-  queriesPlanned: number;
-  queriesExecuted: number;
   selectedCompanies: MissionConsistencyCompany[];
 }
 
 export interface MissionConsistencyIssue {
-  code: "INDUSTRY_MISMATCH" | "DISCOVERY_PLANNED_BUT_NEVER_EXECUTED" | "NO_COMPANIES_DESPITE_QUERIES";
+  code: "INDUSTRY_MISMATCH";
   detail: string;
 }
 
@@ -62,10 +72,9 @@ function companyMatchesRequest(company: MissionConsistencyCompany, requestedTaxo
 
 /**
  * Verifica que las Companies REALMENTE seleccionadas para esta misión
- * correspondan al rubro pedido, y que el descubrimiento se haya
- * ejecutado de verdad cuando la misión lo planificó. Invariante #17
- * (pedida explícitamente): si la industria entregada no coincide con la
- * pedida, la misión nunca puede reportarse como éxito/parcial normal.
+ * correspondan al rubro pedido. Invariante #17 (pedida explícitamente):
+ * si la industria entregada no coincide con la pedida, la misión nunca
+ * puede reportarse como éxito/parcial normal.
  */
 export function evaluateMissionConsistency(input: MissionConsistencyInput): MissionConsistencyResult {
   const issues: MissionConsistencyIssue[] = [];
@@ -90,20 +99,6 @@ export function evaluateMissionConsistency(input: MissionConsistencyInput): Miss
         detail: `Ninguna de las ${input.selectedCompanies.length} empresa(s) seleccionada(s) corresponde a los rubros pedidos (${[...input.requestedTaxonomyKeys, ...input.requestedLiteralTerms].join(", ")}) -- posible reutilización silenciosa de empresas de otra industria.`,
       });
     }
-  }
-
-  // F34: SOLO se exige cuando la misión pidió un rubro específico
-  // (trade real o término literal) -- mission-orchestrator.ts fuerza
-  // discovery real SIEMPRE que hasSpecificTradeMatch/hasLiteralCompanyTypeTerms
-  // sea true, sin importar la oferta interna del CRM (ver el comentario
-  // de diseño ahí). Para un pedido genérico ("empresas de manufactura"),
-  // 0 queries ejecutadas es comportamiento LEGÍTIMO cuando el CRM ya
-  // tenía oferta suficiente -- nunca se marca como inconsistencia.
-  if (hasSpecificRequest && input.discoveryWasPlanned && input.queriesPlanned > 0 && input.queriesExecuted === 0) {
-    issues.push({
-      code: "DISCOVERY_PLANNED_BUT_NEVER_EXECUTED",
-      detail: `La misión pidió un rubro específico y planificó ${input.queriesPlanned} query(s) de descubrimiento, pero ninguna se ejecutó realmente.`,
-    });
   }
 
   return { consistent: issues.length === 0, issues, matchedCompanyCount, mismatchedCompanyCount };

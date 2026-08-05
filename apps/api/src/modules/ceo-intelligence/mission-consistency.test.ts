@@ -6,9 +6,6 @@ function baseInput(overrides: Partial<MissionConsistencyInput> = {}): MissionCon
   return {
     requestedTaxonomyKeys: [],
     requestedLiteralTerms: [],
-    discoveryWasPlanned: false,
-    queriesPlanned: 0,
-    queriesExecuted: 0,
     selectedCompanies: [],
     ...overrides,
   };
@@ -82,31 +79,11 @@ test("sin ningún rubro específico pedido (mission genuinamente amplia) -- nunc
   assert.equal(result.consistent, true);
 });
 
-test("sin ninguna empresa seleccionada -- nunca marca INDUSTRY_MISMATCH (0 empresas no es lo mismo que 'empresas de otra industria')", () => {
+test("sin ninguna empresa seleccionada -- nunca marca INDUSTRY_MISMATCH (0 empresas no es lo mismo que 'empresas de otra industria', incluye el caso legítimo de CRM-reuse sin campaña -- ver nota de diseño del módulo)", () => {
   const result = evaluateMissionConsistency(baseInput({ requestedTaxonomyKeys: ["roofing"], selectedCompanies: [] }));
   assert.equal(result.consistent, true);
   assert.equal(result.matchedCompanyCount, 0);
   assert.equal(result.mismatchedCompanyCount, 0);
-});
-
-test("rubro específico pedido + discovery planificado pero nunca ejecutado (0 queries reales) -> DISCOVERY_PLANNED_BUT_NEVER_EXECUTED", () => {
-  const result = evaluateMissionConsistency(
-    baseInput({ requestedTaxonomyKeys: ["roofing"], discoveryWasPlanned: true, queriesPlanned: 4, queriesExecuted: 0 }),
-  );
-  assert.equal(result.consistent, false);
-  assert.ok(result.issues.some((i) => i.code === "DISCOVERY_PLANNED_BUT_NEVER_EXECUTED"));
-});
-
-test("rubro específico pedido + discovery planificado y ejecutado -- consistent=true", () => {
-  const result = evaluateMissionConsistency(
-    baseInput({ requestedTaxonomyKeys: ["roofing"], discoveryWasPlanned: true, queriesPlanned: 4, queriesExecuted: 4 }),
-  );
-  assert.equal(result.consistent, true);
-});
-
-test("pedido GENÉRICO (sin rubro específico) + discovery planificado pero 0 queries ejecutadas -- consistent=true (oferta interna del CRM ya alcanzaba, comportamiento legítimo)", () => {
-  const result = evaluateMissionConsistency(baseInput({ discoveryWasPlanned: true, queriesPlanned: 4, queriesExecuted: 0 }));
-  assert.equal(result.consistent, true, "un pedido genérico con CRM suficiente nunca debe marcarse inconsistente por 0 queries ejecutadas");
 });
 
 test("determinismo: mismo input siempre produce el mismo resultado", () => {

@@ -1463,8 +1463,6 @@ export async function closeMission(missionTaskId: string): Promise<void> {
   const childTasksForConsistency = await scopedDb.agentTask.findMany({ where: { parentTaskId: missionTaskId }, select: { id: true, type: true, output: true } });
 
   const consistencyCompanyIds = new Set<string>();
-  let queriesExecutedForConsistency = 0;
-  let queriesPlannedForConsistency = 0;
   const discoverTaskIdsForConsistency: string[] = [];
   for (const t of childTasksForConsistency) {
     if (t.type === "select_target_companies" && t.output) {
@@ -1473,8 +1471,7 @@ export async function closeMission(missionTaskId: string): Promise<void> {
     if (t.type === "discover_companies") {
       discoverTaskIdsForConsistency.push(t.id);
       if (t.output) {
-        const discoOutput = t.output as { queryExecutions?: unknown[]; createdCompanyIds?: string[] };
-        queriesExecutedForConsistency += (discoOutput.queryExecutions ?? []).length;
+        const discoOutput = t.output as { createdCompanyIds?: string[] };
         for (const id of discoOutput.createdCompanyIds ?? []) consistencyCompanyIds.add(id);
       }
     }
@@ -1491,15 +1488,11 @@ export async function closeMission(missionTaskId: string): Promise<void> {
   const intentForConsistency = rawInstructionForConsistency
     ? interpretBusinessIntent(rawInstructionForConsistency, missionInputForConsistency.externalSearchTerms ?? [])
     : null;
-  if (intentForConsistency) queriesPlannedForConsistency = intentForConsistency.searchTerms.length;
 
   const consistency = intentForConsistency
     ? evaluateMissionConsistency({
         requestedTaxonomyKeys: intentForConsistency.specificMatchedTaxonomyKeys,
         requestedLiteralTerms: intentForConsistency.literalCompanyTypeTerms,
-        discoveryWasPlanned: intentForConsistency.plannedSteps.includes("discover_companies"),
-        queriesPlanned: queriesPlannedForConsistency,
-        queriesExecuted: queriesExecutedForConsistency,
         selectedCompanies: companiesForConsistency.map((c) => ({ companyId: c.id, taxonomyKey: c.tradeKey })),
       })
     : { consistent: true, issues: [], matchedCompanyCount: 0, mismatchedCompanyCount: 0 };
