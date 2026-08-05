@@ -16,7 +16,7 @@ import { env } from "../../core/env";
 import { sendEmail } from "../email/email-service";
 import { checkSendLimits } from "../email/send-limits";
 import { assessRecipientTrust } from "../ceo-intelligence/recipient-trust";
-import { evaluateApprovalQualityGate } from "../ceo-intelligence/approval-quality-gate";
+import { evaluateApprovalQualityGate, type ApprovalQualityGateInput } from "../ceo-intelligence/approval-quality-gate";
 import { getTaxonomyEntry } from "../ceo-intelligence/taxonomy";
 import type { HiringSignalResult } from "../ceo-intelligence/hiring-signals";
 import {
@@ -368,6 +368,27 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
     // que puede haber cambiado desde entonces.
     const discoveryMeta = (company?.discoveryMetadata as { isClientOwnerCandidate?: boolean; opportunityRecommendation?: { recommendation?: string } } | null) ?? null;
 
+    // F34 (auditoría arquitectónica transversal, 2026-08-05): estado real
+    // de bounce del destinatario -- resuelto acá con el dato MÁS FRESCO
+    // posible (un hard bounce puede haberse confirmado DESPUÉS de crear
+    // el borrador, ver reconciliation.ts). Busca en Contact primero
+    // (email personal), CompanyContactPoint como respaldo (email
+    // organizacional) -- ninguno de los dos "inventa" un estado, `to`
+    // simplemente no tiene historial cuando ninguno matchea.
+    const toEmail = draft?.to?.toLowerCase() ?? null;
+    const [bouncedContact, bouncedContactPoint] = toEmail
+      ? await Promise.all([
+          scopedDb.contact.findFirst({
+            where: { email: { equals: toEmail, mode: "insensitive" } },
+            select: { bouncedAt: true, lastBounceClassification: true, lastBounceAt: true, doNotContact: true, unsubscribedAt: true },
+          }),
+          scopedDb.companyContactPoint.findFirst({
+            where: { email: toEmail },
+            select: { permanentlyInvalidAt: true, lastBounceClassification: true, lastBounceAt: true },
+          }),
+        ])
+      : [null, null];
+
     const gate = evaluateApprovalQualityGate({
       companyOrigin: company?.origin ?? null,
       companyCommercialStatus: company?.commercialStatus ?? null,
@@ -377,6 +398,11 @@ export async function decideApproval(id: string, input: DecideApprovalInput): Pr
       hasOtherActiveDuplicateApproval: companyId ? await hasOtherActiveApprovalForCompany(companyId, id) : false,
       isClientOwnerCandidate: !!discoveryMeta?.isClientOwnerCandidate,
       opportunityRecommendation: discoveryMeta?.opportunityRecommendation?.recommendation ?? null,
+      permanentlyInvalidAt: bouncedContact?.bouncedAt ?? bouncedContactPoint?.permanentlyInvalidAt ?? null,
+      lastBounceClassification: (bouncedContact?.lastBounceClassification ?? bouncedContactPoint?.lastBounceClassification ?? null) as ApprovalQualityGateInput["lastBounceClassification"],
+      lastBounceAt: bouncedContact?.lastBounceAt ?? bouncedContactPoint?.lastBounceAt ?? null,
+      doNotContact: bouncedContact?.doNotContact ?? false,
+      unsubscribedAt: bouncedContact?.unsubscribedAt ?? null,
     });
 
     if (!gate.passed) {

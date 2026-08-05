@@ -783,7 +783,21 @@ model Contact {
   emailVerifiedAt           DateTime?
   // F4.7: control de envío — por dirección/persona, no por Company.
   doNotContact              Boolean                   @default(false)
+  // F34 (auditoría arquitectónica transversal, 2026-08-05): campo
+  // preexistente (F4.7) nunca escrito en ningún lugar del código hasta
+  // ahora (confirmado por búsqueda exhaustiva) -- se define su semántica
+  // real acá: presente = HARD_BOUNCE confirmado (ver bounce-classification.ts),
+  // nunca limpiado automáticamente (ver email-eligibility-gate.ts,
+  // PERMANENTLY_INVALID). Nunca se usa para spam blocks (ver
+  // lastBounceClassification abajo, que sí distingue DELIVERY_BLOCKED).
   bouncedAt                 DateTime?
+  // F34: última clasificación real de bounce observada (ver
+  // bounce-classification.ts) -- independiente de bouncedAt, que solo
+  // aplica al caso HARD_BOUNCE. Permite que email-eligibility-gate.ts
+  // aplique una ventana de no-reintento real para DELIVERY_BLOCKED sin
+  // marcar el email como inválido para siempre.
+  lastBounceClassification  String?
+  lastBounceAt              DateTime?
   unsubscribedAt            DateTime?
   createdAt                 DateTime                  @default(now())
   // F7.8: Contact Verification and Ranking — determinista (contact-ranking.ts),
@@ -853,6 +867,14 @@ model CompanyContactPoint {
   confidenceScore      Float?
   discoveredAt         DateTime?
   verifiedAt           DateTime?
+  // F34 (auditoría arquitectónica transversal, 2026-08-05): mismo
+  // criterio que Contact.bouncedAt/lastBounceClassification -- un email
+  // organizacional (info@/hr@/careers@...) puede rebotar exactamente
+  // igual que uno personal, y antes no había ningún campo para
+  // registrarlo acá. Ver bounce-classification.ts / email-eligibility-gate.ts.
+  permanentlyInvalidAt DateTime?
+  lastBounceClassification String?
+  lastBounceAt         DateTime?
   createdAt            DateTime                @default(now())
   updatedAt            DateTime                @updatedAt
 

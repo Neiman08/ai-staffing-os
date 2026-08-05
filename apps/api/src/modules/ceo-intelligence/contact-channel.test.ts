@@ -307,6 +307,94 @@ test("recruiter y talent acquisition tienen la misma prioridad que HR (todos 'co
   assert.equal(r2.channel, "VERIFIED_PERSON_EMAIL");
 });
 
+// ============================================================
+// F34 (auditoría arquitectónica transversal, hallazgo real: 6 de 82
+// envíos reales rebotaron, ninguno marcó nunca Contact.bouncedAt --
+// resolveBestContactChannel ahora nunca selecciona un email con hard
+// bounce confirmado o dentro de la ventana de no-reintento de un spam
+// block, sin importar cuán bien puntúe en el resto de los criterios).
+// ============================================================
+
+test("regresión real: un Contact con hard bounce confirmado (permanentlyInvalidAt) nunca se selecciona, aunque sea el único candidato de tier 1", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "bounced@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, permanentlyInvalidAt: "2026-01-01" }],
+      contactPoints: [{ email: "info@acme.com", verificationStatus: "VERIFIED" }],
+    }),
+  );
+  assert.notEqual(r.value, "bounced@acme.com");
+  assert.equal(r.channel, "VERIFIED_ORG_EMAIL", "debe degradar al siguiente tier disponible en vez de usar el email inválido");
+  assert.equal(r.value, "info@acme.com");
+});
+
+test("entre dos contactos verificados, el que tiene hard bounce se descarta y gana el otro, aunque tenga menor prioridad de rol", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        { email: "hr@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "HR", permanentlyInvalidAt: "2026-01-01" },
+        { email: "owner@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, decisionRole: "OWNER" },
+      ],
+    }),
+  );
+  assert.equal(r.value, "owner@acme.com");
+});
+
+test("un CompanyContactPoint (email organizacional) con hard bounce nunca se selecciona -- degrada al siguiente tier", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contactPoints: [{ email: "info@acme.com", verificationStatus: "VERIFIED", permanentlyInvalidAt: "2026-01-01" }],
+      careersPageUrl: "https://acme.com/careers",
+    }),
+  );
+  assert.notEqual(r.value, "info@acme.com");
+  assert.equal(r.channel, "CAREERS_PAGE");
+});
+
+test("un spam block reciente (DELIVERY_BLOCKED dentro de la ventana de 30 días) nunca se selecciona", () => {
+  const recentlyBlocked = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        {
+          email: "hr@acme.com",
+          emailVerificationStatus: "VERIFIED",
+          linkedinUrl: null,
+          lastBounceClassification: "DELIVERY_BLOCKED",
+          lastBounceAt: new Date().toISOString(),
+        },
+      ],
+    }),
+  );
+  assert.equal(recentlyBlocked.channel, "NONE", "sin ningún otro canal disponible, debe quedar sin canal, nunca usar el email bloqueado recientemente");
+});
+
+test("un spam block antiguo (fuera de la ventana de 30 días) vuelve a ser elegible", () => {
+  const oldBlock = resolveBestContactChannel(
+    baseInput({
+      contacts: [
+        {
+          email: "hr@acme.com",
+          emailVerificationStatus: "VERIFIED",
+          linkedinUrl: null,
+          lastBounceClassification: "DELIVERY_BLOCKED",
+          lastBounceAt: "2020-01-01T00:00:00Z",
+        },
+      ],
+    }),
+  );
+  assert.equal(oldBlock.channel, "VERIFIED_PERSON_EMAIL");
+  assert.equal(oldBlock.value, "hr@acme.com");
+});
+
+test("un email marcado unsubscribed nunca se selecciona", () => {
+  const r = resolveBestContactChannel(
+    baseInput({
+      contacts: [{ email: "unsub@acme.com", emailVerificationStatus: "VERIFIED", linkedinUrl: null, unsubscribedAt: "2026-01-01" }],
+      contactPoints: [{ email: "info@acme.com", verificationStatus: "VERIFIED" }],
+    }),
+  );
+  assert.equal(r.value, "info@acme.com");
+});
+
 test("un email contaminado con teléfono nunca gana aunque su rol tenga mayor prioridad -- limpieza sigue siendo la primera condición", () => {
   const r = resolveBestContactChannel(
     baseInput({

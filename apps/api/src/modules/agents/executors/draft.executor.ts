@@ -15,7 +15,7 @@ import {
 import { scopedDb } from "../../../core/tenancy/prisma-extension";
 import { env } from "../../../core/env";
 import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
-import { resolveBestContactChannel } from "../../ceo-intelligence/contact-channel";
+import { resolveBestContactChannel, type ContactChannelContactInput } from "../../ceo-intelligence/contact-channel";
 import { hasActiveApprovalForCompany } from "../../approvals/service";
 import { getTaxonomyEntry } from "../../ceo-intelligence/taxonomy";
 import { generateOutreachDraft, classifyHiringSignalLevel, resolveDraftLanguage, resolvePositionsToOffer, type DraftRecipientType } from "../draft-generation";
@@ -109,8 +109,23 @@ export function createDraftExecutor(llmProvider: LLMProvider = buildLLMProvider(
             verificationStatus: c.verificationStatus,
             decisionRole: c.decisionRole,
             name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+            // F34: contactableContacts ya filtró doNotContact/bouncedAt/
+            // unsubscribedAt arriba -- se pasan igual acá para que el
+            // chokepoint único (email-eligibility-gate.ts) sea la fuente
+            // real de verdad, nunca dos lógicas de filtrado divergentes.
+            permanentlyInvalidAt: c.bouncedAt,
+            lastBounceClassification: c.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+            lastBounceAt: c.lastBounceAt,
+            doNotContact: c.doNotContact,
+            unsubscribedAt: c.unsubscribedAt,
           })),
-          contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
+          contactPoints: company.contactPoints.map((cp) => ({
+            email: cp.email,
+            verificationStatus: cp.verificationStatus,
+            permanentlyInvalidAt: cp.permanentlyInvalidAt,
+            lastBounceClassification: cp.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+            lastBounceAt: cp.lastBounceAt,
+          })),
           companyEmail: company.email,
           companyPhone: company.phone,
           careersPageUrl: null,

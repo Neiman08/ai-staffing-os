@@ -30,6 +30,10 @@ after(async () => {
   if (createdTenantIds.length) {
     await prisma.emailReconciliationAlert.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.emailMessage.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    await prisma.contact.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    await prisma.companyContactPoint.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    await prisma.company.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
+    await prisma.industry.deleteMany({ where: { tenantId: { in: createdTenantIds } } });
     await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
   }
 });
@@ -203,6 +207,104 @@ test("reconcileMailbox: un NDR real que menciona el destinatario y el asunto ori
   assert.equal(row.status, "BOUNCED");
   assert.ok(row.ndrReceivedAt);
   assert.match(row.ndrDetail ?? "", /couldn't be delivered/);
+});
+
+// ============================================================
+// F34 (auditoría arquitectónica transversal, hallazgo real: 6 de 82
+// envíos reales rebotaron y NINGUNO marcó jamás Contact.bouncedAt --
+// confirmado por búsqueda exhaustiva de que ese campo nunca se escribía
+// en ningún lugar del código). Estos tests prueban el fix real:
+// reconcileMailbox ahora clasifica el NDR (bounce-classification.ts) y
+// propaga el resultado a Contact/CompanyContactPoint.
+// ============================================================
+
+async function setupCompanyWithContact(tenantId: string, email: string) {
+  const industry = await prisma.industry.create({ data: { tenantId, name: "Construction", isGlobal: false } });
+  const company = await prisma.company.create({ data: { tenantId, name: "Acme Co", industryId: industry.id, status: "LEAD" } });
+  const contact = await prisma.contact.create({
+    data: { tenantId, companyId: company.id, firstName: "Jane", lastName: "Doe", email, verificationStatus: "CONFIRMED" },
+  });
+  const contactPoint = await prisma.companyContactPoint.create({
+    data: { tenantId, companyId: company.id, email: "info@acme-co.example", type: "INFO", verificationStatus: "VERIFIED" },
+  });
+  return { company, contact, contactPoint };
+}
+
+test("regresión real: NDR de hard bounce real (user unknown) marca Contact.bouncedAt Y lastBounceClassification=HARD_BOUNCE", async () => {
+  const tenantId = await setupTenant("hard-bounce-propagation");
+  const { contact } = await setupCompanyWithContact(tenantId, "jane@nowhere.example");
+  const email = await createAcceptedEmailMessage(tenantId, { toEmail: "jane@nowhere.example", subject: "Oferta real", contactId: contact.id });
+
+  const ndr: GraphPossibleNdr = {
+    id: "ndr-hard-1",
+    subject: "Undeliverable: Oferta real",
+    receivedDateTime: new Date().toISOString(),
+    from: "postmaster@dreistaff.com",
+    bodyPreview: "550 5.1.1 User unknown. jane@nowhere.example wasn't found.",
+  };
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listPossibleNdrsSince: async () => [ndr] }) }),
+  );
+
+  const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: email.id } });
+  assert.equal(row.status, "BOUNCED");
+
+  const contactRow = await prisma.contact.findUniqueOrThrow({ where: { id: contact.id } });
+  assert.ok(contactRow.bouncedAt, "Contact.bouncedAt debe quedar seteado -- el bug real que este fix corrige (nunca se escribía)");
+  assert.equal(contactRow.lastBounceClassification, "HARD_BOUNCE");
+  assert.ok(contactRow.lastBounceAt);
+});
+
+test("regresión real: NDR de spam block marca lastBounceClassification=DELIVERY_BLOCKED, pero NUNCA Contact.bouncedAt (invariante: spam block no es email inválido)", async () => {
+  const tenantId = await setupTenant("spam-block-propagation");
+  const { contact } = await setupCompanyWithContact(tenantId, "jane@spamblocked.example");
+  await createAcceptedEmailMessage(tenantId, { toEmail: "jane@spamblocked.example", subject: "Oferta real 2", contactId: contact.id });
+
+  const ndr: GraphPossibleNdr = {
+    id: "ndr-spam-1",
+    subject: "Undeliverable: Oferta real 2",
+    receivedDateTime: new Date().toISOString(),
+    from: "postmaster@dreistaff.com",
+    bodyPreview: "Your message to jane@spamblocked.example couldn't be delivered because the recipient's email server suspects your message is spam.",
+  };
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listPossibleNdrsSince: async () => [ndr] }) }),
+  );
+
+  const contactRow = await prisma.contact.findUniqueOrThrow({ where: { id: contact.id } });
+  assert.equal(contactRow.lastBounceClassification, "DELIVERY_BLOCKED");
+  assert.equal(contactRow.bouncedAt, null, "un spam block nunca debe marcar bouncedAt -- la dirección puede ser válida, el problema es de reputación/contenido");
+});
+
+test("un NDR de un email organizacional (CompanyContactPoint, sin Contact asociado) también propaga la clasificación al punto de contacto correcto", async () => {
+  const tenantId = await setupTenant("org-email-bounce-propagation");
+  const { contactPoint } = await setupCompanyWithContact(tenantId, "jane@acme-co.example");
+  const email = await createAcceptedEmailMessage(tenantId, {
+    toEmail: contactPoint.email,
+    subject: "Oferta organizacional",
+    companyId: contactPoint.companyId,
+  });
+
+  const ndr: GraphPossibleNdr = {
+    id: "ndr-org-1",
+    subject: "Undeliverable: Oferta organizacional",
+    receivedDateTime: new Date().toISOString(),
+    from: "postmaster@dreistaff.com",
+    bodyPreview: `550 5.1.1 User unknown. ${contactPoint.email} wasn't found.`,
+  };
+
+  await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, () =>
+    reconcileMailbox(MAILBOX, FAKE_AZURE, { graphDeps: fakeGraphDeps({ listPossibleNdrsSince: async () => [ndr] }) }),
+  );
+
+  const row = await prisma.emailMessage.findUniqueOrThrow({ where: { id: email.id } });
+  assert.equal(row.status, "BOUNCED");
+
+  const cpRow = await prisma.companyContactPoint.findUniqueOrThrow({ where: { id: contactPoint.id } });
+  assert.ok(cpRow.permanentlyInvalidAt, "CompanyContactPoint.permanentlyInvalidAt debe quedar seteado para un hard bounce real");
+  assert.equal(cpRow.lastBounceClassification, "HARD_BOUNCE");
 });
 
 test("reconcileMailbox: un NDR que solo coincide en una señal (asunto sin destinatario, o viceversa) nunca marca BOUNCED", async () => {

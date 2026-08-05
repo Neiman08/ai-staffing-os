@@ -18,7 +18,7 @@ import { AppError } from "../../../core/errors";
 import { publishEventSafe } from "../../../core/events/outbox";
 import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
-import { resolveBestContactChannel, type ContactChannelType } from "../../ceo-intelligence/contact-channel";
+import { resolveBestContactChannel, type ContactChannelType, type ContactChannelContactInput } from "../../ceo-intelligence/contact-channel";
 import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
 import { hasActiveApprovalForCompany } from "../../approvals/service";
 import { getTaxonomyEntry } from "../../ceo-intelligence/taxonomy";
@@ -181,8 +181,21 @@ export function createOutreachTools(deps: OutreachToolDeps): AgentTool[] {
             source: c.source,
             decisionRole: c.decisionRole,
             name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+            // F34: nunca selecciona un email con hard bounce confirmado o
+            // dentro de la ventana de no-reintento de un spam block.
+            permanentlyInvalidAt: c.bouncedAt,
+            lastBounceClassification: c.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+            lastBounceAt: c.lastBounceAt,
+            doNotContact: c.doNotContact,
+            unsubscribedAt: c.unsubscribedAt,
           })),
-          contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
+          contactPoints: company.contactPoints.map((cp) => ({
+            email: cp.email,
+            verificationStatus: cp.verificationStatus,
+            permanentlyInvalidAt: cp.permanentlyInvalidAt,
+            lastBounceClassification: cp.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+            lastBounceAt: cp.lastBounceAt,
+          })),
           companyEmail: company.email,
           companyPhone: company.phone,
           careersPageUrl: metadata?.contactChannel?.careersPageUrl ?? null,

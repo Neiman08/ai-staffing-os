@@ -1,5 +1,5 @@
 import { findKnownPlaceholders } from "@ai-staffing-os/shared";
-import { isPhoneContaminated } from "./contact-channel";
+import { evaluateEmailEligibility } from "./email-eligibility-gate";
 
 /**
  * F24 Fase 8 (auditoría de producción, pedido explícito del PO): "antes
@@ -15,8 +15,6 @@ import { isPhoneContaminated } from "./contact-channel";
  * por ese gate) puede seguir esperando aprobación. Nunca se asume que la
  * creación fue válida solo porque el registro existe.
  */
-
-const EMAIL_SYNTAX_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface ApprovalQualityGateInput {
   /** null cuando la Company no se pudo resolver (proposedAction roto/legacy). */
@@ -42,6 +40,17 @@ export interface ApprovalQualityGateInput {
    */
   isClientOwnerCandidate?: boolean;
   opportunityRecommendation?: string | null;
+  // F34 (auditoría arquitectónica transversal, 2026-08-05): estado real
+  // de bounce del destinatario (`to`), resuelto por el llamador desde
+  // Contact/CompanyContactPoint -- ver email-eligibility-gate.ts. Todos
+  // opcionales (default: sin historial de bounce) para no romper
+  // callers existentes que todavía no los pasan -- mismo patrón que
+  // isClientOwnerCandidate/opportunityRecommendation arriba.
+  permanentlyInvalidAt?: string | Date | null;
+  lastBounceClassification?: "HARD_BOUNCE" | "DELIVERY_BLOCKED" | "RETRYABLE" | "DOMAIN_ISSUE" | "UNKNOWN" | null;
+  lastBounceAt?: string | Date | null;
+  doNotContact?: boolean;
+  unsubscribedAt?: string | Date | null;
 }
 
 export interface ApprovalQualityCheckFailure {
@@ -97,11 +106,20 @@ export function evaluateApprovalQualityGate(input: ApprovalQualityGateInput): Ap
   if (!input.to) {
     failures.push({ check: "contact_valid", reason: "Sin destinatario resoluble -- este borrador fallaría al intentar enviarse." });
   } else {
-    // ✓ email válido (sintaxis + sin contaminación de teléfono)
-    if (!EMAIL_SYNTAX_RE.test(input.to)) {
-      failures.push({ check: "email_valid", reason: `El destinatario "${input.to}" no tiene sintaxis de email válida.` });
-    } else if (isPhoneContaminated(input.to)) {
-      failures.push({ check: "email_valid", reason: `El destinatario "${input.to}" parece contaminado con una secuencia telefónica -- verificar y corregir con "Editar borrador" antes de aprobar.` });
+    // F34: chokepoint único compartido (email-eligibility-gate.ts) --
+    // sintaxis + contaminación de teléfono + hard bounce permanente +
+    // spam block con ventana de no-reintento + doNotContact/unsubscribed.
+    // Nunca se reimplementan estos chequeos acá directamente.
+    const eligibility = evaluateEmailEligibility({
+      email: input.to,
+      permanentlyInvalidAt: input.permanentlyInvalidAt,
+      lastBounceClassification: input.lastBounceClassification,
+      lastBounceAt: input.lastBounceAt,
+      doNotContact: input.doNotContact,
+      unsubscribedAt: input.unsubscribedAt,
+    });
+    if (!eligibility.eligible) {
+      failures.push({ check: "email_valid", reason: `El destinatario "${input.to}" no es elegible (${eligibility.blockReason}): ${eligibility.reason}` });
     }
   }
 

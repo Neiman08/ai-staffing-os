@@ -19,7 +19,7 @@ import {
 } from "../ceo-intelligence/discovery-identity";
 import { validateBusinessCandidate, BUSINESS_VALIDATION_VERSION, type BusinessValidationConfidenceLevel } from "../ceo-intelligence/business-validation";
 import { deriveCommercialStatus } from "../ceo-intelligence/conversion-policy";
-import { resolveBestContactChannel, type ContactChannelType } from "../ceo-intelligence/contact-channel";
+import { resolveBestContactChannel, type ContactChannelType, type ContactChannelContactInput } from "../ceo-intelligence/contact-channel";
 import { computeHiringConfidence, type HiringConfidenceTier } from "../ceo-intelligence/hiring-confidence";
 import { detectClientOwnerMatch } from "../ceo-intelligence/critical-infrastructure-clients";
 import { createQueuedTask } from "./task-executor";
@@ -1562,17 +1562,45 @@ async function runDiscoveryPlanBody(
           const [contactsForChannel, contactPointsForChannel] = await Promise.all([
             scopedDb.contact.findMany({
               where: { companyId: company.id },
-              select: { email: true, emailVerificationStatus: true, linkedinUrl: true, decisionRole: true, firstName: true, lastName: true, verificationStatus: true, source: true },
+              select: {
+                email: true,
+                emailVerificationStatus: true,
+                linkedinUrl: true,
+                decisionRole: true,
+                firstName: true,
+                lastName: true,
+                verificationStatus: true,
+                source: true,
+                bouncedAt: true,
+                lastBounceClassification: true,
+                lastBounceAt: true,
+                doNotContact: true,
+                unsubscribedAt: true,
+              },
             }),
-            scopedDb.companyContactPoint.findMany({ where: { companyId: company.id }, select: { email: true, verificationStatus: true } }),
+            scopedDb.companyContactPoint.findMany({
+              where: { companyId: company.id },
+              select: { email: true, verificationStatus: true, permanentlyInvalidAt: true, lastBounceClassification: true, lastBounceAt: true },
+            }),
           ]);
           const channelResolution = resolveBestContactChannel({
             // F34: se agrega decisionRole/name -- resolveBestContactChannel
             // usa decisionRole para elegir ENTRE varios contactos
             // verificados por prioridad comercial (HR/recruiting >
             // operaciones > owner/president), nunca por el largo del email.
-            contacts: contactsForChannel.map((c) => ({ ...c, name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null })),
-            contactPoints: contactPointsForChannel,
+            // permanentlyInvalidAt/lastBounceClassification/etc. -- nunca
+            // selecciona un email con hard bounce confirmado o dentro de
+            // la ventana de no-reintento de un spam block.
+            contacts: contactsForChannel.map((c) => ({
+              ...c,
+              name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+              permanentlyInvalidAt: c.bouncedAt,
+              lastBounceClassification: c.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+            })),
+            contactPoints: contactPointsForChannel.map((cp) => ({
+              ...cp,
+              lastBounceClassification: cp.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+            })),
             companyEmail: company.email,
             companyPhone: company.phone,
             careersPageUrl: enrichment.websiteSignals.careersPageUrl,

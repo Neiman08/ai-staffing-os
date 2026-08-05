@@ -36,7 +36,7 @@ import * as opportunitiesService from "../../opportunities/service";
 import * as followUpsService from "../../followups/service";
 import type { UsageAccumulator } from "../usage";
 import { DEFAULT_EMAIL_SIGNATURE } from "@ai-staffing-os/shared";
-import { resolveBestContactChannel } from "../../ceo-intelligence/contact-channel";
+import { resolveBestContactChannel, type ContactChannelContactInput } from "../../ceo-intelligence/contact-channel";
 import { evaluateDraftCreationGate } from "../../ceo-intelligence/draft-creation-gate";
 import { hasActiveApprovalForCompany } from "../../approvals/service";
 
@@ -450,8 +450,19 @@ Responde ÚNICAMENTE con un JSON de la forma {"adjustment": <número entre -10 y
                     source: c.source,
                     decisionRole: c.decisionRole,
                     name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null,
+                    permanentlyInvalidAt: c.bouncedAt,
+                    lastBounceClassification: c.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+                    lastBounceAt: c.lastBounceAt,
+                    doNotContact: c.doNotContact,
+                    unsubscribedAt: c.unsubscribedAt,
                   })),
-                  contactPoints: company.contactPoints.map((cp) => ({ email: cp.email, verificationStatus: cp.verificationStatus })),
+                  contactPoints: company.contactPoints.map((cp) => ({
+                    email: cp.email,
+                    verificationStatus: cp.verificationStatus,
+                    permanentlyInvalidAt: cp.permanentlyInvalidAt,
+                    lastBounceClassification: cp.lastBounceClassification as ContactChannelContactInput["lastBounceClassification"],
+                    lastBounceAt: cp.lastBounceAt,
+                  })),
                   companyEmail: company.email,
                   companyPhone: company.phone,
                   careersPageUrl: discoveryMeta?.contactChannel?.careersPageUrl ?? null,

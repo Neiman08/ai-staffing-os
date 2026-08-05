@@ -3,6 +3,7 @@ import { getTenancyContext } from "../../core/tenancy/context";
 import { AppError } from "../../core/errors";
 import { logAuditEvent } from "../../core/audit-log";
 import { listSentItemsSince as realListSentItemsSince, listPossibleNdrsSince as realListPossibleNdrsSince, type GraphSentItem, type GraphPossibleNdr } from "./microsoft-graph";
+import { classifyBounceEvidence } from "../ceo-intelligence/bounce-classification";
 
 /**
  * F27 Fase 4: el reconciliador es la única forma real de que un
@@ -312,18 +313,62 @@ export async function reconcileMailbox(
     const stillPending = trackedMessages.filter((m) => m.status === "ACCEPTED_BY_PROVIDER" || m.status === "SENT_CONFIRMED");
 
     for (const ndr of ndrCandidates) {
-      const bounced = matchNdrToMessage(ndr, stillPending);
+      const bouncedMatch = matchNdrToMessage(ndr, stillPending);
+      if (!bouncedMatch) continue;
+      // matchNdrToMessage solo devuelve { id } -- se recupera el registro
+      // completo (contactId/companyId/toEmail) desde stillPending, que ya
+      // lo tiene, en vez de ensanchar el tipo de retorno de esa función
+      // (usada también fuera de este bloque).
+      const bounced = stillPending.find((m) => m.id === bouncedMatch.id);
       if (!bounced) continue;
+      const ndrDetail = (ndr.bodyPreview ?? ndr.subject).slice(0, 1000);
       if (!dryRun) {
         await scopedDb.emailMessage.update({
           where: { id: bounced.id },
-          data: { status: "BOUNCED", ndrReceivedAt: ndr.receivedDateTime ? new Date(ndr.receivedDateTime) : new Date(), ndrDetail: (ndr.bodyPreview ?? ndr.subject).slice(0, 1000), lastCheckedAt: new Date() },
+          data: { status: "BOUNCED", ndrReceivedAt: ndr.receivedDateTime ? new Date(ndr.receivedDateTime) : new Date(), ndrDetail, lastCheckedAt: new Date() },
         });
         await logAuditEvent({
           action: "email.bounced",
           entityType: "emailMessage",
           entityId: bounced.id,
           after: { ndrSubject: ndr.subject, ndrFrom: ndr.from, ndrReceivedDateTime: ndr.receivedDateTime },
+        });
+
+        // F34 (auditoría arquitectónica transversal, hallazgo real: 6 de
+        // 82 envíos reales rebotaron y ninguno marcó jamás Contact.bouncedAt
+        // -- BOUNCED genérico no distinguía hard bounce de spam block/
+        // transitorio/problema de dominio, así que la misma dirección
+        // podía volver a recibir outreach real). Clasifica el NDR real y
+        // propaga el resultado a Contact/CompanyContactPoint -- único
+        // punto de escritura real de estos campos, ver
+        // email-eligibility-gate.ts para dónde se leen.
+        const classification = classifyBounceEvidence({ ndrDetail });
+        const bounceReceivedAt = ndr.receivedDateTime ? new Date(ndr.receivedDateTime) : new Date();
+        if (bounced.contactId) {
+          await scopedDb.contact.update({
+            where: { id: bounced.contactId },
+            data: {
+              lastBounceClassification: classification.classification,
+              lastBounceAt: bounceReceivedAt,
+              ...(classification.isPermanentlyInvalid ? { bouncedAt: bounceReceivedAt } : {}),
+            },
+          });
+        }
+        if (bounced.companyId && bounced.toEmail) {
+          await scopedDb.companyContactPoint.updateMany({
+            where: { companyId: bounced.companyId, email: bounced.toEmail.toLowerCase() },
+            data: {
+              lastBounceClassification: classification.classification,
+              lastBounceAt: bounceReceivedAt,
+              ...(classification.isPermanentlyInvalid ? { permanentlyInvalidAt: bounceReceivedAt } : {}),
+            },
+          });
+        }
+        await logAuditEvent({
+          action: "email.bounce_classified",
+          entityType: "emailMessage",
+          entityId: bounced.id,
+          after: { classification: classification.classification, isPermanentlyInvalid: classification.isPermanentlyInvalid, matchedCode: classification.matchedCode },
         });
       }
       summary.bounced += 1;

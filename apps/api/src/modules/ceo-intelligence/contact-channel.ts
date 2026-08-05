@@ -24,6 +24,7 @@
  */
 
 import { FREE_EMAIL_PROVIDERS } from "./email-trust";
+import { evaluateEmailEligibility } from "./email-eligibility-gate";
 
 export type ContactChannelType =
   | "VERIFIED_PERSON_EMAIL"
@@ -120,11 +121,25 @@ export interface ContactChannelContactInput {
   // Intelligence"/"Hunter.io"/null) -- se agrega acá SOLO para el chequeo
   // de marcador doble de abajo, nunca cambia el ranking/scoring existente.
   source?: string | null;
+  // F34: estado real de bounce (ver bounce-classification.ts/
+  // email-eligibility-gate.ts) -- un Contact con hard bounce confirmado
+  // (bouncedAt/permanentlyInvalidAt) o dentro de la ventana de no-
+  // reintento de un spam block nunca se selecciona como canal, sin
+  // importar cuán bien puntúe en el resto de los criterios.
+  permanentlyInvalidAt?: string | Date | null;
+  lastBounceClassification?: "HARD_BOUNCE" | "DELIVERY_BLOCKED" | "RETRYABLE" | "DOMAIN_ISSUE" | "UNKNOWN" | null;
+  lastBounceAt?: string | Date | null;
+  doNotContact?: boolean;
+  unsubscribedAt?: string | Date | null;
 }
 
 export interface ContactChannelContactPointInput {
   email: string;
   verificationStatus: string;
+  // F34: mismo criterio que ContactChannelContactInput -- ver ahí.
+  permanentlyInvalidAt?: string | Date | null;
+  lastBounceClassification?: "HARD_BOUNCE" | "DELIVERY_BLOCKED" | "RETRYABLE" | "DOMAIN_ISSUE" | "UNKNOWN" | null;
+  lastBounceAt?: string | Date | null;
 }
 
 export interface ContactChannelInput {
@@ -192,23 +207,52 @@ function isFreeEmailProvider(email: string): boolean {
  *      siempre la limpia. Empate final: orden alfabético, para que el
  *      resultado sea determinista sin importar el orden de entrada.
  */
-function pickBestEmail(candidates: string[], opts: { excludeFreeProviders: boolean }): string | null {
-  const clean = candidates.filter((email) => email && !isPhoneContaminated(email) && (!opts.excludeFreeProviders || !isFreeEmailProvider(email)));
-  if (clean.length === 0) return null;
-  return clean.slice().sort((a, b) => localPart(a).length - localPart(b).length || a.localeCompare(b))[0]!;
+interface EmailEligibilityCandidate {
+  email: string | null;
+  permanentlyInvalidAt?: string | Date | null;
+  lastBounceClassification?: "HARD_BOUNCE" | "DELIVERY_BLOCKED" | "RETRYABLE" | "DOMAIN_ISSUE" | "UNKNOWN" | null;
+  lastBounceAt?: string | Date | null;
+  doNotContact?: boolean;
+  unsubscribedAt?: string | Date | null;
 }
 
 /**
- * F34: mismo criterio de limpieza que pickBestEmail (nunca un email
- * contaminado con teléfono), pero para elegir CUÁL Contact real usar
- * cuando hay varios verificados para la misma Company -- ordena por
- * CONTACT_ROLE_PRIORITY primero (HR/recruiting antes que operaciones
- * antes que owner/president, el orden comercial pedido explícitamente),
- * y solo usa el largo del local-part/alfabético como desempate final
- * entre dos contactos del MISMO rol.
+ * F34: reemplaza el chequeo manual de contaminación de teléfono por el
+ * chokepoint único compartido (email-eligibility-gate.ts) -- un email
+ * con hard bounce confirmado, dentro de la ventana de no-reintento de un
+ * spam block, doNotContact, o unsubscribed NUNCA se selecciona como
+ * canal, sin importar cuán bien puntúe en el resto de los criterios
+ * (mismo nivel de severidad que la contaminación de teléfono, ya
+ * cubierta).
+ */
+function isEligibleCandidate(candidate: EmailEligibilityCandidate): boolean {
+  if (!candidate.email) return false;
+  return evaluateEmailEligibility({
+    email: candidate.email,
+    permanentlyInvalidAt: candidate.permanentlyInvalidAt,
+    lastBounceClassification: candidate.lastBounceClassification,
+    lastBounceAt: candidate.lastBounceAt,
+    doNotContact: candidate.doNotContact,
+    unsubscribedAt: candidate.unsubscribedAt,
+  }).eligible;
+}
+
+function pickBestEmail(candidates: EmailEligibilityCandidate[], opts: { excludeFreeProviders: boolean }): string | null {
+  const clean = candidates.filter((c) => isEligibleCandidate(c) && (!opts.excludeFreeProviders || !isFreeEmailProvider(c.email!)));
+  if (clean.length === 0) return null;
+  return clean.slice().sort((a, b) => localPart(a.email!).length - localPart(b.email!).length || a.email!.localeCompare(b.email!))[0]!.email;
+}
+
+/**
+ * F34: mismo criterio de elegibilidad que pickBestEmail, pero para
+ * elegir CUÁL Contact real usar cuando hay varios verificados para la
+ * misma Company -- ordena por CONTACT_ROLE_PRIORITY primero (HR/
+ * recruiting antes que operaciones antes que owner/president, el orden
+ * comercial pedido explícitamente), y solo usa el largo del local-part/
+ * alfabético como desempate final entre dos contactos del MISMO rol.
  */
 function pickBestPersonContact(contacts: ContactChannelContactInput[]): ContactChannelContactInput | null {
-  const clean = contacts.filter((c) => c.email && !isPhoneContaminated(c.email));
+  const clean = contacts.filter((c) => isEligibleCandidate(c));
   if (clean.length === 0) return null;
   return clean.slice().sort((a, b) => {
     const priorityDiff = contactRolePriority(a.decisionRole) - contactRolePriority(b.decisionRole);
@@ -257,7 +301,7 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
   }
 
   const verifiedOrgEmail = pickBestEmail(
-    input.contactPoints.filter((cp) => cp.verificationStatus === "VERIFIED").map((cp) => cp.email),
+    input.contactPoints.filter((cp) => cp.verificationStatus === "VERIFIED"),
     { excludeFreeProviders: true },
   );
   if (verifiedOrgEmail) {
@@ -272,7 +316,7 @@ export function resolveBestContactChannel(input: ContactChannelInput): ContactCh
   }
 
   const websiteOrgEmail = pickBestEmail(
-    [...input.contactPoints.map((cp) => cp.email), ...(input.companyEmail ? [input.companyEmail] : [])],
+    [...input.contactPoints, ...(input.companyEmail ? [{ email: input.companyEmail }] : [])],
     { excludeFreeProviders: true },
   );
   if (websiteOrgEmail) {
