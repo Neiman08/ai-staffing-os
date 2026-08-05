@@ -16,6 +16,7 @@ import { hasPositiveHiringSignal, type HiringStatus } from "../ceo-intelligence/
 import { matchesMissionExclusion } from "../ceo-intelligence/business-validation";
 import type { MissionPlan } from "../ceo-intelligence/contracts";
 import { executeDiscoveryPlan, type DiscoveryExecutionReport } from "./mission-executor";
+import { evaluateMissionConsistency } from "../ceo-intelligence/mission-consistency";
 
 // F4 addendum: tope general por misión, independiente del desiredVolume
 // interpretado — mismo espíritu que el tope de 15/corrida de F3 y el de
@@ -66,6 +67,10 @@ interface MissionOutput {
   // enriquecidas/sin-contacto, igual que discoveryExecution del flujo
   // useExternalDiscovery=true explícito.
   discoveryFallback?: DiscoveryExecutionReport | null;
+  // F34: resultado real de la verificación programática de consistencia
+  // (mission-consistency.ts) -- [] cuando la misión es consistente. Ver
+  // missionState="INCONSISTENT".
+  consistencyIssues?: Array<{ code: string; detail: string }>;
 }
 
 function log(missionTaskId: string, event: string, data?: Record<string, unknown>): void {
@@ -1213,7 +1218,12 @@ export async function launchMission(instruction: string): Promise<AgentTaskDetai
   // missionState como red de seguridad ante filas viejas de antes de este
   // fix, que pudieron quedar con status="RUNNING" y un missionState
   // terminal — nunca deben bloquear una misión nueva.
-  const TERMINAL_STATES = new Set(["CANCELLED", "COMPLETED", "FAILED"]);
+  // F34: INCONSISTENT (mission-consistency.ts) es un estado terminal más
+  // -- closeMission siempre pone status="DONE" sin importar el
+  // missionState, así que en la práctica esto solo protege filas viejas
+  // (ver comentario de arriba), pero se agrega igual por completitud
+  // semántica.
+  const TERMINAL_STATES = new Set(["CANCELLED", "COMPLETED", "FAILED", "INCONSISTENT"]);
   const runningToday = await scopedDb.agentTask.findMany({
     where: { type: "daily_revenue_mission", status: "RUNNING", createdAt: { gte: todayStart } },
   });
@@ -1435,10 +1445,76 @@ export async function closeMission(missionTaskId: string): Promise<void> {
   // marca PARTIAL, con contactCoverage explicando exactamente qué faltó
   // y por qué (proveedores omitidos, créditos agotados, etc.), nunca
   // presentado como éxito sin explicación.
-  const missionState: MissionState =
+  const provisionalMissionState: MissionState =
     contactCoverage.companiesConsidered > 0 && contactCoverage.companiesWithoutContactPoint > 0
       ? "PARTIAL"
       : "COMPLETED";
+
+  // F34 (auditoría arquitectónica transversal, hallazgo real crítico
+  // MIS-20260805-0002, 2026-08-05): segunda línea de defensa -- verifica
+  // PROGRAMÁTICAMENTE, antes de cerrar, que las Companies realmente
+  // seleccionadas por esta misión correspondan al rubro pedido. Comparte
+  // el mismo criterio real que missions/service.ts::getMissionDetail usa
+  // para "empresas seleccionadas" (select_target_companies.output.companyIds
+  // + Company.discoveredByAgentTaskId de cada discover_companies real),
+  // nunca datos parciales de un solo child task.
+  const missionTaskForConsistency = await scopedDb.agentTask.findUnique({ where: { id: missionTaskId }, select: { input: true } });
+  const missionInputForConsistency = (missionTaskForConsistency?.input ?? {}) as { rawInstruction?: string; externalSearchTerms?: string[] };
+  const childTasksForConsistency = await scopedDb.agentTask.findMany({ where: { parentTaskId: missionTaskId }, select: { id: true, type: true, output: true } });
+
+  const consistencyCompanyIds = new Set<string>();
+  let queriesExecutedForConsistency = 0;
+  let queriesPlannedForConsistency = 0;
+  const discoverTaskIdsForConsistency: string[] = [];
+  for (const t of childTasksForConsistency) {
+    if (t.type === "select_target_companies" && t.output) {
+      for (const id of (t.output as { companyIds?: string[] }).companyIds ?? []) consistencyCompanyIds.add(id);
+    }
+    if (t.type === "discover_companies") {
+      discoverTaskIdsForConsistency.push(t.id);
+      if (t.output) {
+        const discoOutput = t.output as { queryExecutions?: unknown[]; createdCompanyIds?: string[] };
+        queriesExecutedForConsistency += (discoOutput.queryExecutions ?? []).length;
+        for (const id of discoOutput.createdCompanyIds ?? []) consistencyCompanyIds.add(id);
+      }
+    }
+  }
+  if (discoverTaskIdsForConsistency.length > 0) {
+    const discoveredCompanies = await scopedDb.company.findMany({ where: { discoveredByAgentTaskId: { in: discoverTaskIdsForConsistency } }, select: { id: true } });
+    for (const c of discoveredCompanies) consistencyCompanyIds.add(c.id);
+  }
+  const companiesForConsistency = consistencyCompanyIds.size
+    ? await scopedDb.company.findMany({ where: { id: { in: Array.from(consistencyCompanyIds) } }, select: { id: true, tradeKey: true } })
+    : [];
+
+  const rawInstructionForConsistency = missionInputForConsistency.rawInstruction ?? "";
+  const intentForConsistency = rawInstructionForConsistency
+    ? interpretBusinessIntent(rawInstructionForConsistency, missionInputForConsistency.externalSearchTerms ?? [])
+    : null;
+  if (intentForConsistency) queriesPlannedForConsistency = intentForConsistency.searchTerms.length;
+
+  const consistency = intentForConsistency
+    ? evaluateMissionConsistency({
+        requestedTaxonomyKeys: intentForConsistency.specificMatchedTaxonomyKeys,
+        requestedLiteralTerms: intentForConsistency.literalCompanyTypeTerms,
+        discoveryWasPlanned: intentForConsistency.plannedSteps.includes("discover_companies"),
+        queriesPlanned: queriesPlannedForConsistency,
+        queriesExecuted: queriesExecutedForConsistency,
+        selectedCompanies: companiesForConsistency.map((c) => ({ companyId: c.id, taxonomyKey: c.tradeKey })),
+      })
+    : { consistent: true, issues: [], matchedCompanyCount: 0, mismatchedCompanyCount: 0 };
+
+  if (!consistency.consistent) {
+    log(missionTaskId, "mission consistency check failed -- marking INCONSISTENT instead of COMPLETED/PARTIAL", { issues: consistency.issues });
+  }
+
+  // Invariante #17 (pedida explícitamente): si la industria entregada no
+  // coincide con la pedida (o el descubrimiento planificado nunca
+  // corrió), la misión NUNCA se reporta como éxito/parcial normal --
+  // nunca sobrescribe PAUSED_BUDGET/CANCELLED/etc. porque este bloque
+  // solo corre en el camino de cierre normal (closeMission), no en esos
+  // otros caminos de salida.
+  const missionState: MissionState = consistency.consistent ? provisionalMissionState : "INCONSISTENT";
 
   const output: MissionOutput = {
     missionState,
@@ -1456,6 +1532,7 @@ export async function closeMission(missionTaskId: string): Promise<void> {
     restrictionNotes: existingOutput.restrictionNotes,
     contactCoverage,
     discoveryFallback: existingOutput.discoveryFallback,
+    consistencyIssues: consistency.issues,
   };
 
   await scopedDb.agentTask.update({

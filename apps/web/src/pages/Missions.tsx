@@ -36,6 +36,11 @@ const MISSION_STATE_VARIANTS: Record<string, "success" | "warning" | "danger" | 
   // F7.3: no había ninguna capacidad real disponible ANTES de arrancar
   // (sin estado soportado, sin queries, sin proveedor con cobertura).
   BLOCKED: "warning",
+  // F34: verificación programática detectó que las empresas entregadas
+  // no corresponden al rubro pedido (o que el descubrimiento planificado
+  // nunca corrió) -- nunca un badge de éxito/advertencia normal, rojo
+  // igual que FAILED (requiere revisión, no es un resultado aceptable).
+  INCONSISTENT: "danger",
 };
 
 function LaunchMissionForm() {
@@ -166,7 +171,10 @@ function MissionActions({ mission }: { mission: MissionListItem }) {
     // que pausar/cancelar/reanudar, sin importar en cuál de estos 2
     // estados haya cerrado.
     mission.missionState === "NO_RESULTS" ||
-    mission.missionState === "BLOCKED";
+    mission.missionState === "BLOCKED" ||
+    // F34: closeMission ya puso status="DONE" -- nada en vuelo que
+    // pausar/cancelar/reanudar, igual que los demás estados terminales.
+    mission.missionState === "INCONSISTENT";
   if (isTerminal) return null;
 
   return (

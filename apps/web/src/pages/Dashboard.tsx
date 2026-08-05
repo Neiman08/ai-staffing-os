@@ -171,7 +171,13 @@ export default function Dashboard() {
                         ? "success"
                         : todaysMission.missionState === "CANCELLED"
                           ? "neutral"
-                          : "info"
+                          : // F34: verificación programática detectó una
+                            // incongruencia real (industria entregada no
+                            // coincide con la pedida) -- nunca un badge
+                            // neutro/informativo, igual que un fallo real.
+                            todaysMission.missionState === "INCONSISTENT" || todaysMission.missionState === "FAILED"
+                            ? "danger"
+                            : "info"
                     }
                   >
                     {formatStatusLabel(todaysMission.missionState)}

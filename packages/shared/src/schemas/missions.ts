@@ -80,6 +80,13 @@ export type ObjectiveProgress = z.infer<typeof objectiveProgressSchema>;
 // con 0 empresas. "BLOCKED" -- no había ninguna capacidad real disponible
 // ANTES de arrancar (sin estado soportado, sin queries, sin ningún
 // proveedor con cobertura) -- ver mission-executor.ts.
+// F34 (auditoría arquitectónica transversal, hallazgo real crítico
+// MIS-20260805-0002, 2026-08-05): "INCONSISTENT" -- verificación
+// programática (mission-consistency.ts) detectó que las Companies
+// realmente seleccionadas NO corresponden al rubro pedido (o que el
+// descubrimiento planificado nunca se ejecutó) -- nunca se reporta como
+// COMPLETED/PARTIAL en ese caso, sin importar cuántas Companies se
+// hayan "targeteado". Ver closeMission (mission-orchestrator.ts).
 export const missionStateSchema = z.enum([
   "RUNNING",
   "PAUSED_BY_USER",
@@ -91,6 +98,7 @@ export const missionStateSchema = z.enum([
   "BLOCKED",
   "FAILED",
   "PLANNED",
+  "INCONSISTENT",
 ]);
 export type MissionState = z.infer<typeof missionStateSchema>;
 
