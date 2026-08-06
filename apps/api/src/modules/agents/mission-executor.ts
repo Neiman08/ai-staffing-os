@@ -1083,7 +1083,7 @@ async function runDiscoveryPlanBody(
     if (q.refinementRound !== 1) continue;
     const entry = getTaxonomyEntry(q.taxonomyKey);
     if (entry?.isGenericFallback) continue;
-    const key = `${q.taxonomyKey}::${q.searchTerm}`;
+    const key = `${q.taxonomyKey}::${q.searchTerm}::${q.city ?? ""}`;
     if (!specificRound1Keys.includes(key)) specificRound1Keys.push(key);
   }
   const queryCapByKey = new Map<string, number>();
@@ -1100,7 +1100,7 @@ async function runDiscoveryPlanBody(
   // ninguna -- nunca un query por candidato dentro del loop.
   const saturationByQueryKey = await getQuerySaturationMap(
     ctx.tenantId,
-    finalQueries.map((q) => ({ searchTerm: q.searchTerm, state: q.state, taxonomyKey: q.taxonomyKey })),
+    finalQueries.map((q) => ({ searchTerm: q.searchTerm, state: q.state, city: q.city, taxonomyKey: q.taxonomyKey })),
   );
   let queriesSkippedForSaturationCount = 0;
   const executedQueryCosts: number[] = [];
@@ -1116,7 +1116,7 @@ async function runDiscoveryPlanBody(
       break outer;
     }
 
-    const queryKey = `${query.taxonomyKey}::${query.searchTerm}`;
+    const queryKey = `${query.taxonomyKey}::${query.searchTerm}::${query.city ?? ""}`;
     const queryCap = queryCapByKey.get(queryKey) ?? null;
     if (queryCap !== null && (acceptedByQueryKey.get(queryKey) ?? 0) >= queryCap) {
       // F14: esta query específica ya alcanzó su cupo -- reserva
@@ -1865,6 +1865,7 @@ async function runDiscoveryPlanBody(
         taxonomyKey: record.taxonomyKey,
         crmIndustryBucket: record.crmIndustryBucket,
         state: record.state,
+        city: record.city,
         provider: record.provider,
         rawResultCount: record.rawResultCount,
         acceptedCount: record.acceptedCount,

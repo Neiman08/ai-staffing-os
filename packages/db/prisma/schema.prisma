@@ -2502,6 +2502,18 @@ model DiscoveryQueryExecution {
   taxonomyKey       String?
   crmIndustryBucket String?
   state             String?
+  // F35b (hallazgo real, misión comercial 2026-08-06, Rockford IL
+  // roofing): la identidad de saturación agrupaba solo por
+  // (normalizedQuery, state) -- pero city SÍ es un parámetro real y
+  // distinto que cambia los resultados reales del proveedor (Google
+  // Places/Overpass reciben `city` como filtro geográfico propio, ver
+  // mission-executor.ts). Sin esto, una búsqueda de "roofing contractor"
+  // en Rockford quedaba marcada como ya-saturada solo porque la MISMA
+  // frase ya se había buscado antes en Chicago -- mercados geográficos
+  // distintos, tratados como el mismo por error. Nullable porque
+  // ejecuciones sin ciudad explícita (búsqueda estatal amplia) siguen
+  // siendo un identity real y válido por sí mismas.
+  city              String?
   provider          String
   rawResultCount    Int
   acceptedCount     Int
@@ -2510,7 +2522,7 @@ model DiscoveryQueryExecution {
   costUsd           Decimal? @db.Decimal(10, 4)
   executedAt        DateTime @default(now())
 
-  @@index([tenantId, normalizedQuery, state, executedAt])
+  @@index([tenantId, normalizedQuery, state, city, executedAt])
   @@index([tenantId, taxonomyKey, state, executedAt])
 }
 

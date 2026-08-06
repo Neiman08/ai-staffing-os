@@ -409,6 +409,64 @@ test("F34: una query SIN historial de saturación (query nueva) se ejecuta norma
   assert.equal(report.companiesCreated, 1);
 });
 
+// F35b (hallazgo real, misión comercial 2026-08-06, roofing en Rockford
+// IL): la misma searchTerm/state ya saturada en OTRA ciudad ("Chicago")
+// bloqueaba por error una búsqueda real en una ciudad completamente
+// distinta ("Rockford") -- mercados geográficos distintos con negocios
+// físicamente distintos (el proveedor real recibe `city` como filtro
+// propio, ver searchGooglePlaces/searchOverpass), nunca la misma
+// oportunidad de descubrimiento. Reproduce el escenario exacto: 2
+// ejecuciones previas reales saturan "manufacturing company"/IL, pero
+// SOLO en Chicago -- una query nueva para la MISMA frase en Rockford
+// debe seguir corriendo, nunca omitirse.
+test("F35b regresión real: saturación en una ciudad NUNCA bloquea la misma query en una ciudad distinta del mismo estado", async () => {
+  const tenantId = await setupTenant("query-saturation-city-scope");
+  await prisma.discoveryQueryExecution.createMany({
+    data: [
+      {
+        tenantId,
+        normalizedQuery: "manufacturing company",
+        rawQuery: "manufacturing company",
+        taxonomyKey: "manufacturing",
+        state: "IL",
+        city: "Chicago",
+        provider: "Google Places",
+        rawResultCount: 20,
+        acceptedCount: 1,
+        duplicateCount: 19,
+        rejectedCount: 0,
+      },
+      {
+        tenantId,
+        normalizedQuery: "manufacturing company",
+        rawQuery: "manufacturing company",
+        taxonomyKey: "manufacturing",
+        state: "IL",
+        city: "Chicago",
+        provider: "Google Places",
+        rawResultCount: 20,
+        acceptedCount: 0,
+        duplicateCount: 20,
+        rejectedCount: 0,
+      },
+    ],
+  });
+
+  let providerCalled = false;
+  const providers = fakeProviders({
+    searchGooglePlaces: async () => {
+      providerCalled = true;
+      return googleResult([candidateFixture()]);
+    },
+  });
+  const report = await run(tenantId, manufacturingPlan({ cities: ["Rockford"] }), providers);
+
+  assert.equal(providerCalled, true, "Rockford nunca compartió saturación con Chicago -- el proveedor debía llamarse de verdad");
+  assert.equal(report.queriesSkippedForSaturation, 0);
+  assert.equal(report.queryExecutions[0]!.skippedForSaturation, false);
+  assert.equal(report.companiesCreated, 1);
+});
+
 // F28 (aislamiento entre misiones, hallazgo real 2026-07-27): documenta
 // EXPLÍCITAMENTE el hecho real del que depende el fix de aislamiento en
 // campaign-tools.impl.ts -- Company.discoveredByAgentTaskId apunta al
