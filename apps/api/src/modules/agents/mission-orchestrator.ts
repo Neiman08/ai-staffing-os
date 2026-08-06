@@ -865,7 +865,12 @@ export async function runMissionPipeline(missionTaskId: string, tenantId: string
       companyIds = (
         await scopedDb.company.findMany({
           where: {
-            industryId: industry?.id ?? undefined,
+            // F35: mismo fix que campaign-tools.impl.ts (ver el comentario
+            // completo ahí) -- Company.industryId es solo almacenamiento
+            // (catch-all "Uncategorized" para términos sin taxonomía
+            // curada, ver mission-executor.ts F32), nunca debe vetar ids
+            // ya resueltos con exactitud.
+            industryId: !discoveredCompanyIdsThisMission?.length ? (industry?.id ?? undefined) : undefined,
             state: interpreted.state ?? undefined,
             city: interpreted.city ?? undefined,
             // F18: DISCOVERY_CANDIDATE (confianza de negocio WEAK/REJECTED

@@ -212,6 +212,68 @@ test("select_target_companies: restrictToCompanyIds (cuando SÍ hay descubrimien
 });
 
 /**
+ * F35 (auditoría comercial de pipeline, 2026-08-06, hallazgo real:
+ * Warehousing/Logistics e industrial Manufacturing con 36 Companies
+ * EXACT/validadas y $0 en Leads en producción -- MIS-20260805-0021,
+ * MIS-20260805-0022, MIS-20260806-0002). Reproduce el mecanismo exacto:
+ * un término sin entrada curada de taxonomía ("metal fabrication",
+ * "warehousing") persiste la Company bajo el catch-all "Uncategorized"
+ * (ver mission-executor.ts, F32 -- Company.industryId es EXCLUSIVAMENTE
+ * almacenamiento), mientras la Campaign se crea bajo el nombre de
+ * industria amplio que interpretDailyDirective adivinó ("Manufacturing").
+ * Antes del fix, el filtro industryId de select_target_companies vetaba
+ * estas Companies pese a que restrictToCompanyIds ya las identificaba
+ * con exactitud -- se perdían para siempre, sin ningún error visible.
+ */
+async function setupIndustryMismatchScenario() {
+  const tenant = await prisma.tenant.create({
+    data: { name: `${TEST_PREFIX}-industry-mismatch-${Date.now()}`, slug: `${TEST_PREFIX.toLowerCase()}-industry-mismatch-${Date.now()}` },
+  });
+  createdTenantIds.push(tenant.id);
+
+  const manufacturing = await prisma.industry.findFirstOrThrow({ where: { name: "Manufacturing", isGlobal: true } });
+  const uncategorized = await prisma.industry.findFirstOrThrow({ where: { name: "Uncategorized", isGlobal: true } });
+
+  // Empresas reales descubiertas vía un término literal sin taxonomía
+  // curada ("metal fabrication") -- quedan bajo Uncategorized, NUNCA bajo
+  // Manufacturing, por diseño (F32).
+  const metalFabCompanies = await Promise.all(
+    ["Harmony Metal Fabrication", "Precision Machining & Tool Co"].map((name) =>
+      prisma.company.create({
+        data: { tenantId: tenant.id, name, industryId: uncategorized.id, state: "IL", origin: "API_PROVIDER", commercialStatus: "COMMERCIAL_VALIDATED" },
+      }),
+    ),
+  );
+
+  // La Campaign se crea bajo el nombre AMPLIO que interpretDailyDirective
+  // adivinó al lanzar la misión -- una resolución independiente que aquí
+  // diverge a propósito del catch-all real de las Companies de arriba.
+  const campaign = await prisma.campaign.create({
+    data: { tenantId: tenant.id, name: "Manufacturing IL — misión de prueba", industryId: manufacturing.id, state: "IL" },
+  });
+
+  return { tenantId: tenant.id, metalFabCompanies, campaign };
+}
+
+test("F35 regresión real: select_target_companies con restrictToCompanyIds YA NO pierde Companies bajo Uncategorized aunque la Campaign esté bajo una Industry curada distinta", async () => {
+  const { tenantId, metalFabCompanies, campaign } = await setupIndustryMismatchScenario();
+
+  const result = await runWithTenancyContext({ tenantId, userId: "test-user", permissions: [] }, async () => {
+    const tools = createCampaignTools(fakeDeps);
+    const selectTool = tools.find((t) => t.name === "selectTargetCompanies")!;
+    return selectTool.execute({ campaignId: campaign.id, limit: 50, restrictToCompanyIds: metalFabCompanies.map((c) => c.id) }) as Promise<{ companyIds: string[] }>;
+  });
+
+  const expectedIds = new Set(metalFabCompanies.map((c) => c.id));
+  assert.equal(
+    result.companyIds.length,
+    2,
+    `debía devolver las 2 Companies ya identificadas por id (Uncategorized vs. Campaign en Manufacturing nunca debe vetarlas), devolvió ${result.companyIds.length}`,
+  );
+  for (const id of result.companyIds) assert.ok(expectedIds.has(id));
+});
+
+/**
  * F28 (hallazgo real, misión de Hospitality, 2026-07-29, MIS-20260729-0005):
  * el fallback por tradeKey (arriba) resolvió el bug de companiesTargeted=0,
  * pero expuso uno nuevo -- "Cornerstone Inn", ya en el CRM desde una

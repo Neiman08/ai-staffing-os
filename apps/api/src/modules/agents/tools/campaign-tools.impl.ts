@@ -212,7 +212,27 @@ export function createCampaignTools(deps: CampaignToolDeps): AgentTool[] {
 
         const candidates = await scopedDb.company.findMany({
           where: {
-            industryId: campaign.industryId ?? undefined,
+            // F35 (auditoría comercial de pipeline, 2026-08-06, hallazgo
+            // real: Warehousing/Logistics e industrial Manufacturing con
+            // 36 Companies EXACT/validadas y $0 en Leads): Company.industryId
+            // es EXCLUSIVAMENTE almacenamiento -- ver el comentario de
+            // diseño explícito en mission-executor.ts (F32, decisión del
+            // PO) justo donde se resuelve al catch-all "Uncategorized"
+            // para cualquier término sin entrada curada de taxonomía
+            // ("metal fabrication", "warehousing"...). La Campaign, en
+            // cambio, se crea bajo el nombre de industria AMPLIO que
+            // interpretDailyDirective adivinó ("Manufacturing"), una
+            // resolución independiente que puede no coincidir con el
+            // catch-all real de la Company -- cuando NO coincide, este
+            // filtro vetaba candidatos ya identificados con exactitud por
+            // id (restrictToCompanyIds, abajo), dejándolos varados para
+            // siempre sin ningún error visible. Mismo criterio que
+            // tradeKey ya aplicaba unas líneas más abajo: cuando el
+            // llamador ya resolvió ids específicos y reales, son
+            // suficientemente precisos por sí solos -- ningún filtro de
+            // clasificación amplia (industryId NI tradeKey) debe poder
+            // vetarlos.
+            industryId: !input.restrictToCompanyIds?.length ? (campaign.industryId ?? undefined) : undefined,
             state: campaign.state ?? undefined,
             city: campaign.city ?? undefined,
             estimatedSize: sizes ? { in: sizes as never } : undefined,
